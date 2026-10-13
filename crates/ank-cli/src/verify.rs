@@ -230,6 +230,21 @@ pub fn run_until(
     let elapsed = started.elapsed();
     let output = std::fs::read(&out_path).unwrap_or_default();
     let _ = std::fs::remove_file(&out_path);
+    // DEBUG ONLY, never merged: what a verifier printed, with the environment.
+    {
+        let dir = "C:/ank-debug";
+        let _ = std::fs::create_dir_all(dir);
+        let mut env: Vec<String> = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
+        env.sort();
+        let note = format!(
+            "== {name} run={:?} code={:?}\noutput={:?}\nenv:\n{}\n",
+            v.run,
+            status.code(),
+            String::from_utf8_lossy(&output),
+            env.join("\n")
+        );
+        let _ = std::fs::write(format!("{dir}/{}-{name}.txt", std::process::id()), note);
+    }
     let code = status.code();
 
     // 126 and 127 are the shell's own way of saying "I could not run that":

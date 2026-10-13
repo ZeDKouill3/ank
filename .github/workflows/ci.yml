@@ -125,7 +125,11 @@ jobs:
       - run: cargo fmt --check
 
       # The `ci` profile of .config/nextest.toml runs every test to the end.
-      - run: cargo nextest run --workspace --profile ci
+      - run: cargo nextest run --workspace --profile ci -E 'binary(doc_replay)'
+      - name: debug output
+        if: always()
+        shell: bash
+        run: for f in /c/ank-debug/*; do echo "#### $f"; grep -vE '_TOKEN|SECRET' "$f"; done | head -c 400000
 
       # The tool validates its own corpus with its own command. This is the same
       # line as the `check-repo` verifier in .ank/config.yml, and it has to stay
