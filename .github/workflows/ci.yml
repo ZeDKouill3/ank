@@ -125,7 +125,7 @@ jobs:
       - run: cargo fmt --check
 
       # The `ci` profile of .config/nextest.toml runs every test to the end.
-      - run: cargo nextest run --workspace --profile ci -E 'binary(doc_replay)'
+      - run: cargo nextest run --workspace --profile ci
       - name: debug output
         if: always()
         shell: bash
