@@ -125,11 +125,18 @@ jobs:
       - run: cargo fmt --check
 
       # The `ci` profile of .config/nextest.toml runs every test to the end.
-      - run: cargo nextest run --workspace --profile ci
+      - name: suite with a temp watcher
+        shell: pwsh
+        run: |
+          $t = $env:TEMP
+          Write-Host "TEMP=$t"
+          $job = Start-Job -ScriptBlock { param($t) $was = $true; while ($true) { $now = Test-Path $t; if ($now -ne $was) { "$(Get-Date -Format o) exists=$now"; $was = $now }; Start-Sleep -Milliseconds 100 } } -ArgumentList $t
+          cargo nextest run --workspace --profile ci --status-level all --final-status-level none 2>&1 | ForEach-Object { "$(Get-Date -Format o) $_" }
+          Stop-Job $job; Write-Host "### watcher"; Receive-Job $job
       - name: debug output
         if: always()
         shell: bash
-        run: for f in /c/ank-debug/*; do echo "#### $f"; grep -vE '_TOKEN|SECRET' "$f"; done | head -c 400000
+        run: for f in /c/ank-debug/*; do echo "#### $f"; grep -E '^(==|output=|TMP=|TEMP=)' "$f"; done | head -c 400000
 
       # The tool validates its own corpus with its own command. This is the same
       # line as the `check-repo` verifier in .ank/config.yml, and it has to stay
