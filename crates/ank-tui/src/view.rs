@@ -1188,7 +1188,8 @@ impl App {
     /// **The mark is what the status word cannot say.** The shared table
     /// knows `open` and `in_progress` and does not know `blocked`, and a word
     /// it does not know would be a second table (ADR-1f70ce2c3eac). So the
-    /// status column keeps the word the CLI gave, and what the graph adds is
+    /// status column holds a readiness word ([`readiness`],
+    /// TASK-9ea4dc65755b), and what the graph adds is
     /// the node's character: ready when every task it is blocked by is done
     /// or closed, waiting otherwise, finished for a done or closed task. A
     /// blocker the document lists no task for -- a peer task, an identifier
@@ -1273,9 +1274,17 @@ impl App {
                 .into_iter()
                 .map(|row| {
                     let task = tasks[row.id.as_str()];
+                    let waits = blockers
+                        .get(row.id.as_str())
+                        .into_iter()
+                        .flatten()
+                        .filter(|b| !tasks.get(*b).is_some_and(|t| finished(&t.status)))
+                        .count();
+                    let (word, role) = readiness(&task.status, waits);
                     Lane {
                         id: task.id.clone(),
-                        status: task.status.clone(),
+                        word,
+                        role,
                         title: task.title.clone(),
                         prefix: row.prefix,
                         outside: row.unknown,
@@ -3182,7 +3191,7 @@ impl App {
     /// (TASK-643611645dea).
     ///
     /// **Through [`compose`] and no second composer**: the marker, the lane
-    /// prefix as a field, the identifier, the status word the CLI gave
+    /// prefix as a field, the identifier, the readiness word
     /// painted by the shared table, and the title with `[held]` where the
     /// claims say so. The lane field is a column the row may drop, and the
     /// identifier is the one it may not, so a window that cannot afford both
@@ -3231,13 +3240,13 @@ impl App {
                 } else {
                     text::PLAIN
                 };
-                let role = role_of_status(&lane.status);
+                let role = lane.role;
                 compose(
                     here,
                     vec![
                         Field::word(&lane.prefix, self.drawn.width, role),
                         Field::id(&lane.id),
-                        Field::word(&lane.status, STATUS, role),
+                        Field::word(&lane.word, STATUS, role),
                         Field::rest(&format!(
                             "{}{}{}",
                             lane.title,
@@ -4722,7 +4731,10 @@ struct Drawn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Lane {
     id: String,
-    status: String,
+    /// What the row says in the status' column (TASK-9ea4dc65755b): the
+    /// readiness word, and the role the shared table gives it.
+    word: String,
+    role: Option<Role>,
     title: String,
     prefix: String,
     /// How many tasks it is blocked by are not rows of this layout -- folded,
@@ -4741,6 +4753,19 @@ fn outside(count: usize) -> String {
     match count {
         0 => String::new(),
         n => format!("  (+{n} blocker(s) outside)"),
+    }
+}
+
+/// The readiness word of a graph row and the role it is painted in
+/// (TASK-9ea4dc65755b): the status' own word and role for a task under way,
+/// done or closed; `ready` in the role of `open`; `waits N` as Attention,
+/// `N` being how many of the task's blockers are not finished.
+fn readiness(status: &str, waits: usize) -> (String, Option<Role>) {
+    match status {
+        "in_progress" => ("in progress".to_string(), role_of_status(status)),
+        "done" | "closed" => (status.to_string(), role_of_status(status)),
+        _ if waits == 0 => ("ready".to_string(), role_of_status("open")),
+        _ => (format!("waits {waits}"), Some(Role::Attention)),
     }
 }
 
@@ -10531,12 +10556,15 @@ mod tests {
     const CLOSED_BLOCKER: &str = "TASK-c1b100000001";
     const ITS_DEPENDENT: &str = "TASK-c1b200000002";
     const LONE: &str = "TASK-a10e00000001";
+    const UNDER_WAY: &str = "TASK-b0a100000001";
+    /// An identifier the graph document lists no task for.
+    const UNLISTED: &str = "TASK-0000000000ab@peer";
     const HISTORY: &str = "TASK-d0e100000001";
     const HISTORY_ON_HISTORY: &str = "TASK-d0e200000002";
 
     /// Every task of the fixture that the default fold shows: the open ones,
     /// and the closed blocker an open one names.
-    const SHOWN: [&str; 10] = [
+    const SHOWN: [&str; 11] = [
         CHAIN_1,
         CHAIN_2,
         CHAIN_3,
@@ -10547,6 +10575,7 @@ mod tests {
         CLOSED_BLOCKER,
         ITS_DEPENDENT,
         LONE,
+        UNDER_WAY,
     ];
 
     fn dag() -> model::Dag {
@@ -10562,6 +10591,7 @@ mod tests {
                 dag_task(CLOSED_BLOCKER, "closed", "A blocker that was closed"),
                 dag_task(ITS_DEPENDENT, "open", "A dependent of the closed one"),
                 dag_task(LONE, "open", "A task with no edge"),
+                dag_task(UNDER_WAY, "in_progress", "A task under way"),
                 dag_task(HISTORY, "done", "History nothing open names"),
                 dag_task(HISTORY_ON_HISTORY, "done", "History on history"),
             ],
@@ -10574,6 +10604,8 @@ mod tests {
                 edge(DIAMOND_BOTTOM, DIAMOND_RIGHT),
                 edge(ITS_DEPENDENT, CLOSED_BLOCKER),
                 edge(HISTORY_ON_HISTORY, HISTORY),
+                edge(UNDER_WAY, CHAIN_1),
+                edge(UNDER_WAY, UNLISTED),
             ],
         }
     }
@@ -10595,6 +10627,7 @@ mod tests {
             (CHAIN_3, "open", "The third of a chain"),
             (CHAIN_2, "open", "The second of a chain"),
             (CHAIN_1, "open", "The first of a chain"),
+            (UNDER_WAY, "in_progress", "A task under way"),
             (HISTORY_ON_HISTORY, "done", "History on history"),
             (HISTORY, "done", "History nothing open names"),
             (CLOSED_BLOCKER, "closed", "A blocker that was closed"),
@@ -10724,7 +10757,7 @@ mod tests {
             a.frame()
         );
 
-        // The listing turned around: the chain is now the newest and the lone
+        // The listing turned around: the task under way is now the newest and the lone
         // task the oldest, and the graph follows without being read again.
         let mut turned = graphed();
         let snapshot = turned.snapshot.as_mut().expect("a snapshot");
@@ -10733,7 +10766,7 @@ mod tests {
         let ids = graph_ids(&turned);
         assert_eq!(
             ids.first().map(String::as_str),
-            Some(short_of(CHAIN_3).as_str()),
+            Some(short_of(UNDER_WAY).as_str()),
             "the graph did not follow the listing's order:\n{}",
             turned.frame()
         );
@@ -10762,7 +10795,7 @@ mod tests {
         let rows = region_rows(&a);
         assert_eq!(
             rows[0].trim_end(),
-            "> ●  TASK-a10e   open          A task with no edge",
+            "> ●  TASK-a10e   ready         A task with no edge",
             "\n{}",
             a.frame()
         );
@@ -10850,9 +10883,8 @@ mod tests {
     /// every task it is blocked by is done or closed, Waiting otherwise,
     /// Finished for a done or closed task** (TASK-643611645dea).
     ///
-    /// The status column keeps the word the CLI gave -- `open` on the ready
-    /// task and on the waiting one alike, because `blocked` is not a status
-    /// the shared table knows -- and the cell says which is which.
+    /// The column holds the readiness word, `ready` on the ready task and
+    /// `waits N` on the waiting one, and the cell says the same thing again.
     #[test]
     fn the_node_character_says_ready_waiting_or_finished() {
         let a = graphed();
@@ -10865,8 +10897,8 @@ mod tests {
                 a.frame()
             );
             assert!(
-                row.contains("  open  ") || row.contains("  closed  "),
-                "the status column lost the CLI's word: {row:?}"
+                row.contains("  ready  ") || row.contains("  waits ") || row.contains("  closed  "),
+                "the status column lost its readiness word: {row:?}"
             );
         };
         // Nothing stands in its way.
@@ -10894,6 +10926,104 @@ mod tests {
             "a task blocked by an unknown id is drawn ready:\n{}",
             b.frame()
         );
+    }
+
+    /// **The column between the identifier and the title holds a readiness
+    /// word: in progress, done, closed, ready, or waits N** (TASK-9ea4dc65755b).
+    ///
+    /// Rows written down whole after the lane field: the identifier padded to
+    /// its column, the word padded to its own, the title.
+    #[test]
+    fn a_graph_row_says_ready_waits_n_in_progress_done_or_closed() {
+        let a = graphed();
+        let said = |a: &App, id: &str, word: &str, title: &str| {
+            let row = graph_row(a, id);
+            let want = format!("{}   {word:<14}{title}", short_of(id));
+            assert!(
+                row.trim_end().ends_with(&want),
+                "{id} does not read {want:?}: {row:?}
+{}",
+                a.frame()
+            );
+        };
+        said(
+            &a,
+            UNDER_WAY,
+            "in progress",
+            "A task under way  (+1 blocker(s) outside)",
+        );
+        said(&a, CHAIN_1, "ready", "The first of a chain");
+        said(&a, LONE, "ready", "A task with no edge");
+        said(&a, ITS_DEPENDENT, "ready", "A dependent of the closed one");
+        said(&a, CHAIN_2, "waits 1", "The second of a chain");
+        said(&a, DIAMOND_BOTTOM, "waits 2", "The bottom of a diamond");
+        said(&a, CLOSED_BLOCKER, "closed", "A blocker that was closed");
+        for row in region_rows(&a) {
+            assert!(
+                !row.contains(" open "),
+                "a row carries the raw word: {row:?}
+{}",
+                a.frame()
+            );
+        }
+        // Under the fold all, a finished task nothing open names is a row.
+        let mut all = graphed();
+        all.fold = Fold::All;
+        all.relayout();
+        said(&all, HISTORY, "done", "History nothing open names");
+        // `waits N` counts a blocker that is not a row: the search leaves
+        // the bottom alone on the graph, and its two blockers are outside.
+        let mut hidden = graphed();
+        hidden.search = Some("bottom".to_string());
+        hidden.relayout();
+        said(
+            &hidden,
+            DIAMOND_BOTTOM,
+            "waits 2",
+            "The bottom of a diamond  (+2 blocker(s) outside)",
+        );
+        // And one the document lists no task for is counted among them, with
+        // a finished one that is not.
+        let mut peer = graphed();
+        peer.graphed(model::Dag {
+            tasks: vec![
+                dag_task(LONE, "open", "Waits on a peer"),
+                dag_task(HISTORY, "done", "Finished"),
+            ],
+            edges: vec![edge(LONE, HISTORY), edge(LONE, UNLISTED)],
+        });
+        said(
+            &peer,
+            LONE,
+            "waits 1",
+            "Waits on a peer  (+1 blocker(s) outside)",
+        );
+    }
+
+    /// **The word is painted in the role the shared table gives it: the
+    /// status' own for in progress, done and closed, open's for ready, and
+    /// Attention for waits N** (TASK-9ea4dc65755b).
+    #[test]
+    fn the_readiness_word_is_painted_through_the_shared_table() {
+        let mut a = graphed().inked(paint::COLOUR);
+        a.fold = Fold::All;
+        a.relayout();
+        let painted = styles(&a);
+        for (word, role) in [
+            ("in progress", role_of_status("in_progress")),
+            ("done", role_of_status("done")),
+            ("closed", role_of_status("closed")),
+            ("ready", role_of_status("open")),
+            ("waits 2", Some(Role::Attention)),
+        ] {
+            let style = blank().patch(paint::COLOUR.of(role));
+            assert!(
+                painted
+                    .iter()
+                    .any(|(s, seen)| *s == style && seen.contains(word)),
+                "{word:?} is not painted in {role:?}: {painted:?}"
+            );
+        }
     }
 
     /// **The row of a task with two blockers has two lanes under it, and the
@@ -10981,7 +11111,7 @@ mod tests {
         let rows = region_rows(&a);
         assert_eq!(
             rows[0].trim_end(),
-            "> *    TASK-a10e   open          A task with no edge",
+            "> *      TASK-a10e   ready         A task with no edge",
             "\n{}",
             a.frame()
         );
@@ -11004,7 +11134,7 @@ mod tests {
         let mut a = graphed();
         assert!(
             a.frame()
-                .contains("3 GRAPH all 10   (12 tasks in the corpus)"),
+                .contains("3 GRAPH all 11   (13 tasks in the corpus)"),
             "\n{}",
             a.frame()
         );
@@ -11013,7 +11143,7 @@ mod tests {
         a.resize(DASHBOARD - 1, 12);
         assert!(
             a.frame()
-                .contains("3 GRAPH 1-6 of 10   (12 tasks in the corpus)"),
+                .contains("3 GRAPH 1-6 of 11   (13 tasks in the corpus)"),
             "\n{}",
             a.frame()
         );
@@ -11050,7 +11180,7 @@ mod tests {
         tap(&mut a, &ank, KeyCode::Char(' '));
         assert_eq!(a.cursors[Focus::Graph.slot()].at, 6);
         assert!(
-            a.frame().contains("3 GRAPH 2-7 of 10"),
+            a.frame().contains("3 GRAPH 2-7 of 11"),
             "the window did not follow the cursor:\n{}",
             a.frame()
         );
@@ -11333,7 +11463,7 @@ mod tests {
             head(&a).contains("[f open]"),
             "the cell does not say the graph is folded to the open work:\n{rest}"
         );
-        assert_eq!(graph_ids(&a).len(), 10, "\n{rest}");
+        assert_eq!(graph_ids(&a).len(), 11, "\n{rest}");
 
         tap(&mut a, &ank, cycle_key());
         let all = a.frame();
@@ -11342,11 +11472,11 @@ mod tests {
             "the cell does not say every task is shown:\n{all}"
         );
         assert!(
-            all.contains("3 GRAPH all 12   (12 tasks in the corpus)"),
+            all.contains("3 GRAPH all 13   (13 tasks in the corpus)"),
             "\n{all}"
         );
         let ids = graph_ids(&a);
-        assert_eq!(ids.len(), 12, "\n{all}");
+        assert_eq!(ids.len(), 13, "\n{all}");
         for id in SHOWN.iter().chain([HISTORY, HISTORY_ON_HISTORY].iter()) {
             assert_eq!(
                 ids.iter().filter(|i| **i == short_of(id)).count(),
@@ -11503,7 +11633,7 @@ mod tests {
         );
         assert_eq!(
             region_rows(&a)[0].trim_end(),
-            "> ○  TASK-d1a2   open          The left of a diamond  (+1 blocker(s) outside)",
+            "> ○  TASK-d1a2   waits 1       The left of a diamond  (+1 blocker(s) outside)",
             "\n{}",
             a.frame()
         );
@@ -11530,7 +11660,9 @@ mod tests {
         tap(&mut a, &ank, KeyCode::Esc);
         assert_eq!(graph_ids(&a), rest, "Escape did not give the fold back");
         assert!(
-            !a.frame().contains("outside") && !a.frame().contains("matching"),
+            // The one outside count left is the task under way, which names
+            // an identifier the document lists no task for.
+            a.frame().matches("outside").count() == 1 && !a.frame().contains("matching"),
             "the whole fold still says it is narrowed:\n{}",
             a.frame()
         );
@@ -11559,7 +11691,7 @@ mod tests {
         tap(&mut a, &ank, KeyCode::Esc);
         assert_eq!(
             graph_ids(&a).len(),
-            12,
+            13,
             "Escape did not give every task back"
         );
         assert!(a.note.is_none(), "the search reached the CLI: {:?}", a.note);

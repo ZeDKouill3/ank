@@ -219,15 +219,15 @@ const DRAWN_WIDE: &str = "\
 ank  10 tasks   TASK-c3a3 is held
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ╭ 2 ENTITIES ──────────────────────────────────╮┏▶ 3 GRAPH all 10   (10 tasks in the corpus) ━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-│  TASK-a10e   open   A task with no edge      │┃> ●      TASK-a10e   open          A task with no edge                ┃
-│  TASK-de9e   open   A dependent of the c     │┃  ●      TASK-de9e   open          A dependent of the closed one      ┃
-│  TASK-b077   open   The bottom of a diam     │┃  │ ○─┐  TASK-b077   open          The bottom of a diamond            ┃
-│                                              │┃  │ │ ○  TASK-4167   open          The right of a diamond             ┃
-│                                              │┃  │ ○─┤  TASK-1ef7   open          The left of a diamond              ┃
-│                                              │┃  │   ●  TASK-7090   open          The top of a diamond               ┃
-│                                              │┃  │ ○    TASK-c3a3   open          The third of a chain               ┃
-│                                              │┃  │ ○    TASK-c2a2   open          The second of a chain              ┃
-│                                              │┃  │ ●    TASK-c1a1   open          The first of a chain               ┃
+│  TASK-a10e   open   A task with no edge      │┃> ●      TASK-a10e   ready         A task with no edge                ┃
+│  TASK-de9e   open   A dependent of the c     │┃  ●      TASK-de9e   ready         A dependent of the closed one      ┃
+│  TASK-b077   open   The bottom of a diam     │┃  │ ○─┐  TASK-b077   waits 2       The bottom of a diamond            ┃
+│                                              │┃  │ │ ○  TASK-4167   waits 1       The right of a diamond             ┃
+│                                              │┃  │ ○─┤  TASK-1ef7   waits 1       The left of a diamond              ┃
+│                                              │┃  │   ●  TASK-7090   ready         The top of a diamond               ┃
+│                                              │┃  │ ○    TASK-c3a3   waits 1       The third of a chain               ┃
+│                                              │┃  │ ○    TASK-c2a2   waits 1       The second of a chain              ┃
+│                                              │┃  │ ●    TASK-c1a1   ready         The first of a chain               ┃
 │                                              │┃  ·      TASK-c105   closed        A blocker that was closed          ┃
 │                                              │┃                                                                      ┃
 │                                              │┃                                                                      ┃
@@ -240,15 +240,15 @@ const DRAWN_DESK: &str = "\
 ank  10 tasks   TASK-c3a3 is held
 --------------------------------------------------------------------------------
 +> 3 GRAPH all 10   (10 tasks in the corpus) ==================================+
-|> *      TASK-a10e   open          A task with no edge                        |
-|  *      TASK-de9e   open          A dependent of the closed one              |
-|  | o-+  TASK-b077   open          The bottom of a diamond                    |
-|  | | o  TASK-4167   open          The right of a diamond                     |
-|  | o-+  TASK-1ef7   open          The left of a diamond                      |
-|  |   *  TASK-7090   open          The top of a diamond                       |
-|  | o    TASK-c3a3   open          The third of a chain                       |
-|  | o    TASK-c2a2   open          The second of a chain                      |
-|  | *    TASK-c1a1   open          The first of a chain                       |
+|> *      TASK-a10e   ready         A task with no edge                        |
+|  *      TASK-de9e   ready         A dependent of the closed one              |
+|  | o-+  TASK-b077   waits 2       The bottom of a diamond                    |
+|  | | o  TASK-4167   waits 1       The right of a diamond                     |
+|  | o-+  TASK-1ef7   waits 1       The left of a diamond                      |
+|  |   *  TASK-7090   ready         The top of a diamond                       |
+|  | o    TASK-c3a3   waits 1       The third of a chain                       |
+|  | o    TASK-c2a2   waits 1       The second of a chain                      |
+|  | *    TASK-c1a1   ready         The first of a chain                       |
 |  .      TASK-c105   closed        A blocker that was closed                  |
 |                                                                              |
 |                                                                              |
@@ -297,13 +297,13 @@ fn the_graph_rows_are_found_inside_the_panel_whatever_lanes_pass_through_them() 
             DRAWN_WIDE,
             120,
             boxes,
-            "  │ ○─┐  TASK-b077   open          The bottom of a diamond",
+            "  │ ○─┐  TASK-b077   waits 2       The bottom of a diamond",
         ),
         (
             DRAWN_DESK,
             80,
             ascii,
-            "  | o-+  TASK-b077   open          The bottom of a diamond",
+            "  | o-+  TASK-b077   waits 2       The bottom of a diamond",
         ),
     ] {
         let rows = graph_rows(frame, columns);
@@ -385,8 +385,8 @@ fn declared_scopes(shown: &str) -> Vec<String> {
 /// task of the fixture, placed above everything it waits on**, at both
 /// windows (TASK-a9cd362ee5e2, TASK-643611645dea).
 ///
-/// Ten tasks and ten rows: nine open, and the closed blocker drawn because
-/// its dependent is open, under that dependent. The row of the task with two
+/// Eleven tasks and eleven rows: nine open, one under way, and the closed
+/// blocker drawn because its dependent is open, under that dependent. The row of the task with two
 /// blockers leaves toward a second lane and the row under it carries both;
 /// the two tasks sharing a blocker join one lane before the blocker's row,
 /// which gathers none. And the title counts what is shown and what the corpus
@@ -413,15 +413,15 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
             );
         }
         assert!(
-            frame.contains("3 GRAPH all 10   (10 tasks in the corpus)"),
+            frame.contains("3 GRAPH all 11   (11 tasks in the corpus)"),
             "the title does not count the rows and the tasks at {columns}x{rows}:\n{frame}"
         );
 
         let drawn = graph_rows(&frame, columns);
         assert_eq!(
             drawn.len(),
-            10,
-            "ten rows at {columns}x{rows}: {drawn:?}\n{frame}"
+            11,
+            "eleven rows at {columns}x{rows}: {drawn:?}\n{frame}"
         );
         for id in fixture.open() {
             assert_eq!(
@@ -524,9 +524,10 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
 /// **The node character says what the status word cannot: Ready, Waiting or
 /// Finished** (TASK-643611645dea), at both windows.
 ///
-/// The status column keeps the word the CLI gave -- `open` on the dependent
-/// whose blocker is closed and on the chain's third, which waits -- and the
-/// cell on the lane tells them apart.
+/// The column between the identifier and the title holds the readiness word
+/// (TASK-9ea4dc65755b) -- `ready` on the dependent whose blocker is closed and
+/// `waits 1` on the chain's third -- and the cell on the lane says the same
+/// thing a second way.
 #[cfg(unix)]
 #[test]
 fn the_node_character_says_ready_waiting_or_finished() {
@@ -550,15 +551,19 @@ fn the_node_character_says_ready_waiting_or_finished() {
             );
             assert!(
                 row.text.contains(&format!("  {word}  ")),
-                "{id} lost the CLI's word {word:?}: {:?}\n{frame}",
+                "{id} lost its readiness word {word:?}: {:?}\n{frame}",
                 row.text
             );
         };
-        cell(&fixture.lone, ank_tui::graph::Glyph::Ready, "open");
-        cell(&fixture.chain[0], ank_tui::graph::Glyph::Ready, "open");
-        cell(&fixture.dependent, ank_tui::graph::Glyph::Ready, "open");
-        cell(&fixture.chain[2], ank_tui::graph::Glyph::Waiting, "open");
-        cell(&fixture.diamond[3], ank_tui::graph::Glyph::Waiting, "open");
+        cell(&fixture.lone, ank_tui::graph::Glyph::Ready, "ready");
+        cell(&fixture.chain[0], ank_tui::graph::Glyph::Ready, "ready");
+        cell(&fixture.dependent, ank_tui::graph::Glyph::Ready, "ready");
+        cell(&fixture.chain[2], ank_tui::graph::Glyph::Waiting, "waits 1");
+        cell(
+            &fixture.diamond[3],
+            ank_tui::graph::Glyph::Waiting,
+            "waits 2",
+        );
         cell(&fixture.closed, ank_tui::graph::Glyph::Finished, "closed");
         live.quit();
     }
@@ -589,7 +594,7 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
         );
         assert_eq!(
             graph_rows(&with, columns).len(),
-            10,
+            11,
             "the frames compared hold no graph:\n{with}"
         );
     }
@@ -615,7 +620,7 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
             t.contains("3 GRAPH") && graph_drawn(t) && t.contains("> ")
         });
         let drawn = graph_rows(&frame, columns);
-        assert_eq!(drawn.len(), 10, "ten rows in ASCII:\n{frame}");
+        assert_eq!(drawn.len(), 11, "eleven rows in ASCII:\n{frame}");
         for (glyph, boxes, ascii) in ank_tui::graph::TABLE {
             assert!(
                 !frame.contains(boxes),
@@ -705,7 +710,7 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
             after_arrival
         );
         let drawn = graph_rows(&frame, columns);
-        assert_eq!(drawn.len(), 10, "{frame}");
+        assert_eq!(drawn.len(), 11, "{frame}");
         let at = |n: usize| drawn[n].short();
         assert_eq!(selected(&frame), at(0), "the graph opens on its first row");
 
@@ -726,8 +731,8 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         moved(&mut live, DOWN, &at(2));
         moved(&mut live, "k", &at(1));
         moved(&mut live, UP, &at(0));
-        // A page is longer than the ten rows, so Space lands on the last.
-        moved(&mut live, " ", &at(9));
+        // A page is longer than the eleven rows, so Space lands on the last.
+        moved(&mut live, " ", &at(10));
         moved(&mut live, "g", &at(0));
         moved(&mut live, "j", &at(1));
         moved(&mut live, "j", &at(2));
@@ -1011,8 +1016,92 @@ fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
     live.quit();
 }
 
+/// **A graph row says ready, waits N, in progress, done or closed in place of
+/// the raw status, and no row carries the word open** (TASK-9ea4dc65755b), at
+/// both windows.
+///
+/// The task under way reads `in progress` and `[held]`; the dependent of the
+/// closed blocker reads `ready`; the bottom of the diamond, which waits on
+/// two tasks, reads `waits 2`; the closed blocker reads `closed`; and under
+/// the fold all the task [`historied`] finishes reads `done`.
+///
+/// The claims are read first under the dashboard's width, because that is
+/// when `[held]` can be drawn: a narrow session asks `status` only for the
+/// claims panel.
+#[cfg(unix)]
+#[test]
+fn a_graph_row_says_ready_waits_n_in_progress_done_or_closed_and_never_open() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let (fixture, history) = historied();
+    let key = cycle_key();
+    for (columns, rows) in WINDOWS {
+        let mut live = Live::open(&fixture.repo, columns, rows);
+        opened(&live, columns);
+        if !wide(columns) {
+            live.send("1");
+            live.until("the claims to be read", |t| {
+                t.contains(&reached(columns, "1 CLAIMS"))
+                    && t.contains(&short_of(&fixture.under_way))
+            });
+        }
+        on_graph(&mut live, columns);
+        let frame = live.until("the held row to be drawn", |t| {
+            graph_drawn(t) && t.contains("[held]")
+        });
+        let drawn = graph_rows(&frame, columns);
+        assert_eq!(drawn.len(), 11, "{columns}x{rows}:\n{frame}");
+        let says = |id: &str, word: &str| {
+            let row = row_of(&drawn, id);
+            assert!(
+                row.text.contains(&format!("  {word}  ")),
+                "{id} does not read {word:?} at {columns}x{rows}: {:?}\n{frame}",
+                row.text
+            );
+        };
+        says(&fixture.under_way, "in progress");
+        assert!(
+            row_of(&drawn, &fixture.under_way)
+                .text
+                .ends_with("A task under way  [held]"),
+            "the task under way is not held at {columns}x{rows}:\n{frame}"
+        );
+        says(&fixture.dependent, "ready");
+        says(&fixture.diamond[3], "waits 2");
+        says(&fixture.closed, "closed");
+        for row in &drawn {
+            assert!(
+                !row.text.split_whitespace().any(|w| w == "open"),
+                "a row carries the raw word open at {columns}x{rows}: {:?}\n{frame}",
+                row.text
+            );
+        }
+
+        live.send(&key);
+        let all = live.until("the fold to open to every task", |t| {
+            graph_rows(t, columns).len() == 12
+        });
+        let unfolded = graph_rows(&all, columns);
+        assert!(
+            row_of(&unfolded, &history).text.contains("  done  "),
+            "the task finished does not read done at {columns}x{rows}:\n{all}"
+        );
+        for row in &unfolded {
+            assert!(
+                !row.text.split_whitespace().any(|w| w == "open"),
+                "a row carries the raw word open under the fold all at \
+                 {columns}x{rows}: {:?}\n{all}",
+                row.text
+            );
+        }
+        live.quit();
+    }
+}
+
 /// The fixture is what it says it is, read back through the CLI rather than
-/// trusted: ten tasks, nine open, one closed, and the seven edges.
+/// trusted: eleven tasks, nine open, one in progress, one closed, and the
+/// eight edges.
 #[cfg(unix)]
 #[test]
 fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
@@ -1022,8 +1111,13 @@ fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
     let fixture = Repo::graphed();
     let doc = fixture.repo.stdout(&["graph", "--json"]);
     let ids = crate::terminal::ids_of(&doc);
-    assert_eq!(ids.len(), 10, "{doc}");
+    assert_eq!(ids.len(), 11, "{doc}");
     assert_eq!(doc.matches("\"status\":\"open\"").count(), 9, "{doc}");
+    assert_eq!(
+        doc.matches("\"status\":\"in_progress\"").count(),
+        1,
+        "{doc}"
+    );
     assert_eq!(doc.matches("\"status\":\"closed\"").count(), 1, "{doc}");
     let edge = |task: &str, blocked_by: &str| {
         format!("\"task\":\"{task}\",\"blocked_by\":\"{blocked_by}\"")
@@ -1038,13 +1132,22 @@ fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
         (bottom, left),
         (bottom, right),
         (&fixture.dependent, &fixture.closed),
+        (&fixture.under_way, chain_1),
     ] {
         assert!(
             doc.contains(&edge(task, blocker)),
             "no edge {task} <- {blocker}:\n{doc}"
         );
     }
-    assert_eq!(doc.matches("\"blocked_by\":").count(), 7, "{doc}");
+    assert_eq!(doc.matches("\"blocked_by\":").count(), 8, "{doc}");
+    assert!(
+        doc.contains(&format!(
+            "\"id\":\"{}\",\"short\":\"{}\",\"status\":\"in_progress\"",
+            fixture.under_way,
+            short_of(&fixture.under_way)
+        )),
+        "the task under way is not listed as in_progress:\n{doc}"
+    );
     let _: &Graphed = &fixture;
 }
 
@@ -1084,13 +1187,21 @@ fn historied() -> (Graphed, String) {
     let ids = crate::terminal::ids_of(&made);
     assert_eq!(ids.len(), 1, "one task was written: {made}");
     let history = ids[0].clone();
-    repo.ank(&["claim", &history]);
+    // Another identity, since the suite's own already holds the task under
+    // way and `claim` refuses a second live claim to one identity.
+    let historian = [("ANK_AGENT", "historian@suite")];
+    let claimed = repo.tried(&["claim", &history], &historian);
+    assert!(
+        claimed.status.success(),
+        "claim by the historian: {claimed:?}"
+    );
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-q", "-m", "the work the finished task proves"]);
     let sha = String::from_utf8_lossy(&repo.git(&["rev-parse", "HEAD"]).stdout)
         .trim()
         .to_string();
-    repo.ank(&["done", "--proof", &format!("commit:{sha}")]);
+    let done = repo.tried(&["done", "--proof", &format!("commit:{sha}")], &historian);
+    assert!(done.status.success(), "done by the historian: {done:?}");
     let doc = repo.stdout(&["graph", "--json"]);
     assert!(
         doc.contains(&format!("\"id\":\"{history}\""))
@@ -1185,8 +1296,8 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
         let at_rest = shorts(&rest, columns);
         assert_eq!(
             at_rest.len(),
-            10,
-            "ten rows at rest at {columns}x{rows}:\n{rest}"
+            11,
+            "eleven rows at rest at {columns}x{rows}:\n{rest}"
         );
         assert!(
             !at_rest.contains(&short_of(&history)),
@@ -1197,7 +1308,7 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
             "the header cell does not say the fold at rest at {columns}x{rows}:\n{rest}"
         );
         assert!(
-            rest.contains("3 GRAPH all 10   (11 tasks in the corpus)"),
+            rest.contains("3 GRAPH all 11   (12 tasks in the corpus)"),
             "\n{rest}"
         );
 
@@ -1212,9 +1323,9 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
 
         live.send(&key);
         let all = live.until("the fold to open to every task", |t| {
-            t.contains("3 GRAPH all 11   (11 tasks in the corpus)")
+            t.contains("3 GRAPH all 12   (12 tasks in the corpus)")
                 && header(t).contains(&cell(ank_tui::bindings::Fold::All))
-                && graph_rows(t, columns).len() == 11
+                && graph_rows(t, columns).len() == 12
         });
         let unfolded = shorts(&all, columns);
         for id in &every {
@@ -1233,7 +1344,7 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
         live.send(&key);
         let back = live.until("the fold to come back to the open work", |t| {
             header(t).contains(&cell(ank_tui::bindings::Fold::Open))
-                && graph_rows(t, columns).len() == 10
+                && graph_rows(t, columns).len() == 11
         });
         assert_eq!(
             graph_rows(&back, columns)
