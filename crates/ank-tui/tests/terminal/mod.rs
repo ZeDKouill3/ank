@@ -278,9 +278,45 @@ fn in_this_runs_root(command: &mut Command) {
         .env("TEMP", root);
 }
 
+/// The corpus [`Repo::graphed`] seeds, with every identifier it wrote
+/// (TASK-643611645dea).
+///
+/// The identifiers are kept rather than found again, because what the suite
+/// asserts is *which* row stands above which, and a test that looked the
+/// tasks up by title would be reading the frame to learn what the frame is
+/// supposed to show.
+pub struct Graphed {
+    pub repo: Repo,
+    /// Three tasks, each blocked by the one before it: the first is a root.
+    pub chain: [String; 3],
+    /// A top, a left and a right both blocked by the top, and a bottom
+    /// blocked by both.
+    pub diamond: [String; 4],
+    /// A task closed with a dependent still open.
+    pub closed: String,
+    /// The dependent.
+    pub dependent: String,
+    /// A task with no edge at all.
+    pub lone: String,
+}
+
+impl Graphed {
+    /// Every task the fixture wrote that is still open: the rows the graph
+    /// shows by default, less the closed blocker it shows beside them.
+    pub fn open(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.chain.iter().map(String::as_str).collect();
+        out.extend(self.diamond.iter().map(String::as_str));
+        out.push(&self.dependent);
+        out.push(&self.lone);
+        out
+    }
+}
+
 impl Repo {
-    pub fn seeded() -> Repo {
-        let root = scratch::dir("panels");
+    /// A repository with a corpus and nothing in it: what every fixture here
+    /// starts from.
+    fn bare(what: &str) -> Repo {
+        let root = scratch::dir(what);
         let repo = Repo(root);
         repo.git(&["init", "--initial-branch=main"]);
         repo.git(&["config", "user.email", "suite@example.invalid"]);
@@ -298,6 +334,71 @@ impl Repo {
         std::fs::create_dir_all(repo.0.join("src")).unwrap();
         std::fs::write(repo.0.join("src/lib.rs"), "// code\n").unwrap();
         repo.ank(&["init"]);
+        repo
+    }
+
+    /// One task written through the CLI, blocked by whatever `blocked_by`
+    /// names, and the identifier it was given.
+    fn new_task(&self, title: &str, blocked_by: &[&str]) -> String {
+        let mut args = vec![
+            "new",
+            "task",
+            "--title",
+            title,
+            "--scope",
+            "src/**",
+            "--criteria",
+            "The graph draws this row where its edges put it.",
+        ];
+        for id in blocked_by {
+            args.push("--blocked-by");
+            args.push(id);
+        }
+        args.push("--json");
+        let made = self.stdout(&args);
+        let ids = ids_of(&made);
+        assert_eq!(ids.len(), 1, "one task was written: {made}");
+        ids[0].clone()
+    }
+
+    /// The corpus the graph is measured on (TASK-643611645dea): a chain of
+    /// three, a diamond, one task closed with a dependent still open, and one
+    /// task with no edge -- ten tasks, nine of them open, every one of them
+    /// written through the CLI.
+    ///
+    /// The closed task is closed after its dependent names it, so the edge
+    /// is one `new` accepted rather than one `amend` added, and the blocker
+    /// is finished the way a blocker is finished in a real corpus: later.
+    pub fn graphed() -> Graphed {
+        let repo = Repo::bare("graphed");
+        let chain_1 = repo.new_task("The first of a chain", &[]);
+        let chain_2 = repo.new_task("The second of a chain", &[&chain_1]);
+        let chain_3 = repo.new_task("The third of a chain", &[&chain_2]);
+        let top = repo.new_task("The top of a diamond", &[]);
+        let left = repo.new_task("The left of a diamond", &[&top]);
+        let right = repo.new_task("The right of a diamond", &[&top]);
+        let bottom = repo.new_task("The bottom of a diamond", &[&left, &right]);
+        let closed = repo.new_task("A blocker that was closed", &[]);
+        let dependent = repo.new_task("A dependent of the closed one", &[&closed]);
+        let lone = repo.new_task("A task with no edge", &[]);
+        repo.ank(&[
+            "close",
+            &closed,
+            "--reason",
+            "closed so that its dependent is drawn ready",
+        ]);
+        Graphed {
+            repo,
+            chain: [chain_1, chain_2, chain_3],
+            diamond: [top, left, right, bottom],
+            closed,
+            dependent,
+            lone,
+        }
+    }
+
+    pub fn seeded() -> Repo {
+        let repo = Repo::bare("panels");
         repo.ank(&[
             "new",
             "adr",
@@ -933,6 +1034,9 @@ fn utf8_width(first: u8) -> usize {
 pub struct Live {
     child: std::process::Child,
     writer: std::fs::File,
+    /// The slave side's device, kept so the window can be moved under a
+    /// running session ([`Live::resize`], TASK-643611645dea).
+    slave_path: PathBuf,
     screen: std::sync::Arc<std::sync::Mutex<Screen>>,
     /// Every distinct frame this session painted, in order.
     ///
@@ -1086,10 +1190,29 @@ impl Live {
         Live {
             child,
             writer: master,
+            slave_path,
             screen,
             seen,
             drain: Some(drain),
         }
+    }
+
+    /// The window, moved under the running session (TASK-643611645dea).
+    ///
+    /// **The terminal's size changes; whether the reader is told is the
+    /// terminal's business.** `TIOCSWINSZ` signals the terminal's foreground
+    /// process group, and a child this suite spawned has no controlling
+    /// terminal to be in the foreground of, so no `SIGWINCH` reaches it.
+    /// What the reader does instead is read the window off the terminal
+    /// before every frame it draws, so the next key it answers is answered
+    /// at the new size -- which is what a caller here sends after this, and
+    /// what it then waits for on the frame.
+    ///
+    /// The emulator's grid is not moved: it keeps the columns the session
+    /// opened with, so a frame drawn narrower leaves the old cells past its
+    /// right edge standing. A caller measures the new edge, not the old.
+    pub fn resize(&self, columns: u16, rows: u16) {
+        pty::resize(&self.slave_path, columns, rows);
     }
 
     /// **Returns the frame the predicate matched on**, which is the only frame

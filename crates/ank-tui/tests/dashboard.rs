@@ -111,10 +111,18 @@ fn a_wide_frame_draws_every_panel_and_marks_one() {
         1,
         "one cursor on a frame of four panels:\n{frame}"
     );
-    // And the right panel is the graph, saying it has not been drawn.
+    // And the right panel is the graph, drawn (TASK-643611645dea): the one
+    // open task of this corpus is a row of it.
+    let task = terminal::short_of(&repo.task());
+    let graph_at = lines(&frame)
+        .iter()
+        .find_map(|l| l.find("3 GRAPH").map(|at| l[..at].chars().count()))
+        .expect("the graph's title");
     assert!(
-        frame.contains(ank_tui::view::GRAPH_UNDRAWN),
-        "the graph panel is a border around nothing:\n{frame}"
+        lines(&frame)
+            .iter()
+            .any(|l| l.chars().skip(graph_at).collect::<String>().contains(&task)),
+        "the graph panel does not draw the task:\n{frame}"
     );
     assert!(
         !frame.contains(terminal::BODY),

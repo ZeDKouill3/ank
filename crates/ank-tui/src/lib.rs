@@ -3,8 +3,9 @@
 //!
 //! **It reaches the corpus by running the CLI, and by nothing else.** Every row
 //! of corpus data on the screen arrives as a `--json` document written by
-//! `ank find`, `ank status`, `ank show`, `ank scope`, `ank review` or
-//! `ank config <key>`, spawned as a shell would spawn them. Nothing here links `ank-core`, opens `.ank/`, or touches
+//! `ank find`, `ank status`, `ank show`, `ank scope`, `ank review`, `ank graph`
+//! or `ank config <key>`, spawned as a shell would spawn them. Nothing here
+//! links `ank-core`, opens `.ank/`, or touches
 //! `refs/ank/*`. That is slower than linking the core and the trade is taken
 //! deliberately: every refusal in this project is a refusal on state, a reader
 //! that reproduced them would get one subtly wrong, and the first symptom would
@@ -127,8 +128,14 @@
 //! * [`view::Focus::Entities`], `2 ENTITIES` -- every entity of every kind with
 //!   its status, windowed and filterable. Where a session opens.
 //! * [`view::Focus::Graph`], `3 GRAPH` -- the `blocked_by` DAG
-//!   (TASK-a9cd362ee5e2). Not drawn yet: until it is, the screen holds one
-//!   sentence saying so, and never a border around nothing.
+//!   (TASK-a9cd362ee5e2, TASK-643611645dea): `ank graph --json`, laid out in
+//!   lanes by [`graph`] with every task above what it is blocked by, one row
+//!   per task through the one row composer, and a row of it opens that task.
+//!   Shown by default is the work that is alive and what it directly waits
+//!   on; the node's character on the lane says ready, waiting or finished,
+//!   which the status word cannot. Read once where the panel is first on
+//!   the frame -- the opening's second pass on a wide window, the first
+//!   arrival under it -- and again on `u`; a cursor over it spawns nothing.
 //! * [`view::Focus::Queue`], `4 QUEUE` -- what is proposed and waiting for a
 //!   signature, and which regime the corpus is in: `ank review`, run when its
 //!   person arrives at the screen and never on the reader's own initiative.
