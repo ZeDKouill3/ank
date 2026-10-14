@@ -232,6 +232,7 @@ use std::path::PathBuf;
 pub mod ank;
 pub mod bindings;
 pub mod form;
+pub mod graph;
 pub mod input;
 pub mod keys;
 pub mod model;
