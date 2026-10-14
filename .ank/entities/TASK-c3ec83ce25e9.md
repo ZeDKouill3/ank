@@ -5,7 +5,7 @@ slug: the-reader-reads-the-blocked-by-graph-through-an
 title: The reader reads the blocked_by graph through ank graph --json, and the road stays a read
 created: 2026-10-14T09:15:26Z
 author: ankwork
-status: open
+status: in_progress
 scope:
   - crates/ank-tui/src/ank.rs
   - crates/ank-tui/src/model.rs
@@ -16,7 +16,7 @@ criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
 schema: 4
-version: 1
+version: 2
 ---
 
 First of the GRAPH screen tasks: the data, and nothing drawn yet.
