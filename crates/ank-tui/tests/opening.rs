@@ -108,7 +108,7 @@ fn the_frame_that_arrives_first_names_its_screen_and_says_it_has_not_read() {
         first.contains("2 ENTITIES"),
         "the opening frame does not name the screen it is drawing:\n{first}"
     );
-    for elsewhere in ["1 CLAIMS", "3 BODY", "4 QUEUE"] {
+    for elsewhere in ["1 CLAIMS", "3 GRAPH", "4 QUEUE", terminal::BODY] {
         assert!(
             !first.contains(elsewhere),
             "{elsewhere} is drawn beside the listing on the opening \

@@ -187,8 +187,8 @@ fn sets(params: &[usize]) -> Vec<Vec<usize>> {
 /// A session driven across the screens that carry painted fields.
 ///
 /// The listing a session opens on, a document opened over it, the constraints
-/// in its place, the listing again and the ratification queue: every screen,
-/// and every place this reader puts an identifier or a status.
+/// in its place, the listing again, the graph and the ratification queue:
+/// every screen, and every place this reader puts an identifier or a status.
 ///
 /// **Every frame it drew and not the last one** (TASK-252bf02de218). The
 /// screens are reached in their turn now, so the frame a session ends on
@@ -210,14 +210,23 @@ fn driven(mut live: Live) -> (String, Vec<u8>) {
     // drawn at once and the comparison was made on the last frame; with one
     // region it is the difference between comparing a document with a document
     // and comparing a document with the listing it replaced.
+    //
+    // The document and its constraints pane carry no digit
+    // (TASK-a9cd362ee5e2): what is waited for is the heading and the three
+    // spaces after it, which the field block's own `CONSTRAINTS (` does not
+    // carry. And the graph is a screen of the ring now, so it is driven too.
+    // The window is wide enough for the dashboard, where every title of the
+    // ring is on every frame, so a screen of the ring is waited for by the
+    // focus marker in front of its title rather than by the title alone.
     for (key, reached) in [
-        ("\r", "3 BODY"),
-        ("s", "3 CONSTRAINTS"),
-        ("b", "2 ENTITIES"),
-        ("4", "4 QUEUE"),
+        ("\r", terminal::BODY.to_string()),
+        ("s", "CONSTRAINTS   ".to_string()),
+        ("b", terminal::focused("2 ENTITIES")),
+        ("3", terminal::focused("3 GRAPH")),
+        ("4", terminal::focused("4 QUEUE")),
     ] {
         live.send(key);
-        live.until(reached, |t| t.contains(reached));
+        live.until(&reached, |t| t.contains(&reached));
         seen.push(live.frame());
     }
     let raw = live.raw();

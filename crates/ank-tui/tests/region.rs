@@ -235,7 +235,7 @@ fn the_claims_and_the_queue_are_screens_reached_by_the_keys_they_had() {
         let mut live = Live::open(&repo, columns, 24);
         live.until("the session to open", |t| t.contains("2 ENTITIES"));
         let frame = live.frame();
-        for gone in ["1 CLAIMS", "4 QUEUE", "3 BODY"] {
+        for gone in ["1 CLAIMS", "4 QUEUE", "3 GRAPH", terminal::BODY] {
             assert!(
                 !frame.contains(gone),
                 "{gone} is a panel on a {columns} column frame:\n{frame}"
@@ -291,7 +291,7 @@ fn opening_a_row_replaces_the_list_and_leaving_it_gives_the_list_back() {
         let selected = marked(&before);
 
         live.send("\r");
-        live.until("the document to open", |t| t.contains("3 BODY"));
+        live.until("the document to open", |t| t.contains(terminal::BODY));
         let opened = live.frame();
         assert!(
             !opened.contains("2 ENTITIES"),
@@ -310,7 +310,7 @@ fn opening_a_row_replaces_the_list_and_leaving_it_gives_the_list_back() {
         live.until("the listing to come back", |t| t.contains("2 ENTITIES"));
         let back = live.frame();
         assert!(
-            !back.contains("3 BODY"),
+            !back.contains(terminal::BODY),
             "the document is still drawn beside the listing at \
              {columns}x{rows}:\n{back}"
         );
@@ -449,7 +449,7 @@ fn the_body_of_a_selected_entity_is_served_whole() {
             t.contains("ENTITIES all 1")
         });
         live.send("\r");
-        live.until("the document to open", |t| t.contains("3 BODY"));
+        live.until("the document to open", |t| t.contains(terminal::BODY));
         // Paged until the criterion's end arrives, which is what "whole" means
         // in a region shorter than the document.
         let mut found = false;

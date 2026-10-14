@@ -62,16 +62,28 @@ fn key_of_config() -> String {
     letter
 }
 
-/// The key that reads the corpus again, and the digit that reaches the body
-/// panel: both out of the reader's own table rather than typed here.
+/// The key that reads the corpus again, out of the reader's own table rather
+/// than typed here.
 fn key_of_reload() -> String {
     let said = ank_tui::bindings::spelling_of(&ank_tui::input::Command::Reload);
     assert_eq!(said.chars().count(), 1, "reload is named '{said}'");
     said
 }
 
-fn digit_of_body() -> String {
-    ank_tui::view::Focus::Body.number().to_string()
+/// The key that brings the document's screen back, which is where the pane is
+/// drawn: Right, as a terminal sends it.
+///
+/// It was the body's digit, and the document carries none since
+/// TASK-a9cd362ee5e2 gave `3` to the graph. What the table says about it is
+/// asserted rather than assumed, so a Right that stopped reaching the document
+/// fails here and not as a pane that never came back.
+fn key_to_the_document() -> String {
+    use ank_tui::bindings::{of_key, Runs};
+    use ank_tui::view::Focus;
+    use ratatui::crossterm::event::KeyCode;
+    let right = of_key(KeyCode::Right).expect("Right is bound");
+    assert_eq!(right.runs, Runs::Sideways(Focus::Body), "{right:?}");
+    "\u{1b}[C".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +528,7 @@ fn the_pane_is_read_when_it_is_focused_and_a_reload_does_not_charge_it() {
     live.until("the reload to have reached the listing", |t| {
         t.contains("2 ENTITIES") && t.contains(&short_of(&made))
     });
-    live.send(&digit_of_body());
+    live.send(&key_to_the_document());
     live.until("the pane to be read again", |t| {
         row_of(t, key).is_some_and(|row| row.contains("8h"))
     });

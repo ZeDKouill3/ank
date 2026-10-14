@@ -587,6 +587,29 @@ pub fn short_of(id: &str) -> String {
     format!("{kind}-{}", &rest[..4])
 }
 
+/// The title of the document open on one entity, as a frame carries it
+/// (TASK-a9cd362ee5e2): `BODY` with no digit in front, then the short
+/// identifier three spaces on.
+///
+/// Asked as one string rather than as `BODY` and the identifier apart: the
+/// identifier is on the listing too, so a frame still showing the listing
+/// would carry both halves and answer for a document that never opened.
+pub fn body_naming(short: &str) -> String {
+    format!("{BODY}{short}")
+}
+
+/// The document's title, up to where its identifier starts.
+///
+/// `BODY` alone is a word a document's own prose may carry; the three spaces
+/// after it are the title's.
+pub const BODY: &str = "BODY   ";
+
+/// A screen of the ring's title on a wide frame while that panel has the
+/// focus: the focus marker, then the digit and the name (ADR-ac6be1ebe9aa).
+pub fn focused(title: &str) -> String {
+    format!("{}{title}", ank_tui::view::BOXES.focus())
+}
+
 // ---------------------------------------------------------------------------
 // The terminal
 // ---------------------------------------------------------------------------

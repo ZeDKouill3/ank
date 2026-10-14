@@ -149,17 +149,17 @@ fn at_a_phone_sized_window_the_frame_is_one_region_and_every_screen_is_reachable
         );
     }
     // One screen on the frame, and it is the one a session opens on.
-    for elsewhere in ["1 CLAIMS", "3 BODY", "4 QUEUE"] {
+    for elsewhere in ["1 CLAIMS", "3 GRAPH", "4 QUEUE", terminal::BODY] {
         assert!(
             !frame.contains(elsewhere),
             "{elsewhere} is drawn beside the listing at {PHONE:?}:\n{frame}"
         );
     }
-    // Reached in turn by the digit each already had. The queue last, because
-    // arriving at it is a person asking for `ank review` and that is a read of
-    // the whole corpus.
+    // Reached in turn by the digit each carries, `3` the graph's
+    // (TASK-a9cd362ee5e2). The queue last, because arriving at it is a person
+    // asking for `ank review` and that is a read of the whole corpus.
     for (digit, screen) in [
-        ("3", "3 BODY"),
+        ("3", "3 GRAPH"),
         ("1", "1 CLAIMS"),
         ("4", "4 QUEUE"),
         ("2", "2 ENTITIES"),
@@ -242,13 +242,13 @@ fn a_tap_selects_a_row_and_a_second_tap_on_it_opens_it() {
         .expect("the marked row is still on the frame");
     live.tap(2, again as u16);
     live.until("the entity the tap selected to open", |t| {
-        t.contains("3 BODY") && t.contains(&short)
+        t.contains(&terminal::body_naming(&short))
     });
     let opened = live.frame();
     assert!(
         opened
             .lines()
-            .any(|l| l.contains("3 BODY") && l.contains(&short)),
+            .any(|l| l.contains(&terminal::body_naming(&short))),
         "the region is not holding the row the tap selected:\n{opened}"
     );
     // And opening it replaced the listing rather than sharing the frame with
@@ -293,7 +293,7 @@ fn a_touch_answers_a_waiting_command_only_where_the_target_says_it_does() {
         t.contains("ENTITIES all 1")
     });
     live.send("\r");
-    live.until("the document to open", |t| t.contains("3 BODY"));
+    live.until("the document to open", |t| t.contains(terminal::BODY));
     live.send(&claim());
     live.until("the command to be shown", |t| t.contains("ank claim"));
     let waiting = live.frame();

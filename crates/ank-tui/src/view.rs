@@ -1,5 +1,6 @@
-//! One region, four screens reached in their turn, and the state between them
-//! (TASK-252bf02de218, ADR-559eebf5c6f5).
+//! One region, four screens reached in their turn, the document a row opens
+//! into, and the state between them (TASK-252bf02de218, ADR-559eebf5c6f5,
+//! TASK-a9cd362ee5e2).
 //!
 //! [`App`] holds what was read, where each cursor is, what is filtered and
 //! which screen the region is showing. It reads by calling [`Ank`] and by
@@ -70,26 +71,42 @@
 //! * **2 ENTITIES** -- every entity of every kind with its status, filtered by
 //!   `f` and `/`, windowed. Where a session opens, because it is the question a
 //!   reader arrives with.
-//! * **3 BODY** -- one entity, whole: its frontmatter as a block of labelled
-//!   fields, who holds it, the constraints binding its declared scope, and its
-//!   prose under them, paged rather than cut (TASK-082301b40a27). `s` swaps it
-//!   for the constraints alone, and `o` for what `ank config` declares
-//!   (TASK-b08d090f699c) -- the one screen here that names no entity at all.
+//! * **3 GRAPH** -- the `blocked_by` DAG (TASK-a9cd362ee5e2). It is not drawn
+//!   yet: until a later task draws it, the screen holds one sentence saying
+//!   so, and never a border around nothing.
 //! * **4 QUEUE** -- what is proposed and waiting for a signature, and which
 //!   regime the corpus is in. Asked for rather than kept current, for the
 //!   claims' reason with `ank review`'s price behind it.
 //!
-//! **A digit is how a person reaches one, and it is the digit each already
-//! had.** `Tab` walks the ring, `1` to `4` name one, and the number is written
-//! on the region's title beside its name, which is the whole of what the change
-//! costs a reader who knew the old frame.
+//! **A digit is how a person reaches one.** `Tab` and `BackTab` walk the ring
+//! in that order, `1` to `4` name one, and the number is written on the title
+//! beside the name. `1`, `2` and `4` are the digits those screens always had;
+//! `3` is the graph's, and it was the document's until TASK-a9cd362ee5e2.
 //!
-//! **Opening a row replaces the list with the document it names.** Enter on a
-//! row of any of the three listings shows that entity in the region;
-//! [`App::from`] remembers which listing it was reached from, and `Back` gives
-//! that listing back with the row still under the cursor. No cursor is ever
-//! moved by leaving a screen, which is what makes a screen a place rather than
-//! a mode.
+//! **The document is not on the ring: it is what a row opens into.** Enter on a
+//! row of any of the three listings -- or Right, which reaches the same screen
+//! -- replaces the list with that entity, whole: its frontmatter as a block of
+//! labelled fields, who holds it, the constraints binding its declared scope,
+//! and its prose under them, paged rather than cut (TASK-082301b40a27). Its
+//! title is `BODY` with no digit in front, because no digit reaches it: a key
+//! that went straight to it went to a screen with nothing on it until a row
+//! had been opened. `s` swaps it for the constraints alone and `o` for what
+//! `ank config` declares (TASK-b08d090f699c), and those two keep the headings
+//! they carry, `CONSTRAINTS` and `CONFIG`. [`App::from`] remembers which
+//! listing the document was reached from, and `Back` gives that listing back
+//! with the row still under the cursor. No cursor is ever moved by leaving a
+//! screen, which is what makes a screen a place rather than a mode, and `Tab`
+//! from the document steps along the ring from where the graph stands, so the
+//! ring never leads back into it.
+//!
+//! **From [`DASHBOARD`] columns on, the screens are panels drawn at once**
+//! (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa): the claims, the entities and the
+//! queue in a column on the left, and the right panel beside them. That panel
+//! is `3 GRAPH` at rest and `BODY` once a row has been opened; `Back` gives it
+//! back to the graph ([`App::beside`]). The listings stay in the left column
+//! throughout, and the focused panel is the only one that draws a cursor.
+//! Under that width everything below holds as written: one region, and the
+//! screen asked for drawn in it.
 //!
 //! **The chrome is not a screen and cannot be reached.** The two bands that
 //! stay full width and unbordered -- the header, and whatever the reader is
@@ -335,79 +352,123 @@ use ratatui::widgets::{
 };
 use std::time::{Duration, Instant};
 
-/// Which screen the one region is showing (TASK-252bf02de218).
+/// Which screen the region is showing, or which panel has the focus on a wide
+/// frame (TASK-252bf02de218, TASK-a9cd362ee5e2).
 ///
-/// It was which of four panels had the focus, and the four are the same four:
-/// what changed is that they are reached in their turn rather than drawn at
-/// once (ADR-559eebf5c6f5). The order is the order `Tab` walks and the order
-/// the digits name, and it is the order they were drawn in when they were
-/// drawn together -- kept deliberately, because the digit that reaches a screen
-/// is the digit that reached its panel and a reader who knew the old frame owes
-/// nothing new. The number is written on the region's title beside the name,
-/// which is the whole of what "reachable by the key it already had" costs a
-/// person to learn.
+/// **Four screens on the ring, and the document beside it.** The ring is what
+/// `Tab` walks and what the digits name -- the claims, the entities, the graph
+/// and the queue, `1` to `4` -- and the number is written on the title beside
+/// the name, which is the whole of what "reachable by the key it already had"
+/// costs a person to learn. The document is not on it. It is what a row
+/// *opens into* (ADR-559eebf5c6f5: "Opening a row replaces the list with the
+/// document it names"), so it is reached by Enter on a row and left by `Back`,
+/// and a digit that reached it directly reached a screen with nothing to show
+/// until a row had been opened -- which is why `3` went to the graph and the
+/// document kept no digit at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Claims,
     Entities,
-    Body,
+    Graph,
     Queue,
+    Body,
 }
 
 impl Focus {
-    /// Every screen, in the order `Tab` walks them.
-    pub const ALL: [Focus; 4] = [Focus::Claims, Focus::Entities, Focus::Body, Focus::Queue];
+    /// Every screen the reader draws: the ring in the order `Tab` walks it,
+    /// then the document.
+    pub const ALL: [Focus; 5] = [
+        Focus::Claims,
+        Focus::Entities,
+        Focus::Graph,
+        Focus::Queue,
+        Focus::Body,
+    ];
 
-    /// The digit that names this screen, which is the key that reaches it.
-    pub fn number(self) -> usize {
+    /// The ring: the screens `Tab` walks and the digits name, in that order.
+    pub const RING: [Focus; 4] = [Focus::Claims, Focus::Entities, Focus::Graph, Focus::Queue];
+
+    /// The digit that names this screen, which is the key that reaches it, and
+    /// `None` on the document, which no digit reaches.
+    pub fn number(self) -> Option<usize> {
         match self {
-            Focus::Claims => 1,
-            Focus::Entities => 2,
-            Focus::Body => 3,
-            Focus::Queue => 4,
+            Focus::Claims => Some(1),
+            Focus::Entities => Some(2),
+            Focus::Graph => Some(3),
+            Focus::Queue => Some(4),
+            Focus::Body => None,
         }
     }
 
-    /// The screen a digit names, or `None` where the digit names none.
-    pub fn of_digit(c: char) -> Option<Focus> {
-        let n = c.to_digit(10)? as usize;
-        Focus::ALL.into_iter().find(|f| f.number() == n)
+    /// Where this screen's cursor and rectangle are kept: its place in
+    /// [`Focus::ALL`].
+    ///
+    /// Not the digit, which the document has none of: an index that was the
+    /// digit less one would have nowhere to put the one screen a digit does
+    /// not reach.
+    fn slot(self) -> usize {
+        match self {
+            Focus::Claims => 0,
+            Focus::Entities => 1,
+            Focus::Graph => 2,
+            Focus::Queue => 3,
+            Focus::Body => 4,
+        }
     }
 
-    /// The screen `by` steps along, wrapping.
+    /// The screen a digit names, or `None` where the digit names none -- which
+    /// it never does of the document.
+    pub fn of_digit(c: char) -> Option<Focus> {
+        let n = c.to_digit(10)? as usize;
+        Focus::RING.into_iter().find(|f| f.number() == Some(n))
+    }
+
+    /// The screen `by` steps along the ring, wrapping.
     ///
     /// Wrapping and not clamping, unlike a cursor: the four are a ring a person
     /// walks with one key, and a `Tab` that stopped on the last of them would
     /// be a key that does nothing every fourth press.
+    ///
+    /// **It never lands on the document.** The document stands where the graph
+    /// stands -- on a wide frame it is drawn in the graph's own panel -- so a
+    /// step from it is a step from there: `Tab` reaches the queue and `BackTab`
+    /// the entities, and nothing on the ring leads back into it.
     pub fn stepped(self, by: isize) -> Focus {
-        let len = Focus::ALL.len() as isize;
-        let at = (self.number() as isize - 1 + by).rem_euclid(len);
-        Focus::ALL[at as usize]
+        let from = match self {
+            Focus::Body => Focus::Graph,
+            ring => ring,
+        };
+        let len = Focus::RING.len() as isize;
+        let at = (from.slot() as isize + by).rem_euclid(len);
+        Focus::RING[at as usize]
     }
 
     /// Whether this screen holds the rows of a *listing*.
     ///
-    /// Three of the four do. The body is the one that does not, and what
-    /// answers for it is everything written for a listing: the digit that names
-    /// a row, the tap that selects one, the shared clamp. A document is not a
-    /// list -- the window over it is an offset into lines, because paging it is
-    /// what "whole rather than cut" means.
+    /// Three of the five do. The body is one that does not, and what answers
+    /// for it is everything written for a listing: the digit that names a row,
+    /// the tap that selects one, the shared clamp. A document is not a list --
+    /// the window over it is an offset into lines, because paging it is what
+    /// "whole rather than cut" means. The graph is the other, until it is drawn
+    /// (TASK-a9cd362ee5e2): it holds one sentence and no row a cursor could
+    /// stand on or Enter could open.
     ///
-    /// It still has a cursor of its own, over the rows of its field block
+    /// The body still has a cursor of its own, over the rows of its field block
     /// (TASK-082301b40a27), kept inside that window by [`App::clamp_body`]. Two
     /// cursors and one rule: a listing's is a row of an answer, and the body's
     /// is a place in a document.
     pub fn holds_rows(self) -> bool {
-        self != Focus::Body
+        !matches!(self, Focus::Body | Focus::Graph)
     }
 
-    /// The name on the region's title when this screen is the one in it.
-    fn name(self) -> &'static str {
+    /// The name on the title when this screen is the one drawn.
+    pub fn name(self) -> &'static str {
         match self {
             Focus::Claims => "CLAIMS",
             Focus::Entities => "ENTITIES",
-            Focus::Body => "BODY",
+            Focus::Graph => "GRAPH",
             Focus::Queue => "QUEUE",
+            Focus::Body => "BODY",
         }
     }
 }
@@ -612,11 +673,11 @@ pub struct App {
     held: Option<Held>,
     detail: Option<Detail>,
     note: Option<String>,
-    /// One cursor per panel, indexed by [`Focus::number`] less one. The body's
+    /// One cursor per screen, indexed by [`Focus::slot`]. The body's
     /// slot carries only its `at`: the window over a document is `offset`, and
     /// what the cursor is for there is the row of the field block Enter opens
     /// (TASK-082301b40a27).
-    cursors: [Cursor; 4],
+    cursors: [Cursor; 5],
     kind: Option<String>,
     search: Option<String>,
     /// The first line of the body panel on screen.
@@ -774,7 +835,7 @@ impl App {
             detail: None,
             note: None,
             unreadable: false,
-            cursors: [Cursor::default(); 4],
+            cursors: [Cursor::default(); 5],
             kind: None,
             search: None,
             offset: 0,
@@ -853,7 +914,7 @@ impl App {
                 self.note = None;
                 if let Some(id) = held {
                     if let Some(at) = self.entity_rows().iter().position(|r| r.id == id) {
-                        self.cursors[Focus::Entities.number() - 1].at = at;
+                        self.cursors[Focus::Entities.slot()].at = at;
                     }
                 }
                 self.clamp_all();
@@ -1017,10 +1078,11 @@ impl App {
         let rows = match focus {
             Focus::Entities => self.entity_rows(),
             Focus::Queue => self.queue_rows(),
-            Focus::Claims | Focus::Body => Vec::new(),
+            Focus::Claims | Focus::Graph | Focus::Body => Vec::new(),
         };
         let total = match focus {
             Focus::Claims => self.held.as_ref().map_or(0, |h| h.claims.len()),
+            Focus::Graph => 0,
             Focus::Body => self.pane_lines().len(),
             Focus::Entities | Focus::Queue => rows.len(),
         };
@@ -1073,7 +1135,7 @@ impl App {
             Focus::Claims => self.held.as_ref().map_or(0, |h| h.claims.len()),
             Focus::Entities => self.entity_rows().len(),
             Focus::Queue => self.queue_rows().len(),
-            Focus::Body => 0,
+            Focus::Graph | Focus::Body => 0,
         }
     }
 
@@ -1083,11 +1145,13 @@ impl App {
     /// block: a row of it that names a constraint names one, and every other
     /// row of the document names nothing (TASK-082301b40a27).
     fn selected_id(&self, focus: Focus) -> Option<String> {
-        let at = self.cursors[focus.number() - 1].at;
+        let at = self.cursors[focus.slot()].at;
         match focus {
             Focus::Claims => self.held.as_ref()?.claims.get(at).map(|c| c.id.clone()),
             Focus::Entities => self.entity_rows().get(at).map(|r| r.id.clone()),
             Focus::Queue => self.queue_rows().get(at).map(|r| r.id.clone()),
+            // Nothing is drawn on the graph yet, so nothing on it is a row.
+            Focus::Graph => None,
             Focus::Body => self.pane_target(),
         }
     }
@@ -1104,7 +1168,7 @@ impl App {
         }
         let total = self.count(focus);
         let page = self.page(focus);
-        let c = &mut self.cursors[focus.number() - 1];
+        let c = &mut self.cursors[focus.slot()];
         c.at = c.at.min(total.saturating_sub(1));
         if c.at < c.top {
             c.top = c.at;
@@ -1416,7 +1480,7 @@ impl App {
         match self.focus {
             Focus::Body => self.offset = moved(self.offset),
             listing => {
-                let c = &mut self.cursors[listing.number() - 1];
+                let c = &mut self.cursors[listing.slot()];
                 c.top = moved(c.top);
             }
         }
@@ -1434,7 +1498,7 @@ impl App {
     fn paging(&self, focus: Focus, onto: &Listing) -> (usize, usize) {
         let first = match focus {
             Focus::Body => self.offset,
-            listing => self.cursors[listing.number() - 1].top,
+            listing => self.cursors[listing.slot()].top,
         };
         (onto.total, first)
     }
@@ -1589,8 +1653,8 @@ impl App {
         }
         let again = first.is_some_and(|first| {
             first.focus == focus && first.row == row && now.duration_since(first.at) <= SECOND_PRESS
-        }) && row == self.cursors[focus.number() - 1].at;
-        self.cursors[focus.number() - 1].at = row;
+        }) && row == self.cursors[focus.slot()].at;
+        self.cursors[focus.slot()].at = row;
         self.clamp(focus);
         // A pair that opened is spent: coming back out of the document to the
         // row that is still selected finds a screen where one press chooses
@@ -1620,7 +1684,7 @@ impl App {
         // Never past the window the panel is drawing: the rows below a short
         // listing are empty, and the regime line under the queue is a sentence
         // about the panel rather than a row of it.
-        (down < self.page(focus)).then_some(self.cursors[focus.number() - 1].top + down)
+        (down < self.page(focus)).then_some(self.cursors[focus.slot()].top + down)
     }
 
     /// Runs one command. `true` means the session is over.
@@ -1641,13 +1705,13 @@ impl App {
                 // rather than a cursor for the one and a scroll for the other.
                 Focus::Body => {
                     let rows = self.pane_lines().len();
-                    let at = self.cursors[Focus::Body.number() - 1].at;
-                    self.cursors[Focus::Body.number() - 1].at = step(at, by, rows);
+                    let at = self.cursors[Focus::Body.slot()].at;
+                    self.cursors[Focus::Body.slot()].at = step(at, by, rows);
                     self.clamp_body();
                 }
                 listing => {
                     let total = self.count(listing);
-                    let c = &mut self.cursors[listing.number() - 1];
+                    let c = &mut self.cursors[listing.slot()];
                     c.at = step(c.at, by, total);
                     self.clamp(listing);
                 }
@@ -1656,24 +1720,24 @@ impl App {
                 Focus::Body => {
                     let page = self.page(Focus::Body).max(1) as isize;
                     let rows = self.pane_lines().len();
-                    let at = self.cursors[Focus::Body.number() - 1].at;
-                    self.cursors[Focus::Body.number() - 1].at = step(at, by * page, rows);
+                    let at = self.cursors[Focus::Body.slot()].at;
+                    self.cursors[Focus::Body.slot()].at = step(at, by * page, rows);
                     self.clamp_body();
                 }
                 listing => {
                     let page = self.page(listing).max(1) as isize;
                     let total = self.count(listing);
-                    let c = &mut self.cursors[listing.number() - 1];
+                    let c = &mut self.cursors[listing.slot()];
                     c.at = step(c.at, by * page, total);
                     self.clamp(listing);
                 }
             },
             Command::Top => match self.focus {
                 Focus::Body => {
-                    self.cursors[Focus::Body.number() - 1] = Cursor::default();
+                    self.cursors[Focus::Body.slot()] = Cursor::default();
                     self.offset = 0;
                 }
-                listing => self.cursors[listing.number() - 1] = Cursor::default(),
+                listing => self.cursors[listing.slot()] = Cursor::default(),
             },
             Command::Open => self.open_selected(ank),
             Command::Queue => self.focus_on(Focus::Queue, ank),
@@ -1708,13 +1772,13 @@ impl App {
                     }
                 }
                 self.kind = kind;
-                self.cursors[Focus::Entities.number() - 1] = Cursor::default();
-                self.cursors[Focus::Queue.number() - 1] = Cursor::default();
+                self.cursors[Focus::Entities.slot()] = Cursor::default();
+                self.cursors[Focus::Queue.slot()] = Cursor::default();
             }
             Command::Search(text) => {
                 self.search = text;
-                self.cursors[Focus::Entities.number() - 1] = Cursor::default();
-                self.cursors[Focus::Queue.number() - 1] = Cursor::default();
+                self.cursors[Focus::Entities.slot()] = Cursor::default();
+                self.cursors[Focus::Queue.slot()] = Cursor::default();
             }
             Command::Constraints => self.pane_to(Pane::Constraints),
             // The pane, opened, and the keys read once because it was
@@ -1729,7 +1793,7 @@ impl App {
                 // `reconfig`, which runs again every time a person comes back
                 // to the pane and must not move the row they left it on.
                 if self.pane == Pane::Config {
-                    self.cursors[Focus::Body.number() - 1].at = self.first_key_row();
+                    self.cursors[Focus::Body.slot()].at = self.first_key_row();
                     self.clamp_body();
                 }
             }
@@ -1807,7 +1871,7 @@ impl App {
             false => pane,
         };
         self.offset = 0;
-        self.cursors[Focus::Body.number() - 1] = Cursor::default();
+        self.cursors[Focus::Body.slot()] = Cursor::default();
         // The pane that was asked for is the pane to be looking at.
         self.focus = Focus::Body;
     }
@@ -1847,6 +1911,11 @@ impl App {
     /// by a screen nobody is at -- which is sharper than it was, since a screen
     /// nobody is at is now a screen nobody can see.
     fn focus_on(&mut self, focus: Focus, ank: &Ank) {
+        // Right from a listing reaches the document as Enter does, so `Back`
+        // returns to that listing the same way (TASK-a9cd362ee5e2).
+        if focus == Focus::Body && self.focus.holds_rows() {
+            self.from = self.focus;
+        }
         self.focus = focus;
         if focus == Focus::Claims {
             self.rehold(ank);
@@ -2106,28 +2175,35 @@ impl App {
 
     fn show(&mut self, ank: &Ank, id: &str) {
         match Detail::load(ank, id) {
-            Ok(detail) => {
-                let same = self.detail.as_ref().is_some_and(|d| d.id == detail.id);
-                self.detail = Some(detail);
-                if !same {
-                    // A different document is a different set of rows: an
-                    // offset and a cursor kept across the change would be a
-                    // window into a document nobody is looking at any more.
-                    self.offset = 0;
-                    self.cursors[Focus::Body.number() - 1] = Cursor::default();
-                }
-                // The listing this was reached from, so that leaving it gives
-                // that listing back (TASK-252bf02de218). Never the document
-                // itself: `Enter` on a constraint of the field block opens a
-                // second document from inside the first, and the way out of
-                // both is the list the first was opened from.
-                if self.focus.holds_rows() {
-                    self.from = self.focus;
-                }
-                self.focus = Focus::Body;
-            }
+            Ok(detail) => self.opened(detail),
             Err(failed) => self.fail(failed),
         }
+    }
+
+    /// The document `show` answered with, put in front of the person.
+    ///
+    /// Split from [`App::show`] so that the half of opening which needs no CLI
+    /// is a function of its own: the suite hands it a document rather than
+    /// spawning `ank show` for one.
+    fn opened(&mut self, detail: Detail) {
+        let same = self.detail.as_ref().is_some_and(|d| d.id == detail.id);
+        self.detail = Some(detail);
+        if !same {
+            // A different document is a different set of rows: an offset and a
+            // cursor kept across the change would be a window into a document
+            // nobody is looking at any more.
+            self.offset = 0;
+            self.cursors[Focus::Body.slot()] = Cursor::default();
+        }
+        // The listing this was reached from, so that leaving it gives that
+        // listing back (TASK-252bf02de218). Never the document itself: `Enter`
+        // on a constraint of the field block opens a second document from
+        // inside the first, and the way out of both is the list the first was
+        // opened from.
+        if self.focus.holds_rows() {
+            self.from = self.focus;
+        }
+        self.focus = Focus::Body;
     }
 
     // -----------------------------------------------------------------------
@@ -2199,9 +2275,12 @@ impl App {
     /// The region, divided between the panels (TASK-cae5c8ec9a69,
     /// ADR-ac6be1ebe9aa).
     ///
-    /// Indexed by [`Focus::number`] less one. On a wide frame the listings are
-    /// a column on the left -- the claims, the entities, the queue, top to
-    /// bottom -- and the detail takes what is left of the width. The column is
+    /// Indexed by [`Focus::slot`]. On a wide frame the listings are a column
+    /// on the left -- the claims, the entities, the queue, top to bottom -- and
+    /// the right panel takes what is left of the width. The graph and the
+    /// document are handed that one rectangle between them, because they are
+    /// never drawn at once: the graph stands there at rest and the document
+    /// takes its place while one is open ([`App::beside`], TASK-a9cd362ee5e2). The column is
     /// two fifths of the window and never narrower than [`COLUMN`]; the claims
     /// and the queue take a quarter of its height each and never fewer than
     /// [`REGION`] rows, and the entities take the rest, because they are the
@@ -2209,9 +2288,9 @@ impl App {
     ///
     /// Under [`DASHBOARD`] every panel is the whole region, which is where
     /// whichever of them has been asked for is drawn.
-    fn divide(&self, whole: Rect) -> [Rect; 4] {
+    fn divide(&self, whole: Rect) -> [Rect; 5] {
         if !self.wide() {
-            return [whole; 4];
+            return [whole; 5];
         }
         let left = (whole.width * 2 / 5).max(COLUMN).min(whole.width);
         let right = Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
@@ -2222,11 +2301,12 @@ impl App {
         let claims_rect = Rect::new(whole.x, whole.y, left, claims);
         let entities_rect = Rect::new(whole.x, whole.y + claims, left, entities);
         let queue_rect = Rect::new(whole.x, whole.y + claims + entities, left, queue);
-        let mut rects = [Rect::default(); 4];
-        rects[Focus::Claims.number() - 1] = claims_rect;
-        rects[Focus::Entities.number() - 1] = entities_rect;
-        rects[Focus::Body.number() - 1] = right;
-        rects[Focus::Queue.number() - 1] = queue_rect;
+        let mut rects = [Rect::default(); 5];
+        rects[Focus::Claims.slot()] = claims_rect;
+        rects[Focus::Entities.slot()] = entities_rect;
+        rects[Focus::Graph.slot()] = right;
+        rects[Focus::Body.slot()] = right;
+        rects[Focus::Queue.slot()] = queue_rect;
         rects
     }
 
@@ -2235,7 +2315,7 @@ impl App {
     /// against it.
     #[cfg(test)]
     fn region(&self, area: Rect) -> Rect {
-        self.arrange(area).rects[self.focus.number() - 1]
+        self.arrange(area).rects[self.focus.slot()]
     }
 
     /// The rectangle `focus` is drawn in (TASK-cae5c8ec9a69).
@@ -2245,7 +2325,7 @@ impl App {
     /// asked for is drawn there: a page measured off an empty rectangle would
     /// be a page of one row the moment the panel was reached.
     fn rect_of(&self, focus: Focus) -> Rect {
-        self.arrange(self.area()).rects[focus.number() - 1]
+        self.arrange(self.area()).rects[focus.slot()]
     }
 
     /// The panel a position falls in, on a wide frame.
@@ -2254,9 +2334,30 @@ impl App {
             return None;
         }
         let panels = self.arrange(self.area());
-        Focus::ALL
+        self.drawn()
             .into_iter()
-            .find(|f| panels.rects[f.number() - 1].contains(at))
+            .find(|f| panels.rects[f.slot()].contains(at))
+    }
+
+    /// What the right panel of a wide frame is showing (TASK-a9cd362ee5e2).
+    ///
+    /// **The document while the person is in it, and the graph otherwise.** A
+    /// row opened puts its document there; `Back` -- or any other way off the
+    /// document, a digit, `Tab`, a press on the column of listings -- gives the
+    /// panel back to the graph. The document is kept either way, as it is
+    /// under the dashboard's width: nothing is re-read on the way out, and Right
+    /// brings the same document back.
+    fn beside(&self) -> Focus {
+        match self.focus {
+            Focus::Body => Focus::Body,
+            _ => Focus::Graph,
+        }
+    }
+
+    /// The four panels a wide frame draws: the column of listings, and
+    /// whichever of the graph and the document is beside it.
+    fn drawn(&self) -> [Focus; 4] {
+        [Focus::Claims, Focus::Entities, Focus::Queue, self.beside()]
     }
 
     /// Whether this window is wide enough to draw the dashboard
@@ -2374,17 +2475,13 @@ impl App {
         // asked for (TASK-252bf02de218). The other three are not drawn closed,
         // squeezed or greyed: they are not on this frame at all, and the digit
         // that names one is how a person gets to it.
-        // Every panel on a wide frame, each in its own rectangle
+        // The four panels of a wide frame, each in its own rectangle, the right
+        // one the graph or the open document ([`App::beside`])
         // (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa); under [`DASHBOARD`] the one
         // that has been asked for, in the whole region, as it always was.
         if self.wide() {
-            for focus in Focus::ALL {
-                self.panel(
-                    focus,
-                    &self.listing(focus),
-                    panels.rects[focus.number() - 1],
-                    buf,
-                );
+            for focus in self.drawn() {
+                self.panel(focus, &self.listing(focus), panels.rects[focus.slot()], buf);
             }
         } else {
             self.panel(self.focus, &self.listing(self.focus), panels.region, buf);
@@ -2414,7 +2511,8 @@ impl App {
     /// they say it to nobody. What is left is what a person actually needs from
     /// a title -- the digit that reaches this screen and the name of it -- and
     /// the digit is the whole of what "reachable by the key it already had"
-    /// costs a reader to learn.
+    /// costs a reader to learn. The document carries its name alone, because no
+    /// digit reaches it: it is opened from a row (TASK-a9cd362ee5e2).
     ///
     /// The cursor keeps its `> `, on the row of the listing where it always
     /// was. That is the marker the criterion is about: where a person is
@@ -2435,7 +2533,10 @@ impl App {
             (false, _) => "",
         };
         let title = Composed::new()
-            .plain(&format!("{mark}{} ", focus.number()))
+            .plain(&match focus.number() {
+                Some(n) => format!("{mark}{n} "),
+                None => mark.to_string(),
+            })
             .then(self.title_of(focus, onto, width))
             .fitted(area.width as usize - 2);
         let block = Block::bordered()
@@ -2449,6 +2550,7 @@ impl App {
             Focus::Claims => self.claim_lines(width),
             Focus::Entities => self.entity_lines(onto, width, inside.height as usize),
             Focus::Queue => self.queue_lines(onto, width),
+            Focus::Graph => graph_lines(width),
             Focus::Body => self.body_lines(width, inside.height as usize),
         };
         painted(&lines, self.ink).render(inside, buf);
@@ -2540,7 +2642,7 @@ impl App {
             Focus::Entities => {
                 let total = self.snapshot.as_ref().map_or(0, |s| s.total);
                 let rows = onto.total;
-                let c = self.cursors[Focus::Entities.number() - 1];
+                let c = self.cursors[Focus::Entities.slot()];
                 let shown = self.page(Focus::Entities).min(rows.saturating_sub(c.top));
                 Composed::of(&format!(
                     "{name} {}{}   ({total} in the corpus)",
@@ -2552,7 +2654,7 @@ impl App {
                 None => Composed::of(&format!("{name}   ({})", self.unasked())),
                 Some(_) => {
                     let rows = onto.total;
-                    let c = self.cursors[Focus::Queue.number() - 1];
+                    let c = self.cursors[Focus::Queue.slot()];
                     let shown = self.page(Focus::Queue).min(rows.saturating_sub(c.top));
                     Composed::of(&format!(
                         "{name} {}{}   (waiting for a person)",
@@ -2561,6 +2663,7 @@ impl App {
                     ))
                 }
             },
+            Focus::Graph => Composed::of(name),
             Focus::Body => {
                 // Before the document, because this pane names none
                 // (TASK-b08d090f699c). `CONFIG` and not `BODY`, for the reason
@@ -2653,7 +2756,7 @@ impl App {
         if held.claims.is_empty() {
             return vec![Composed::of("  nothing is held").fitted(width)];
         }
-        let c = self.cursors[Focus::Claims.number() - 1];
+        let c = self.cursors[Focus::Claims.slot()];
         let page = self.page(Focus::Claims);
         held.claims
             .iter()
@@ -2703,7 +2806,7 @@ impl App {
         if rows.is_empty() {
             return vec![Composed::of("  no entity matches this filter").fitted(width)];
         }
-        let c = self.cursors[Focus::Entities.number() - 1];
+        let c = self.cursors[Focus::Entities.slot()];
         // The marker on a row somebody holds, and it is drawn only once the
         // claims have been asked for (TASK-fff0a98511b2): an unmarked row means
         // "not asked" here as much as it means "not held", and the panel one
@@ -2773,7 +2876,7 @@ impl App {
             };
             vec![Composed::of(said).fitted(width)]
         } else {
-            let c = self.cursors[Focus::Queue.number() - 1];
+            let c = self.cursors[Focus::Queue.slot()];
             let page = self.page(Focus::Queue);
             rows.iter()
                 .enumerate()
@@ -2876,7 +2979,7 @@ impl App {
             // The list whole, and the same rows: `s` is the block's constraints
             // with the document taken away, not a second rendering of them.
             Pane::Constraints => {
-                let at = self.cursors[Focus::Body.number() - 1].at;
+                let at = self.cursors[Focus::Body.slot()].at;
                 detail
                     .constraints
                     .iter()
@@ -2936,7 +3039,7 @@ impl App {
             ));
             return out;
         };
-        let at = self.cursors[Focus::Body.number() - 1].at;
+        let at = self.cursors[Focus::Body.slot()].at;
         for setting in &settings.keys {
             let here = self.marker(out.len() == at);
             out.push((
@@ -3082,7 +3185,7 @@ impl App {
                 None,
             ));
         }
-        let at = self.cursors[Focus::Body.number() - 1].at;
+        let at = self.cursors[Focus::Body.slot()].at;
         for c in &detail.constraints {
             let here = self.marker(out.len() == at);
             out.push((constraint_row(c, here, width), Some(c.id.clone())));
@@ -3113,7 +3216,7 @@ impl App {
     /// What the row under the body panel's cursor opens, where it opens
     /// anything.
     fn pane_target(&self) -> Option<String> {
-        let at = self.cursors[Focus::Body.number() - 1].at;
+        let at = self.cursors[Focus::Body.slot()].at;
         self.pane_content(self.body_width())
             .into_iter()
             .nth(at)
@@ -3150,10 +3253,10 @@ impl App {
     fn clamp_body(&mut self) {
         let total = self.pane_lines().len();
         let page = self.page(Focus::Body).max(1);
-        let at = self.cursors[Focus::Body.number() - 1]
+        let at = self.cursors[Focus::Body.slot()]
             .at
             .min(total.saturating_sub(1));
-        self.cursors[Focus::Body.number() - 1].at = at;
+        self.cursors[Focus::Body.slot()].at = at;
         if at < self.offset {
             self.offset = at;
         }
@@ -4089,9 +4192,9 @@ struct Panels {
     /// The area under the header the panels share, whatever is being shown in
     /// it.
     region: Rect,
-    /// Where each panel is drawn, indexed by [`Focus::number`] less one
+    /// Where each panel is drawn, indexed by [`Focus::slot`]
     /// (TASK-cae5c8ec9a69). See [`App::divide`].
-    rects: [Rect; 4],
+    rects: [Rect; 5],
     note: Rect,
     /// The band the offer is drawn in, and the one band on this screen a finger
     /// is aimed at rather than an eye (TASK-dd9747e5e305).
@@ -4108,8 +4211,10 @@ struct Panels {
 /// The corpus line, the identity line, and the rule under them.
 const HEADER: u16 = 3;
 
-/// The anchor the detail panel shows while nothing is open in it
-/// (ADR-ac6be1ebe9aa): ank's logo, the final frame `install.sh` and
+/// The anchor the document's screen shows while nothing is open in it
+/// (ADR-ac6be1ebe9aa) -- which is where Right lands before any row has been
+/// opened, since the right panel at rest is the graph's (TASK-a9cd362ee5e2):
+/// ank's logo, the final frame `install.sh` and
 /// `install.ps1` draw from `assets/ank.svg`, row for row. `#` is a cell of the
 /// logo and is drawn in the set's block (`Glyphs::thumb`), so the terminal that
 /// declares it can render no box glyph draws the installer's own fallback.
@@ -4127,6 +4232,20 @@ const ANCHOR: &[&str] = &[
     "                     ",
     "          ank        ",
 ];
+
+/// What the graph panel holds until the graph is drawn (TASK-a9cd362ee5e2).
+///
+/// One sentence, and never a border around nothing (ADR-559eebf5c6f5): the
+/// panel is on the ring and on the wide frame now, and a later task draws the
+/// `blocked_by` DAG into it.
+///
+/// Public because the suites wait for it rather than restating it.
+pub const GRAPH_UNDRAWN: &str = "the graph has not been drawn yet";
+
+/// The graph panel's lines, until there is a graph to draw.
+fn graph_lines(width: usize) -> Vec<Composed> {
+    vec![Composed::of(&format!("{}{GRAPH_UNDRAWN}", text::PLAIN)).fitted(width)]
+}
 
 /// What the anchor says under it: the one key that puts something in the
 /// panel it is standing in for.
@@ -5297,11 +5416,11 @@ mod tests {
         for focus in Focus::ALL {
             a.focus = focus;
             let f = a.frame();
-            let named = format!("{} {}", focus.number(), focus.name());
+            let named = heading(focus);
             assert!(f.contains(&named), "the region does not name itself:\n{f}");
             for other in Focus::ALL.into_iter().filter(|o| *o != focus) {
                 assert!(
-                    !f.contains(&format!("{} {}", other.number(), other.name())),
+                    !f.contains(&heading(other)),
                     "{other:?} is on the frame as well as {focus:?}:\n{f}"
                 );
             }
@@ -6071,15 +6190,15 @@ mod tests {
         let mut a = app();
         let ank = nowhere();
         assert_eq!(a.focus(), Focus::Entities, "a session opens on the list");
-        for expected in [Focus::Body, Focus::Queue, Focus::Claims, Focus::Entities] {
+        for expected in [Focus::Graph, Focus::Queue, Focus::Claims, Focus::Entities] {
             tap(&mut a, &ank, KeyCode::Tab);
             assert_eq!(a.focus(), expected);
         }
         // And a digit reaches one directly, which is what the number on the
         // region's title is for -- the key each screen already had
         // (TASK-252bf02de218).
-        for focus in Focus::ALL {
-            let digit = char::from_digit(focus.number() as u32, 10).expect("a digit");
+        for focus in Focus::RING {
+            let digit = digit_of(focus);
             tap(&mut a, &ank, KeyCode::Char(digit));
             assert_eq!(a.focus(), focus, "'{digit}' did not reach {focus:?}");
         }
@@ -6087,6 +6206,362 @@ mod tests {
         a.focus = Focus::Claims;
         tap(&mut a, &ank, KeyCode::BackTab);
         assert_eq!(a.focus(), Focus::Queue, "the ring turns both ways");
+    }
+
+    /// What a screen's title says: its digit and its name, or its name alone
+    /// on the document, which carries no digit (TASK-a9cd362ee5e2).
+    fn heading(focus: Focus) -> String {
+        match focus.number() {
+            Some(n) => format!("{n} {}", focus.name()),
+            None => focus.name().to_string(),
+        }
+    }
+
+    /// The key that reaches a screen of the ring, read off the screen.
+    fn digit_of(focus: Focus) -> char {
+        let n = focus
+            .number()
+            .expect("a screen of the ring carries a digit");
+        char::from_digit(n as u32, 10).expect("a digit")
+    }
+
+    // -----------------------------------------------------------------------
+    // Screen 3 is GRAPH (TASK-a9cd362ee5e2)
+    // -----------------------------------------------------------------------
+
+    /// **`3` is the graph, and no digit reaches the document**
+    /// (TASK-a9cd362ee5e2).
+    ///
+    /// Asked of the lookup and of the keyboard both: a lookup that had moved
+    /// and a key table that had not would be the two renderings of one fact
+    /// this crate's table exists to prevent.
+    #[test]
+    fn three_is_the_graph_and_no_digit_reaches_the_document() {
+        assert_eq!(Focus::of_digit('3'), Some(Focus::Graph));
+        assert_eq!(Focus::Graph.number(), Some(3));
+        assert_eq!(Focus::Graph.name(), "GRAPH");
+        assert_eq!(Focus::Body.number(), None, "the document carries a digit");
+        let ank = nowhere();
+        for c in '0'..='9' {
+            assert_ne!(
+                Focus::of_digit(c),
+                Some(Focus::Body),
+                "'{c}' names the document"
+            );
+            // From every screen a digit could be pressed on to arrive
+            // somewhere else: a digit pressed on the document that leaves it
+            // there has reached nothing.
+            for from in Focus::RING {
+                let mut a = app();
+                a.focus = from;
+                tap(&mut a, &ank, KeyCode::Char(c));
+                assert_ne!(
+                    a.focus(),
+                    Focus::Body,
+                    "'{c}' pressed on {from:?} reached the document"
+                );
+            }
+        }
+        let mut a = app();
+        tap(&mut a, &ank, KeyCode::Char('3'));
+        assert_eq!(a.focus(), Focus::Graph, "'3' did not reach the graph");
+    }
+
+    /// **The ring is the claims, the entities, the graph and the queue, both
+    /// ways round, and it never lands on the document** (TASK-a9cd362ee5e2).
+    ///
+    /// From the document too: it stands where the graph stands, so a step off
+    /// it is a step off the graph, and nothing on the ring leads back in.
+    #[test]
+    fn the_ring_walks_claims_entities_graph_queue_and_never_lands_on_the_document() {
+        let ank = nowhere();
+        let mut a = app();
+        a.focus = Focus::Claims;
+        for expected in [Focus::Entities, Focus::Graph, Focus::Queue, Focus::Claims] {
+            tap(&mut a, &ank, KeyCode::Tab);
+            assert_eq!(a.focus(), expected, "Tab");
+        }
+        for expected in [Focus::Queue, Focus::Graph, Focus::Entities, Focus::Claims] {
+            tap(&mut a, &ank, KeyCode::BackTab);
+            assert_eq!(a.focus(), expected, "BackTab");
+        }
+        for (key, lands) in [
+            (KeyCode::Tab, Focus::Queue),
+            (KeyCode::BackTab, Focus::Entities),
+        ] {
+            let mut a = app();
+            a.detail = Some(detail("TASK-49746735127f", "body\n"));
+            a.focus = Focus::Body;
+            tap(&mut a, &ank, key);
+            assert_eq!(a.focus(), lands, "{key:?} off the document");
+        }
+        for from in Focus::ALL {
+            for by in -9..=9 {
+                assert_ne!(
+                    from.stepped(by),
+                    Focus::Body,
+                    "{by} steps from {from:?} landed on the document"
+                );
+            }
+        }
+    }
+
+    /// The sentence the graph holds until it is drawn, as the frame carries it.
+    fn undrawn(f: &str) -> bool {
+        f.contains(GRAPH_UNDRAWN)
+    }
+
+    /// **Under the dashboard's width `3` puts the graph in the region, and what
+    /// the graph holds is one sentence saying it has not been drawn yet**
+    /// (TASK-a9cd362ee5e2).
+    ///
+    /// At the phone's width and at the widest one region is drawn at, because
+    /// a sentence that fitted one and was cut at the other would be a sentence
+    /// a person reads half of.
+    #[test]
+    fn three_puts_the_graph_in_the_region_holding_one_sentence() {
+        let ank = nowhere();
+        for width in [PHONE.0 as u16, DASHBOARD - 1] {
+            let mut a = phone();
+            a.resize(width, 30);
+            tap(&mut a, &ank, KeyCode::Char('3'));
+            let f = a.frame();
+            assert!(f.contains("3 GRAPH"), "'3' drew no graph at {width}:\n{f}");
+            assert!(undrawn(&f), "the graph says nothing at {width}:\n{f}");
+            assert!(
+                !GRAPH_UNDRAWN.trim_end_matches('.').contains(". "),
+                "the graph holds more than one sentence: {GRAPH_UNDRAWN}"
+            );
+            for gone in ["1 CLAIMS", "2 ENTITIES", "4 QUEUE", "BODY"] {
+                assert!(!f.contains(gone), "{gone} is drawn beside it:\n{f}");
+            }
+            // Not a border around nothing: the row under the title is the
+            // sentence.
+            let rows: Vec<&str> = f.split('\n').collect();
+            let inside = inside(a.region(a.area()));
+            assert!(
+                rows[inside.y as usize].contains(GRAPH_UNDRAWN),
+                "the region's first row is not the sentence at {width}:\n{f}"
+            );
+        }
+    }
+
+    /// **The document's title is `BODY` with no digit in front of it, and the
+    /// two panes keep the headings they had** (TASK-a9cd362ee5e2).
+    ///
+    /// Asked of the character the title starts on: on one region it is drawn
+    /// straight after the corner, so what follows the corner is the heading
+    /// and nothing before it can be a digit.
+    #[test]
+    fn the_document_is_titled_without_a_digit() {
+        let corner = SCREEN.border(true).top_left;
+        for (pane, heading) in [
+            (Pane::Body, "BODY   "),
+            (Pane::Constraints, "CONSTRAINTS   "),
+            (Pane::Config, "CONFIG   "),
+        ] {
+            let mut a = app();
+            a.detail = Some(detail("TASK-49746735127f", "body\n"));
+            a.focus = Focus::Body;
+            a.pane = pane;
+            let f = a.frame();
+            assert!(
+                f.contains(&format!("{corner}{heading}")),
+                "the {pane:?} pane is not titled {heading:?} at the corner:\n{f}"
+            );
+            for n in 0..=9 {
+                assert!(
+                    !f.contains(&format!("{n} {}", heading.trim_end())),
+                    "a digit stands in front of {heading:?}:\n{f}"
+                );
+            }
+        }
+    }
+
+    /// **Enter or Right on a row of any listing reaches the document, and
+    /// `Back` returns to the listing it came from with the same row selected**
+    /// (TASK-a9cd362ee5e2, TASK-252bf02de218).
+    ///
+    /// Enter is [`App::opened`] here, which is the half of opening that does
+    /// not need a CLI to answer: `show` is a spawn, and `nowhere()` refuses
+    /// it. The road from the key through `ank show` is `tests/graph.rs`, on a
+    /// pseudo-terminal.
+    #[test]
+    fn the_document_is_reached_from_a_row_and_back_returns_to_that_listing() {
+        let ank = nowhere();
+        for listing in [Focus::Claims, Focus::Entities, Focus::Queue] {
+            let mut a = app();
+            a.queue = Some(queued());
+            a.focus = listing;
+            tap(&mut a, &ank, KeyCode::Char('j'));
+            let row = a.cursors[listing.slot()].at;
+            let id = a.selected_id(listing).expect("a row under the cursor");
+            a.opened(detail(&id, "body\n"));
+            assert_eq!(a.focus(), Focus::Body, "Enter on {listing:?}");
+            tap(&mut a, &ank, KeyCode::Char('b'));
+            assert_eq!(a.focus(), listing, "Back off a row of {listing:?}");
+            assert_eq!(
+                a.cursors[listing.slot()].at,
+                row,
+                "{listing:?} lost its row"
+            );
+
+            // And Right reaches the document screen from the same row, and
+            // Back gives the listing back the same way -- on a session that
+            // has opened nothing yet, so that what Back returns to is what
+            // Right left and not what an earlier Enter remembered.
+            let mut a = app();
+            a.queue = Some(queued());
+            a.focus = listing;
+            tap(&mut a, &ank, KeyCode::Char('j'));
+            tap(&mut a, &ank, KeyCode::Right);
+            assert_eq!(a.focus(), Focus::Body, "Right on {listing:?}");
+            tap(&mut a, &ank, KeyCode::Char('b'));
+            assert_eq!(a.focus(), listing, "Back after Right on {listing:?}");
+            assert_eq!(
+                a.cursors[listing.slot()].at,
+                row,
+                "{listing:?} lost its row"
+            );
+        }
+    }
+
+    /// The dashboard's window, the one the criterion names.
+    fn dashboard() -> App {
+        let mut a = App::new((160, 45), None)
+            .inked(paint::PLAIN)
+            .drawn_with(SCREEN);
+        has_read(&mut a);
+        a.queue = Some(queued());
+        a
+    }
+
+    /// How many rows of a frame carry the cursor against a panel's left
+    /// border, and the columns they carry it at.
+    fn cursors_on(f: &str) -> Vec<usize> {
+        let borders = [SCREEN.border(true), SCREEN.border(false)].map(|b| b.vertical_left);
+        f.lines()
+            .flat_map(|l| {
+                let chars: Vec<char> = l.chars().collect();
+                (1..chars.len())
+                    .filter(|&i| {
+                        chars[i] == '>' && borders.iter().any(|b| b.starts_with(chars[i - 1]))
+                    })
+                    .collect::<Vec<usize>>()
+            })
+            .collect()
+    }
+
+    /// The column a title starts at on a frame, on whichever row carries it.
+    fn column_of(f: &str, title: &str) -> Option<usize> {
+        f.lines()
+            .find_map(|l| l.find(title).map(|at| l[..at].chars().count()))
+    }
+
+    /// **At the dashboard's width the right panel is `3 GRAPH` at rest, `BODY`
+    /// once a row has been opened, and `GRAPH` again after `Back`; the three
+    /// listings stay in the left column throughout, and the cursor is never
+    /// in two panels** (TASK-a9cd362ee5e2).
+    #[test]
+    fn the_right_panel_is_the_graph_at_rest_and_the_document_once_a_row_is_opened() {
+        let ank = nowhere();
+        let mut a = dashboard();
+        let left = a.arrange(a.area()).rects[Focus::Claims.slot()].width as usize;
+        let in_left_column = |f: &str| {
+            for title in ["1 CLAIMS", "2 ENTITIES", "4 QUEUE"] {
+                let at = column_of(f, title).unwrap_or_else(|| panic!("no {title}:\n{f}"));
+                assert!(at < left, "{title} left the left column:\n{f}");
+            }
+        };
+
+        let rest = a.frame();
+        let graph = column_of(&rest, "3 GRAPH").unwrap_or_else(|| panic!("no graph:\n{rest}"));
+        assert!(graph >= left, "the graph is not the right panel:\n{rest}");
+        assert!(undrawn(&rest), "the graph panel says nothing:\n{rest}");
+        assert!(
+            !rest.contains("BODY"),
+            "a document is drawn at rest:\n{rest}"
+        );
+        in_left_column(&rest);
+        assert_eq!(cursors_on(&rest).len(), 1, "one cursor at rest:\n{rest}");
+
+        tap(&mut a, &ank, KeyCode::Char('j'));
+        let row = a.cursors[Focus::Entities.slot()].at;
+        let id = a.selected_id(Focus::Entities).expect("a row");
+        a.opened(detail(&id, "body\n"));
+        let open = a.frame();
+        let body = column_of(&open, "BODY   ").unwrap_or_else(|| panic!("no body:\n{open}"));
+        assert!(
+            body >= left,
+            "the document is not in the right panel:\n{open}"
+        );
+        assert!(
+            !open.contains("3 GRAPH"),
+            "the graph survived the opening:\n{open}"
+        );
+        assert!(
+            !open.contains("3 BODY"),
+            "the document carries a digit:\n{open}"
+        );
+        in_left_column(&open);
+        let marked = cursors_on(&open);
+        assert!(marked.len() <= 1, "the cursor is in two panels:\n{open}");
+        assert!(
+            marked.iter().all(|at| *at >= left),
+            "a listing kept its cursor beside the open document:\n{open}"
+        );
+
+        tap(&mut a, &ank, KeyCode::Char('b'));
+        let back = a.frame();
+        assert_eq!(a.focus(), Focus::Entities);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, row, "the row moved");
+        let graph = column_of(&back, "3 GRAPH").unwrap_or_else(|| panic!("no graph:\n{back}"));
+        assert!(graph >= left, "Back did not give the graph back:\n{back}");
+        assert!(
+            !back.contains("BODY   "),
+            "the document is still drawn:\n{back}"
+        );
+        in_left_column(&back);
+        assert_eq!(cursors_on(&back).len(), 1, "one cursor after Back:\n{back}");
+
+        // And on every screen there is, never two panels with a cursor.
+        for focus in Focus::ALL {
+            let mut a = dashboard();
+            a.detail = Some(detail("TASK-49746735127f", "body\n"));
+            a.focus = focus;
+            let f = a.frame();
+            in_left_column(&f);
+            assert!(cursors_on(&f).len() <= 1, "two cursors on {focus:?}:\n{f}");
+            let right = match focus {
+                Focus::Body => "BODY   ",
+                _ => "3 GRAPH",
+            };
+            assert!(
+                column_of(&f, right).is_some_and(|at| at >= left),
+                "the right panel is not {right:?} on {focus:?}:\n{f}"
+            );
+        }
+    }
+
+    /// **`3` is worded `graph`, and the key list `?` opens prints it**
+    /// (TASK-a9cd362ee5e2).
+    #[test]
+    fn the_key_list_names_three_the_graph() {
+        let binding = bindings::of_key(KeyCode::Char('3')).expect("'3' is bound");
+        assert_eq!(binding.word, "graph");
+        let ank = nowhere();
+        let mut a = app();
+        a.resize(DASHBOARD - 1, 80);
+        tap(&mut a, &ank, KeyCode::Char('?'));
+        let f = a.frame();
+        assert!(
+            f.contains("3 graph"),
+            "the key list does not print '3 graph':\n{f}"
+        );
+        assert!(
+            !f.contains("3 body"),
+            "the key list still prints '3 body':\n{f}"
+        );
     }
 
     /// Every screen gets the whole window, and which one is in the region
@@ -6122,17 +6597,17 @@ mod tests {
         let ank = nowhere();
         tap(&mut a, &ank, KeyCode::Char('j'));
         tap(&mut a, &ank, KeyCode::Char('j'));
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 2);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 2);
         tap(&mut a, &ank, KeyCode::Char('1'));
         tap(&mut a, &ank, KeyCode::Char('j'));
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             2,
             "moving in the claims moved the entities cursor"
         );
         tap(&mut a, &ank, KeyCode::Char('2'));
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             2,
             "coming back lost the row that was under the cursor"
         );
@@ -6278,7 +6753,10 @@ mod tests {
             Some(1),
             "leaving the panel charged the pane"
         );
-        tap(&mut a, &ank, KeyCode::Char('3'));
+        // Right and not `3`, which is the graph's now: the document's screen
+        // carries no digit (TASK-a9cd362ee5e2).
+        tap(&mut a, &ank, KeyCode::Right);
+        assert_eq!(a.focus(), Focus::Body);
         assert_eq!(
             a.config.as_ref().map(|s| s.keys.len()),
             Some(ank_contract::verbs::CONFIG_KEYS.len()),
@@ -6861,7 +7339,7 @@ mod tests {
 
         a.act(Command::Top, &ank);
         assert_eq!(a.offset, 0);
-        assert_eq!(a.cursors[Focus::Body.number() - 1].at, 0);
+        assert_eq!(a.cursors[Focus::Body.slot()].at, 0);
     }
 
     /// A body line wider than the panel keeps its end, at both stated widths.
@@ -6989,7 +7467,15 @@ mod tests {
         a.act(Command::Constraints, &nowhere());
         assert_eq!(a.pane_lines().len(), 30);
         assert_eq!(a.focus(), Focus::Body, "the pane asked for is the pane in");
-        assert!(a.frame().contains("3 CONSTRAINTS"), "{}", a.frame());
+        // Titled with no digit in front, as the document is
+        // (TASK-a9cd362ee5e2): the pane is drawn on the document's screen and
+        // no digit reaches that screen.
+        let corner = SCREEN.border(true).top_left;
+        assert!(
+            a.frame().contains(&format!("{corner}CONSTRAINTS   ")),
+            "{}",
+            a.frame()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -7143,7 +7629,7 @@ mod tests {
         for _ in 0..at {
             tap(&mut a, &ank, KeyCode::Char('j'));
         }
-        assert_eq!(a.cursors[Focus::Body.number() - 1].at, at);
+        assert_eq!(a.cursors[Focus::Body.slot()].at, at);
         assert_eq!(
             a.pane_target().as_deref(),
             Some("ADR-8bd76e8d7c4e"),
@@ -7239,7 +7725,7 @@ mod tests {
         a.detail = Some(detail("TASK-49746735127f", "body\n"));
         a.focus = Focus::Body;
         // The cursor in the entities is somewhere else entirely.
-        a.cursors[Focus::Entities.number() - 1].at = 0;
+        a.cursors[Focus::Entities.slot()].at = 0;
         let ank = nowhere();
         a.act(
             Command::Act(Act {
@@ -7541,9 +8027,9 @@ mod tests {
         let mut a = app();
         let ank = nowhere();
         tap(&mut a, &ank, KeyCode::Char('j'));
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 1);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 1);
         tap(&mut a, &ank, KeyCode::Char('k'));
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 0);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 0);
         tap(&mut a, &ank, KeyCode::Char('f'));
         assert_eq!(a.kind.as_deref(), Some("adr"));
         assert!(tap(&mut a, &ank, KeyCode::Char('q')), "q ends the session");
@@ -7597,7 +8083,7 @@ mod tests {
         a.focus = Focus::Entities;
         a.kind = None;
         a.search = None;
-        a.cursors = [Cursor::default(); 4];
+        a.cursors = [Cursor::default(); 5];
         a.note = None;
         spell(&mut a, &ank, "claim");
         assert_eq!(a.note, None, "the letter alone spawned a verb");
@@ -7845,7 +8331,7 @@ mod tests {
         for _ in 0..40 {
             tap(&mut a, &ank, KeyCode::Char('j'));
         }
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 40);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 40);
         assert!(
             a.frame().contains("> "),
             "the cursor is on the page it was moved to"
@@ -7857,7 +8343,7 @@ mod tests {
         for line in narrow.lines() {
             assert!(line.chars().count() <= 50, "{line}");
         }
-        let c = a.cursors[Focus::Entities.number() - 1];
+        let c = a.cursors[Focus::Entities.slot()];
         assert!(
             c.at >= c.top && c.at < c.top + a.page(Focus::Entities),
             "the cursor fell off the page a resize made shorter:\n{narrow}"
@@ -7946,16 +8432,16 @@ mod tests {
     fn a_wide_window_draws_every_panel_and_the_digit_moves_the_focus() {
         let ank = nowhere();
         for width in [DASHBOARD, 160, 200] {
-            for arrived in Focus::ALL {
+            for arrived in Focus::RING {
                 let mut a = app();
                 a.resize(width, 40);
-                let digit = char::from_digit(arrived.number() as u32, 10).expect("a digit");
+                let digit = digit_of(arrived);
                 tap(&mut a, &ank, KeyCode::Char(digit));
                 assert_eq!(a.focus(), arrived, "'{digit}' did not reach {arrived:?}");
                 let frame = a.frame();
-                for focus in Focus::ALL {
+                for focus in Focus::RING {
                     assert!(
-                        frame.contains(&format!("{} {}", focus.number(), focus.name())),
+                        frame.contains(&heading(focus)),
                         "{focus:?} is not on a {width} column frame:\n{frame}"
                     );
                 }
@@ -7969,7 +8455,12 @@ mod tests {
                     3,
                     "the three others are drawn at rest at {width}:\n{frame}"
                 );
-                let rects = a.arrange(a.area()).rects;
+                // The four panels drawn: the document shares the graph's
+                // rectangle and is drawn in it only while it is open
+                // (TASK-a9cd362ee5e2).
+                let all = a.arrange(a.area()).rects;
+                let rects = Focus::RING.map(|f| all[f.slot()]);
+                assert_eq!(all[Focus::Body.slot()], all[Focus::Graph.slot()]);
                 for (i, r) in rects.iter().enumerate() {
                     assert!(
                         inside(*r).height >= 1,
@@ -8001,10 +8492,10 @@ mod tests {
     fn a_phone_gets_one_region_and_every_screen_stays_one_digit_away() {
         let ank = nowhere();
         for width in [PHONE.0 as u16, DASHBOARD - 1] {
-            for arrived in Focus::ALL {
+            for arrived in Focus::RING {
                 let mut a = phone();
                 a.resize(width, 30);
-                let digit = char::from_digit(arrived.number() as u32, 10).expect("a digit");
+                let digit = digit_of(arrived);
                 tap(&mut a, &ank, KeyCode::Char(digit));
                 assert_eq!(a.focus(), arrived, "'{digit}' did not reach {arrived:?}");
                 let frame = a.frame();
@@ -8014,7 +8505,7 @@ mod tests {
                     "the frame at {width} columns is not one region:\n{frame}"
                 );
                 assert!(
-                    frame.contains(&format!("{} {}", arrived.number(), arrived.name())),
+                    frame.contains(&heading(arrived)),
                     "the region does not name the screen the digit reached:\n{frame}"
                 );
                 let region = a.region(a.area());
@@ -8042,11 +8533,11 @@ mod tests {
         for size in [PHONE, (120, 40)] {
             let mut a = App::new(size, None).inked(paint::PLAIN);
             has_read(&mut a);
-            assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 0);
+            assert_eq!(a.cursors[Focus::Entities.slot()].at, 0);
             let at = row_of(&a, 2);
             touch(&mut a, &ank, at);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 2,
                 "a press at {size:?} did not select the row under it:\n{}",
                 a.frame()
@@ -8106,7 +8597,7 @@ mod tests {
 
             press_at(&mut a, &ank, at, start);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 2,
                 "the press at {size:?} did not choose the row under it"
             );
@@ -8143,7 +8634,7 @@ mod tests {
         press_at(&mut a, &ank, first, start);
         press_at(&mut a, &ank, elsewhere, start);
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             1,
             "the second press did not choose the row under it"
         );
@@ -8209,7 +8700,7 @@ mod tests {
         let ank = nowhere();
         let mut a = phone();
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             0,
             "a session opens with no row selected, and this test is about the \
              row it opens on"
@@ -8251,7 +8742,7 @@ mod tests {
         tap(&mut a, &ank, KeyCode::Char('j'));
         tap(&mut a, &ank, KeyCode::Char('k'));
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             1,
             "the cursor is not back on the row the press chose"
         );
@@ -8278,7 +8769,7 @@ mod tests {
         let ank = nowhere();
         let mut a = phone();
         a.focus = Focus::Entities;
-        a.cursors[Focus::Entities.number() - 1].at = 1;
+        a.cursors[Focus::Entities.slot()].at = 1;
         let region = a.region(a.area());
         for at in [
             Position::new(region.x, region.y),
@@ -8287,7 +8778,7 @@ mod tests {
         ] {
             touch(&mut a, &ank, at);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 1,
                 "a press at {at:?} moved the cursor"
             );
@@ -8614,7 +9105,7 @@ mod tests {
     fn nothing_moves_under_a_waiting_command_when_the_screen_is_touched() {
         let ank = nowhere();
         let mut a = phone();
-        a.cursors[Focus::Entities.number() - 1].at = 1;
+        a.cursors[Focus::Entities.slot()].at = 1;
         spell(&mut a, &ank, "log");
         let waiting = a.pending.clone().expect("a command is waiting");
         // A touch on a row underneath it: the command is dropped, and nothing
@@ -8623,7 +9114,7 @@ mod tests {
         touch(&mut a, &ank, at);
         assert_eq!(a.pending, None, "the command survived a touch");
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             1,
             "a cursor moved under a command"
         );
@@ -8643,7 +9134,7 @@ mod tests {
             },
             &ank,
         );
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 1);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 1);
         assert!(a.pending.is_some(), "a swipe answered a command");
     }
 
@@ -8761,14 +9252,14 @@ mod tests {
         for window in [(80, 24), (40, 30), (120, 40), (150, 24)] {
             let mut a = crowded();
             a.resize(window.0, window.1);
-            a.cursors[Focus::Entities.number() - 1].at = 2;
+            a.cursors[Focus::Entities.slot()].at = 2;
             let before = a.frame();
             let selected = a.selected_id(Focus::Entities);
             let first = region_rows(&a)[0].clone();
 
             wheel(&mut a, &ank, 3);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 2,
                 "the wheel moved the cursor at {window:?}"
             );
@@ -8784,7 +9275,7 @@ mod tests {
                 a.frame()
             );
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].top,
+                a.cursors[Focus::Entities.slot()].top,
                 3,
                 "three notches are not three rows at {window:?}"
             );
@@ -8822,7 +9313,7 @@ mod tests {
             "a row scrolled off the top is still marked:\n{}",
             a.frame()
         );
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 0);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 0);
         wheel(&mut a, &ank, -5);
         assert!(
             region_rows(&a).iter().any(|l| l.starts_with(text::CURSOR)),
@@ -8843,7 +9334,7 @@ mod tests {
         let mut a = crowded();
         wheel(&mut a, &ank, -4);
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].top,
+            a.cursors[Focus::Entities.slot()].top,
             0,
             "the view scrolled above the first row"
         );
@@ -8851,7 +9342,7 @@ mod tests {
         let total = a.count(Focus::Entities);
         wheel(&mut a, &ank, total as isize + 10);
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].top,
+            a.cursors[Focus::Entities.slot()].top,
             total - page,
             "the view scrolled past the last screenful"
         );
@@ -9020,7 +9511,7 @@ mod tests {
             .collect();
         a.detail = Some(detail("TASK-49746735127f", &body));
         a.focus = Focus::Body;
-        let at = a.cursors[Focus::Body.number() - 1].at;
+        let at = a.cursors[Focus::Body.slot()].at;
         let first = region_rows(&a)[0].clone();
         assert!(
             bar_column(&a).iter().any(|c| c == SCREEN.thumb()),
@@ -9030,7 +9521,7 @@ mod tests {
         wheel(&mut a, &ank, 5);
         assert_eq!(a.offset, 5, "the wheel did not move the document");
         assert_eq!(
-            a.cursors[Focus::Body.number() - 1].at,
+            a.cursors[Focus::Body.slot()].at,
             at,
             "the wheel moved the document's cursor"
         );

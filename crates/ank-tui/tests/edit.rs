@@ -619,10 +619,16 @@ fn a_form_that_names_an_entity_refuses_in_front_of_itself_and_new_still_opens() 
     let mut live = Live::with(&repo, WINDOW.0, WINDOW.1, &editor.env());
     live.until("the session to open", |t| t.contains("2 ENTITIES"));
 
-    // The document's own screen, which names nothing until something is opened
-    // into it.
+    // The graph, which names no entity: nothing on it is a row until it is
+    // drawn. `3` reached the document's screen with nothing opened into it
+    // until TASK-a9cd362ee5e2 gave the digit to the graph, and the question is
+    // the same of both -- a screen with no row under the cursor. Waited for
+    // with the focus marker, because the window is wide and the graph's title
+    // is on the frame from the first one.
     live.send("3");
-    live.until("the document's screen", |t| t.contains("3 BODY"));
+    live.until("the graph's screen", |t| {
+        t.contains(&terminal::focused("3 GRAPH"))
+    });
 
     live.send(&letter("edit"));
     live.until("the reader to refuse an edit of nothing", |t| {
