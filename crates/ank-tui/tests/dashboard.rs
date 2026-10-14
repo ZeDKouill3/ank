@@ -12,9 +12,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Live, Repo};
+use crate::terminal::{Live, Repo};
 
 /// A window wide enough for the dashboard, and tall enough to hold four
 /// panels with rows in each.

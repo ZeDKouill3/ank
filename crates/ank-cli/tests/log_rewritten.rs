@@ -11,7 +11,7 @@
 //! **Through the binary**, every case. Process counts are read from
 //! `GIT_TRACE` at an absolute path and never from a wall clock (ADR-cc65f1388a71).
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

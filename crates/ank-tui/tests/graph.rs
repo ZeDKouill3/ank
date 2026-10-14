@@ -35,10 +35,7 @@
 #![cfg_attr(not(unix), allow(dead_code))]
 
 #[cfg(unix)]
-mod terminal;
-
-#[cfg(unix)]
-use terminal::{short_of, Graphed, Live, Repo};
+use crate::terminal::{short_of, Graphed, Live, Repo, ONE_AT_A_TIME};
 
 /// The desk, under the dashboard's width: one region.
 const DESK: (u16, u16) = (80, 24);
@@ -66,7 +63,7 @@ fn wide(columns: u16) -> bool {
 #[cfg(unix)]
 fn reached(columns: u16, title: &str) -> String {
     match wide(columns) {
-        true => terminal::focused(title),
+        true => crate::terminal::focused(title),
         false => title.to_string(),
     }
 }
@@ -75,7 +72,7 @@ fn reached(columns: u16, title: &str) -> String {
 #[cfg(unix)]
 fn opened(live: &Live, columns: u16) -> String {
     live.until("the session to open", |t| {
-        t.contains(&reached(columns, "2 ENTITIES")) && !t.contains(terminal::UNREAD)
+        t.contains(&reached(columns, "2 ENTITIES")) && !t.contains(crate::terminal::UNREAD)
     });
     live.frame()
 }
@@ -397,13 +394,16 @@ fn declared_scopes(shown: &str) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&fixture.repo, columns, rows);
         opened(&live, columns);
         let frame = on_graph(&mut live, columns);
         assert!(
-            !frame.contains(terminal::BODY),
+            !frame.contains(crate::terminal::BODY),
             "'3' reached the document at {columns}x{rows}:\n{frame}"
         );
         if !wide(columns) {
@@ -530,6 +530,9 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
 #[cfg(unix)]
 #[test]
 fn the_node_character_says_ready_waiting_or_finished() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     let glyph = |g: ank_tui::graph::Glyph| ank_tui::graph::Alphabet::Boxes.glyph(g);
     for (columns, rows) in WINDOWS {
@@ -567,6 +570,9 @@ fn the_node_character_says_ready_waiting_or_finished() {
 #[cfg(unix)]
 #[test]
 fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut painted = Live::painting(&fixture.repo, columns, rows);
@@ -595,11 +601,14 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
 #[cfg(unix)]
 #[test]
 fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut live = Live::dumb(&fixture.repo, columns, rows);
         live.until("the session to open", |t| {
-            t.contains("2 ENTITIES") && !t.contains(terminal::UNREAD)
+            t.contains("2 ENTITIES") && !t.contains(crate::terminal::UNREAD)
         });
         live.send("3");
         let frame = live.until("the graph to be drawn", |t| {
@@ -648,6 +657,9 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
 #[cfg(unix)]
 #[test]
 fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_graph_again() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     fixture.repo.warm_find();
     for (columns, rows) in WINDOWS {
@@ -763,7 +775,7 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         let before_enter = trace(&trace_path);
         live.send("\r");
         let open = live.until("the document to open", |t| {
-            t.contains(&terminal::body_naming(&row))
+            t.contains(&crate::terminal::body_naming(&row))
         });
         let mut cost = added(&before_enter, &trace(&trace_path));
         let mut hand = trace(&by_hand);
@@ -786,7 +798,7 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         let before_back = trace(&trace_path);
         live.send("b");
         let back = live.until("the graph to come back", |t| {
-            !t.contains(terminal::BODY)
+            !t.contains(crate::terminal::BODY)
                 && t.contains(&reached(columns, "3 GRAPH"))
                 && under_cursor(t).is_some()
         });
@@ -842,6 +854,9 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
 #[cfg(unix)]
 #[test]
 fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&fixture.repo, columns, rows);
@@ -858,12 +873,12 @@ fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
             under_cursor(t).as_deref() == Some(third.short().as_str())
         });
         assert!(
-            !chosen.contains(terminal::BODY),
+            !chosen.contains(crate::terminal::BODY),
             "one tap opened the row at {columns}x{rows}:\n{chosen}"
         );
         live.tap(left + 4, third.line as u16);
         live.until("the second tap to open the row", |t| {
-            t.contains(&terminal::body_naming(&third.short()))
+            t.contains(&crate::terminal::body_naming(&third.short()))
         });
         live.quit();
     }
@@ -875,6 +890,9 @@ fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
 #[cfg(unix)]
 #[test]
 fn tab_from_the_entities_walks_graph_queue_claims() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&repo, columns, rows);
@@ -885,7 +903,7 @@ fn tab_from_the_entities_walks_graph_queue_claims() {
                 t.contains(&reached(columns, lands))
             });
             assert!(
-                !frame.contains(terminal::BODY),
+                !frame.contains(crate::terminal::BODY),
                 "Tab reached the document at {columns}x{rows}:\n{frame}"
             );
         }
@@ -902,6 +920,9 @@ fn tab_from_the_entities_walks_graph_queue_claims() {
 #[cfg(unix)]
 #[test]
 fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&repo, columns, rows);
@@ -912,11 +933,11 @@ fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
             under_cursor(t).is_some_and(|row| row != top)
         });
         let row = selected(&moved);
-        let short = terminal::short_of(&row);
+        let short = crate::terminal::short_of(&row);
 
         live.send("\r");
         let open = live.until("the document to open", |t| {
-            t.contains(&terminal::body_naming(&short))
+            t.contains(&crate::terminal::body_naming(&short))
         });
         for n in 0..=9 {
             assert!(
@@ -927,7 +948,7 @@ fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
 
         live.send("b");
         let back = live.until("the listing to come back", |t| {
-            !t.contains(terminal::BODY)
+            !t.contains(crate::terminal::BODY)
                 && t.contains(&reached(columns, "2 ENTITIES"))
                 && under_cursor(t).is_some()
         });
@@ -950,6 +971,9 @@ fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
 #[cfg(unix)]
 #[test]
 fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let (columns, rows) = WIDE;
     let mut live = Live::open(&repo, columns, rows);
@@ -965,12 +989,13 @@ fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
         "3 GRAPH is not on the right panel at rest:\n{rest}"
     );
 
-    let short = terminal::short_of(&selected(&rest));
+    let short = crate::terminal::short_of(&selected(&rest));
     live.send("\r");
     let open = live.until("the document to open beside the listings", |t| {
-        t.contains(&terminal::body_naming(&short))
+        t.contains(&crate::terminal::body_naming(&short))
     });
-    let body = column_of(&open, terminal::BODY).unwrap_or_else(|| panic!("no body:\n{open}"));
+    let body =
+        column_of(&open, crate::terminal::BODY).unwrap_or_else(|| panic!("no body:\n{open}"));
     assert!(
         body > quarter,
         "BODY is not on the right panel after Enter:\n{open}"
@@ -991,9 +1016,12 @@ fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
 #[cfg(unix)]
 #[test]
 fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     let doc = fixture.repo.stdout(&["graph", "--json"]);
-    let ids = terminal::ids_of(&doc);
+    let ids = crate::terminal::ids_of(&doc);
     assert_eq!(ids.len(), 10, "{doc}");
     assert_eq!(doc.matches("\"status\":\"open\"").count(), 9, "{doc}");
     assert_eq!(doc.matches("\"status\":\"closed\"").count(), 1, "{doc}");
@@ -1053,7 +1081,7 @@ fn historied() -> (Graphed, String) {
         "The graph folds this row away until the fold is all.",
         "--json",
     ]);
-    let ids = terminal::ids_of(&made);
+    let ids = crate::terminal::ids_of(&made);
     assert_eq!(ids.len(), 1, "one task was written: {made}");
     let history = ids[0].clone();
     repo.ank(&["claim", &history]);
@@ -1144,6 +1172,9 @@ fn settled_on_graph(
 #[cfg(unix)]
 #[test]
 fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let (fixture, history) = historied();
     fixture.repo.warm_find();
     let key = cycle_key();
@@ -1241,6 +1272,9 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
 #[cfg(unix)]
 #[test]
 fn a_search_narrows_the_graph_to_one_task_and_escape_gives_the_fold_back() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let (fixture, history) = historied();
     fixture.repo.warm_find();
     let every = every_task(&fixture, &history);

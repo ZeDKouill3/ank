@@ -11,7 +11,7 @@
 //! Through the binary, over a bare origin reached by `file://`, because the
 //! defect lives in the push and a fixture without a remote never pushes.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -36,9 +36,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{short_of, Live, Repo};
+use crate::terminal::{short_of, Live, Repo};
 
 /// The keys this suite has to know, read out of the reader rather than typed as
 /// letters here: a suite carrying its own copy of either would agree with a

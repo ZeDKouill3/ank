@@ -29,9 +29,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{ids_of, short_of, Live, Repo};
+use crate::terminal::{ids_of, short_of, Live, Repo};
 
 /// The key that answers a confirmation, out of the reader's own table.
 const CONFIRM: char = ank_tui::keys::CONFIRM;

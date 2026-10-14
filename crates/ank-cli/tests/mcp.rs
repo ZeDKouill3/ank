@@ -30,7 +30,7 @@
 //! one `ank --version` prints (TASK-ae64d1c5678d). It is read out of the process
 //! for the same reason everything else here is.
 
-mod scratch;
+use crate::scratch;
 
 use ank_contract::{ExitCode, COMMANDS};
 use std::io::Write;

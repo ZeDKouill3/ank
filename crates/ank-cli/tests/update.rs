@@ -11,8 +11,8 @@
 //! a wall clock (CLAUDE.md): a process that did not start leaves no line, on
 //! every platform, however loaded the runner is.
 
-mod fixture;
-mod scratch;
+use crate::fixture;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -7,7 +7,7 @@
 //! amends; both are refused on a task and a spec; the finding `check` reports
 //! on an amends names this verb as its repair; and `help amend` lists both.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -19,7 +19,7 @@
 //! **Through the binary**: the reader's home is addressed through the
 //! environment, which only a child process can vary.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

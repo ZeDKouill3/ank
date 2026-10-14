@@ -13,8 +13,8 @@
 //! Through the binary, because every clause is about what a verb leaves on
 //! disk and what `check` then reports.
 
-mod index_file;
-mod scratch;
+use crate::index_file;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

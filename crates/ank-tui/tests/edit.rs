@@ -32,20 +32,10 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{short_of, Editor, Live, Repo, ONE_AT_A_TIME};
 use ank_tui::view::{ABOUT, DISMISSED, NOTHING_NAMED};
-use std::sync::Mutex;
-use terminal::{short_of, Editor, Live, Repo};
-
-/// One pseudo-terminal open at a time, in this suite.
-///
-/// `terminal::pty::open` asks `ptsname(3)` for the slave's path and that
-/// function answers out of a static buffer, so two threads opening a session at
-/// once can both attach to one terminal. LOG-3b0bc419c884 records the defect
-/// and where its fix belongs; this is the local answer `tests/verbs.rs` already
-/// takes.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// Wide enough that a composed `ank edit <id> --title ...` fits one row, so an
 /// assertion about an argv is an assertion about a line and not about a reflow.

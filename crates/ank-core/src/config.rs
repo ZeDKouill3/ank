@@ -118,6 +118,36 @@ pub static KEYS: &[ConfigKey] = &[
         "`true` writes the verifier into every task `ank new task` creates",
     ),
     key(
+        "verifiers.<name>.inputs",
+        "list of globs",
+        Absent::None,
+        "the files whose content can change the result, relative to the root; absent, the whole tree; written as one flow sequence, never empty",
+    ),
+    key(
+        "verifiers.<name>.env.image",
+        "string",
+        Absent::None,
+        "the OCI image the verifier is meant to run in, pinned as `<name>@sha256:<digest>`; a tag is refused; ank never runs it",
+    ),
+    key(
+        "verifiers.<name>.env.platform",
+        "string",
+        Absent::None,
+        "`os/arch`, required with `env.image`",
+    ),
+    key(
+        "verifiers.<name>.env.network",
+        "`none` or `open`",
+        Absent::None,
+        "absent, `none` under an image and the host's network without one",
+    ),
+    key(
+        "verifiers.<name>.env.vars.<var>",
+        "string",
+        Absent::None,
+        "a variable with a fixed value; nothing is passed through from the caller",
+    ),
+    key(
         "verifier_jobs",
         "integer",
         Absent::None,

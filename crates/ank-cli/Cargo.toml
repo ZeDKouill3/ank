@@ -22,6 +22,10 @@ rust-version = "1.95"
 license = "Apache-2.0"
 authors = ["Sean Lamet"]
 description = "The Ank CLI: one surface, refusing on state and never on identity."
+# One integration test target, not one per file under tests/: each target links
+# the whole dependency tree, and the files are modules of `tests/main.rs`
+# instead (TASK-22af5b0918a4).
+autotests = false
 
 [[bin]]
 name = "ank"
@@ -131,3 +135,7 @@ hex = "0.4"
 # the binary already, and adding a flag for it fails to resolve rather than
 # being merely redundant.
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

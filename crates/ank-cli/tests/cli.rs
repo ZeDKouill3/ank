@@ -16,9 +16,9 @@
 //! and `ank-cli` has no library target — so there is no unit test that could
 //! spawn the binary even if we wanted one.
 
-mod fixture;
-mod index_file;
-mod scratch;
+use crate::fixture;
+use crate::index_file;
+use crate::scratch;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;

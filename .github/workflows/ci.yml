@@ -44,6 +44,21 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
+    # Incremental compilation serves a tree rebuilt after the next edit, and no
+    # edit follows a CI build: off, it writes nothing into `target`, which is
+    # what the cache carries. Line tables keep a backtrace's file and line and
+    # drop the variable-level debug info nobody reads a test binary with. The
+    # paths are named once, because the restore at the top and the save at the
+    # bottom have to agree on them to the byte.
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      CARGO_CACHE_PATHS: |
+        ~/.cargo/registry/index
+        ~/.cargo/registry/cache
+        ~/.cargo/git/db
+        target
+
     steps:
       # `ank check` walks history: it asks where a dead scope went, and reads a
       # ratification commit to verify a frozen constraint. The default depth-1
@@ -57,18 +72,25 @@ jobs:
       # `actions/cache` and not one of the Rust cache actions, for the reason
       # the next comment gives about toolchains: a first-party action is the
       # same trust as the checkout above, where a third-party one would be a new
-      # dependency in the supply chain for something GitHub already ships. The
-      # key is the lockfile, so a dependency change misses on purpose, and the
-      # restore-key falls back to the last build of this OS rather than to none.
-      - uses: actions/cache@v4
+      # dependency in the supply chain for something GitHub already ships.
+      #
+      # Restored here on every leg and every event, saved at the end of the job
+      # and only on a push to main (TASK-0c23f3551e65). The key ends in the run,
+      # so it never hits exactly: an exact hit skips the save, and keyed on the
+      # lockfile alone `target` stayed frozen at the last Cargo.lock change while
+      # the workspace crates rebuilt on every run. The prefixes find the newest
+      # entry for this OS and lockfile, then for this OS at all. A pull request
+      # reads main's entries and writes none: an entry it wrote was scoped to a
+      # merge ref no other run reads, up to 1.3 GiB each, and pushed main's own
+      # out of the 10 GiB the repository gets.
+      - name: restore the cargo cache
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-test-
+          path: ${{ env.CARGO_CACHE_PATHS }}
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-test-
 
       # The Rust toolchain preinstalled on the runners is enough, rustfmt
       # included. A third-party toolchain action would be one more dependency
@@ -145,6 +167,16 @@ jobs:
       #
       # Exit 8 means findings, and that is a failure here. Signals exit 0.
       - run: cargo run -q --bin ank -- check
+
+      # The other half of the restore at the top, and the only place this job
+      # writes a cache: a push to main, once the suite and `check` have passed,
+      # under the restore's own key, which no earlier run can have taken.
+      - name: save the cargo cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_CACHE_PATHS }}
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # The binary the step above just built, kept for `attest`. That job used
       # to run `cargo run` of its own and spend nine minutes, the most expensive
@@ -411,7 +443,12 @@ jobs:
       # job objects the compiler it runs cannot read. `msrv is tight` below is
       # deliberately left uncached, because its job is to prove that a build
       # FAILS and a restored `target` is the one thing that could make it pass.
-      - uses: actions/cache@v4
+      #
+      # Written from main only, as in `test` and for its reason: an entry a pull
+      # request writes serves no other run and evicts one of main's.
+      - name: restore the cargo cache
+        id: msrv-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry/index
@@ -426,6 +463,19 @@ jobs:
         env:
           DECLARED: ${{ steps.floor.outputs.declared }}
         run: cargo +"$DECLARED" build --workspace --locked
+
+      - name: save the cargo cache
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.msrv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.msrv-cache.outputs.cache-primary-key }}
 
   # The job above proves the declared MSRV is *sufficient*. Nothing proved it
   # was *tight*, and the asymmetry is the one TASK-daf25ab8a9b7 corrected in the

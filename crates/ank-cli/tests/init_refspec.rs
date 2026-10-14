@@ -20,7 +20,7 @@
 //! **Refspecs, not exit codes**: each step asserts on `git config --get-all
 //! remote.origin.fetch`.
 
-mod scratch;
+use crate::scratch;
 
 use std::ffi::OsStr;
 use std::fs;

@@ -6,8 +6,8 @@
 //! by an older build; and what `show` on an ADR and `archive --dry-run` parse
 //! does not grow with the number of accepted ADRs.
 
-mod index_file;
-mod scratch;
+use crate::index_file;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

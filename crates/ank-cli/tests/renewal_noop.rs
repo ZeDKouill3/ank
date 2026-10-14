@@ -14,7 +14,7 @@
 //! wall clock (CLAUDE.md). The one wait here is for a second to turn, which is a
 //! wait on state: nothing is asserted about how long anything took.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

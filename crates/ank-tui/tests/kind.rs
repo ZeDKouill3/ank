@@ -35,12 +35,12 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{Live, Repo};
 use ank_tui::bindings::{self, Runs, BINDINGS};
 use ank_tui::keys::Press;
 use ank_tui::view::{kind_target, row_kinds};
-use terminal::{Live, Repo};
 
 /// The windows this suite opens: a phone in portrait, a terminal at the size
 /// every criterion of this reader has been written for, and a desk.

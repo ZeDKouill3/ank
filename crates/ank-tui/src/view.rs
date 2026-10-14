@@ -5153,12 +5153,29 @@ const KIND: usize = 5;
 
 /// The column a config key is drawn in.
 ///
-/// Wide enough for the longest key §4 declares -- `verifiers.<name>.timeout` is
-/// twenty-four -- so no key is cut. A key that was cut would be a key nobody
-/// could type back at the shell, which is the whole of what this pane is for,
-/// and it is why [`setting_row`] is the one row outside a listing that marks a
-/// field [`Field::never_dropped`] without that field being an identifier.
-const CONFIG_KEY: usize = 25;
+/// Wide enough for the longest key §4 declares, so no key is cut. A key that
+/// was cut would be a key nobody could type back at the shell, which is the
+/// whole of what this pane is for, and it is why [`setting_row`] is the one row
+/// outside a listing that marks a field [`Field::never_dropped`] without that
+/// field being an identifier.
+///
+/// Measured off the contract's table rather than written down: it was a
+/// literal sized for `verifiers.<name>.timeout`, and the first longer key,
+/// `verifiers.<name>.env.vars.<var>`, came out cut on every row.
+const CONFIG_KEY: usize = longest_config_key() + 1;
+
+const fn longest_config_key() -> usize {
+    let keys = ank_contract::verbs::CONFIG_KEYS;
+    let mut longest = 0;
+    let mut i = 0;
+    while i < keys.len() {
+        if keys[i].len() > longest {
+            longest = keys[i].len();
+        }
+        i += 1;
+    }
+    longest
+}
 
 /// The column a config value is drawn in.
 ///
@@ -6315,6 +6332,25 @@ mod tests {
         assert_eq!(compose(text::CURSOR, four_fields(), 6).text(), "> TAS~");
     }
 
+    /// Every key the contract declares is drawn whole in the config pane, the
+    /// longest included: a key cut with `~` is one nobody can type back.
+    #[test]
+    fn every_declared_config_key_is_drawn_whole() {
+        for key in ank_contract::verbs::CONFIG_KEYS {
+            let setting = Setting {
+                key,
+                value: Some("x".to_string()),
+                source: "file".to_string(),
+                refused: None,
+            };
+            let row = setting_row(&setting, text::PLAIN, 120).text().to_string();
+            assert!(
+                row.split_whitespace().any(|word| word == *key),
+                "{key} was cut: {row:?}"
+            );
+        }
+    }
+
     /// The last field of a row is elastic, and a kept one at the end is not
     /// (TASK-d58efe37eb7b).
     ///
@@ -6328,9 +6364,12 @@ mod tests {
     /// not.
     #[test]
     fn the_field_at_the_end_of_a_row_shrinks_and_a_kept_one_never_does() {
+        // A column of its own, one wider than the key it holds: what this
+        // measures is how a row gives up room, and the widths below would
+        // otherwise move with every key the contract adds.
         let fields = || {
             vec![
-                Field::plain("verifiers.<name>.timeout", CONFIG_KEY).never_dropped(),
+                Field::plain("verifiers.<name>.timeout", 25).never_dropped(),
                 Field::plain("30s", SET_TO),
                 Field::rest("file"),
             ]

@@ -24,16 +24,10 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{ids_of, short_of, Live, Repo, ONE_AT_A_TIME};
 use ank_tui::view::SEARCH;
-use std::sync::Mutex;
-use terminal::{ids_of, short_of, Live, Repo};
-
-/// One pseudo-terminal open at a time, for `tests/bindings.rs`'s reason:
-/// `ptsname(3)` answers out of a static buffer, and two sessions opened at once
-/// can be handed the same path.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// Wide enough that the title's arithmetic and the needle both fit whole. What
 /// `fit` does to a line too narrow for it is a real behaviour and another

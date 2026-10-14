@@ -60,8 +60,8 @@
 //! against a real one.
 
 #[cfg(unix)]
-mod fixture;
-mod scratch;
+use crate::fixture;
+use crate::scratch;
 
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};

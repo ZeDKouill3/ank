@@ -12,6 +12,10 @@ rust-version = "1.95"
 license = "Apache-2.0"
 authors = ["Sean Lamet"]
 description = "The Ank terminal reader: it draws what the CLI prints, and reaches the corpus only by running it."
+# One integration test target, not one per file under tests/: each target links
+# the whole dependency tree, and the files are modules of `tests/main.rs`
+# instead (TASK-22af5b0918a4).
+autotests = false
 
 # **The dependency list is the constraint made mechanical** (ADR-8bd76e8d7c4e,
 # ADR-559eebf5c6f5). `ank-core` is absent and must stay absent, and so is every
@@ -78,3 +82,7 @@ ratatui = { version = "0.30", default-features = false, features = ["std", "cros
 # and the feature is what keeps that sentence true. It costs `indexmap` and its
 # two, all three of which this workspace's lockfile already carries.
 serde_json = { version = "1", features = ["preserve_order"] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

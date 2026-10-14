@@ -30,8 +30,8 @@
 //! being trusted -- the moment a warm listing and a cold one differ, the daemon
 //! has become a source of truth nobody voted for.
 
-mod index_file;
-mod scratch;
+use crate::index_file;
+use crate::scratch;
 use ank_contract::events;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

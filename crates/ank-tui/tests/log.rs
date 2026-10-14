@@ -38,11 +38,11 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{Live, Repo};
 use ank_tui::bindings::{self, Runs, BINDINGS};
 use ank_tui::keys::Press;
-use terminal::{Live, Repo};
 
 /// Wide enough that a row is not cut before it is read, and tall enough that
 /// the whole of a short document -- field block, prose and the entries under it

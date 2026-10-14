@@ -29,9 +29,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Live, Repo};
+use crate::terminal::{Live, Repo};
 
 /// The border set an ordinary terminal is drawn with, read out of the reader
 /// rather than written here (ADR-559eebf5c6f5).

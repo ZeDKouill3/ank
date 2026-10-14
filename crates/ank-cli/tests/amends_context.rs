@@ -10,7 +10,7 @@
 //! constraints served under a claim, `--json` in both modes, a proposed
 //! amendment that marks nothing, and a budget that pays for the mark.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

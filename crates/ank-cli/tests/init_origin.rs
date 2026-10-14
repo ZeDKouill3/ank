@@ -25,7 +25,7 @@
 //! other half is what `remote.origin.fetch` carries afterwards, and whether a
 //! plain `git fetch origin` then brings both a branch and an ank ref.
 
-mod scratch;
+use crate::scratch;
 
 use std::ffi::OsStr;
 use std::fs;

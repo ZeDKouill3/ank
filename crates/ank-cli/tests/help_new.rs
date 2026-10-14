@@ -11,7 +11,7 @@
 //! (ADR-2b62b9a1fe67). The few literals below are the floor that keeps the
 //! replay from being vacuous: a help stating nothing would replay green.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};
