@@ -511,6 +511,12 @@ pub fn session(
             app.reload_rest(ank);
             continue;
         }
+        // A resize onto the wide frame with no graph held owes it one read,
+        // as the opening does (TASK-afcd4f0f56ad): the frame above said it is
+        // reading, and this is what makes that true.
+        if app.read_asked(ank) {
+            continue;
+        }
         // Exhausted means every sender is gone, which is the same end of input
         // by another road.
         let Some(wake) = wakes.next() else {

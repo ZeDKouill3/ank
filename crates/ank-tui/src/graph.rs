@@ -324,43 +324,84 @@ fn row(
 /// The rows' order: every node above the nodes it is blocked by, and the
 /// input order wherever the edges leave it free.
 ///
-/// Where every node left still waits on a dependent, the walk is inside a
-/// cycle, and it is broken at the earliest node in the input that no node
-/// *outside its own cycle* still waits on. Picking merely the earliest node
-/// left would be wrong: it can be a node on no cycle at all, sitting below
-/// one, and drawing it then puts it above its own dependents.
+/// **The walk waits on components, not on nodes** (TASK-afcd4f0f56ad). A
+/// cycle is one strongly connected component, and a node on it is reached by
+/// whatever reaches any other node of it, so a component is *open* -- its
+/// nodes may be drawn at all -- only once every other component with an edge
+/// into it has been drawn whole. Inside an open component a node is free once
+/// its dependents in that component are drawn; where none is free the walk is
+/// inside a cycle, and it is broken at the earliest node in the input of an
+/// open component. Picking merely the earliest node left would be wrong: it
+/// can be a node on no cycle at all, sitting below one, and drawing it then
+/// puts it above its own dependents.
+///
+/// Waiting per node was wrong twice over. Breaking at a node nothing outside
+/// its cycle waits on *directly*, and freeing a node once its own direct
+/// dependents are drawn, both let a node through while another node of its
+/// dependent's cycle still reached it: with 0 and 1 a cycle, 2 and 3 another,
+/// and 2 blocked by 0, 1 was drawn above 2, which reaches it through 0. With
+/// no cycle every component is one node, drawing it finishes it, and the walk
+/// is the plain topological one in input order.
 fn order(blockers: &[Vec<usize>]) -> Vec<usize> {
     let n = blockers.len();
     let cycle = components(blockers);
-    let mut pending = vec![0usize; n];
-    let mut outside = vec![0usize; n];
+    // Indexed by component, which numbers at most one per node: its nodes,
+    // and how many of them are not drawn yet.
+    let mut members = vec![Vec::new(); n];
+    for (x, &c) in cycle.iter().enumerate() {
+        members[c].push(x);
+    }
+    let mut left: Vec<usize> = members.iter().map(Vec::len).collect();
+    // Per node, its dependents in its own component not drawn yet; per
+    // component, the edges into it from components not drawn whole yet.
+    let mut inner = vec![0usize; n];
+    let mut waiting = vec![0usize; n];
     for (x, bs) in blockers.iter().enumerate() {
         for &b in bs {
-            pending[b] += 1;
-            if cycle[b] != cycle[x] {
-                outside[b] += 1;
+            match cycle[b] == cycle[x] {
+                true => inner[b] += 1,
+                false => waiting[cycle[b]] += 1,
             }
         }
     }
     let mut placed = vec![false; n];
-    let mut free: BTreeSet<usize> = (0..n).filter(|&i| pending[i] == 0).collect();
+    let mut free: BTreeSet<usize> = (0..n)
+        .filter(|&i| waiting[cycle[i]] == 0 && inner[i] == 0)
+        .collect();
     let mut out = Vec::with_capacity(n);
     while out.len() < n {
         let x = match free.pop_first() {
             Some(x) => x,
             None => (0..n)
-                .find(|&i| !placed[i] && outside[i] == 0)
+                .find(|&i| !placed[i] && waiting[cycle[i]] == 0)
                 .expect("a cycle that nothing outside it waits on"),
         };
         placed[x] = true;
         out.push(x);
+        let c = cycle[x];
         for &b in &blockers[x] {
-            pending[b] -= 1;
-            if cycle[b] != cycle[x] {
-                outside[b] -= 1;
+            if cycle[b] == c {
+                inner[b] -= 1;
+                if inner[b] == 0 && !placed[b] {
+                    free.insert(b);
+                }
             }
-            if pending[b] == 0 && !placed[b] {
-                free.insert(b);
+        }
+        left[c] -= 1;
+        if left[c] > 0 {
+            continue;
+        }
+        // The component is drawn whole: what it waited on may open.
+        for &y in &members[c] {
+            for &b in &blockers[y] {
+                let d = cycle[b];
+                if d == c {
+                    continue;
+                }
+                waiting[d] -= 1;
+                if waiting[d] == 0 {
+                    free.extend(members[d].iter().copied().filter(|&z| inner[z] == 0));
+                }
             }
         }
     }
@@ -590,6 +631,24 @@ mod tests {
         assert_eq!(laid.lanes, 1);
     }
 
+    /// Two cycles, the second blocked by the first through one edge: 2 waits
+    /// on 0. Every node of the second cycle reaches every node of the first,
+    /// 1 included through 0, so the whole of it stands above the whole of the
+    /// first -- the break waits on the component and not on the node, or 1,
+    /// which nothing outside its cycle waits on directly, is drawn above 2.
+    #[test]
+    fn a_cycle_blocked_by_another_cycle_stands_wholly_above_it() {
+        let nodes = [
+            ready("N0", &["N1"]),
+            ready("N1", &["N0"]),
+            ready("N2", &["N3", "N0"]),
+            ready("N3", &["N2"]),
+        ];
+        let laid = layout(&nodes, Alphabet::Boxes);
+        let ids: Vec<&str> = laid.rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["N2", "N3", "N0", "N1"]);
+    }
+
     #[test]
     fn an_edge_to_an_id_outside_the_set_draws_no_lane_and_is_counted() {
         let nodes = [ready("A", &["GONE", "B", "LOST"]), ready("B", &[])];
@@ -697,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn every_node_is_exactly_one_row_and_sits_above_its_blockers_outside_a_cycle() {
+    fn every_node_is_exactly_one_row_and_sits_above_all_it_reaches_outside_its_cycle() {
         for nodes in spread() {
             let laid = layout(&nodes, Alphabet::Boxes);
             let mut ids: Vec<&str> = laid.rows.iter().map(|r| r.id.as_str()).collect();
@@ -706,15 +765,25 @@ mod tests {
             want.sort_unstable();
             assert_eq!(ids, want, "{nodes:?}");
             let at = |id: &str| laid.rows.iter().position(|r| r.id == id);
+            // Over transitive dependence and not direct edges only: a node
+            // that reaches another through the blocked_by edges, by any
+            // path and across any number of cycles, stands above it unless
+            // that other reaches it back -- which is the two sharing a cycle.
             for n in &nodes {
-                for b in &n.blocked_by {
-                    let (Some(top), Some(bottom)) = (at(&n.id), at(b)) else {
+                for m in &nodes {
+                    if n.id == m.id || !reaches(&nodes, &n.id, &m.id) {
+                        continue;
+                    }
+                    let (Some(top), Some(bottom)) = (at(&n.id), at(&m.id)) else {
                         continue;
                     };
                     if bottom < top {
-                        // Only an edge closing a cycle may point up: then
-                        // `b` reaches `n` back through the blocked_by edges.
-                        assert!(reaches(&nodes, b, &n.id), "{nodes:?}");
+                        assert!(
+                            reaches(&nodes, &m.id, &n.id),
+                            "{} depends on {} through no cycle and is drawn below it: {nodes:?}",
+                            n.id,
+                            m.id
+                        );
                     }
                 }
             }

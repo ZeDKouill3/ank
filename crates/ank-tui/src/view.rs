@@ -713,6 +713,12 @@ pub struct App {
     /// Moving the cursor over it spawns nothing, as moving one over the
     /// entities spawns nothing.
     dag: Option<Dag>,
+    /// Where the read of the graph stands while [`App::dag`] is `None`, and
+    /// meaningless once one is held (TASK-afcd4f0f56ad). Three states and
+    /// not a width: a wide frame with no graph is not necessarily reading
+    /// one -- the read may have been refused, or the frame may have been
+    /// narrow when the graph was dropped and widened since.
+    graphing: Graphing,
     /// The graph laid out in lanes, held beside the [`Dag`] it was computed
     /// from and recomputed when that or the listing's order moves -- never
     /// per frame. A few hundred rows and a dozen lanes is cheap to hold and
@@ -876,6 +882,13 @@ impl App {
             stream,
             queue: None,
             dag: None,
+            // A wide frame's opening reads the graph in the pass after the
+            // rows, so from the first frame it is owed; a narrow one reads it
+            // on the first arrival at GRAPH, so until then nobody asked.
+            graphing: match size.0 >= DASHBOARD as usize {
+                true => Graphing::Reading,
+                false => Graphing::Unasked,
+            },
             drawn: Drawn::default(),
             fold: Fold::default(),
             config: None,
@@ -1074,12 +1087,43 @@ impl App {
             // The next arrival reads, as the first one did.
             self.dag = None;
             self.drawn = Drawn::default();
+            self.graphing = Graphing::Unasked;
             return;
         }
         match Dag::load(ank) {
             Ok(dag) => self.graphed(dag),
-            Err(failed) => self.fail(failed),
+            Err(failed) => {
+                self.graphing = Graphing::Refused;
+                self.fail(failed);
+            }
         }
+    }
+
+    /// Runs the read of the graph a resize asked for, and says whether it
+    /// ran one (TASK-afcd4f0f56ad).
+    ///
+    /// **A resize asks and the session reads.** [`App::resize`] is a fact
+    /// about the window and has no CLI to read with, so a frame widened onto
+    /// the dashboard with no graph held only records that one is owed -- the
+    /// frame drawn at the new size says it is reading, which is then true --
+    /// and the loop calls this before it waits for the next event, as it
+    /// runs the opening's second pass. Owed once: the read either answers or
+    /// is refused, and neither leaves anything owed, so a second resize asks
+    /// for nothing.
+    ///
+    /// Nothing is read over a corpus that was not: the graph is laid out in
+    /// the listing's order, and a `u` that reads the listing reads the graph
+    /// with it.
+    pub fn read_asked(&mut self, ank: &Ank) -> bool {
+        if !self.wide()
+            || self.dag.is_some()
+            || self.graphing != Graphing::Reading
+            || self.snapshot.is_none()
+        {
+            return false;
+        }
+        self.regraph(ank);
+        true
     }
 
     /// The graph `graph` answered with, laid out and put on the screen.
@@ -2928,15 +2972,16 @@ impl App {
                     false => "not read",
                 }
             )),
-            // On a wide frame the opening asks, so a graph not yet held is
-            // being read; under that width the arrival asked, so one not
-            // held is one the CLI refused, and the note says why.
+            // What the read stands at, and never what the width suggests
+            // (TASK-afcd4f0f56ad): a wide frame with no graph may hold a
+            // refused read, and a refusal is worded the same on every width.
             Focus::Graph => match &self.dag {
                 None => Composed::of(&format!(
                     "{name}   ({})",
-                    match self.wide() {
-                        true => "reading",
-                        false => "could not be read",
+                    match self.graphing {
+                        Graphing::Unasked => "not asked",
+                        Graphing::Reading => "reading",
+                        Graphing::Refused => "could not be read",
                     }
                 )),
                 Some(dag) => {
@@ -3153,15 +3198,13 @@ impl App {
             return vec![Composed::of(&format!("  {}", self.unread())).fitted(width)];
         }
         if self.dag.is_none() {
-            // The title above already says it: reading, on a wide frame
-            // where the opening asks; refused, under that width, where the
-            // arrival asked and the note carries what the CLI said.
-            return vec![Composed::of(&match self.wide() {
-                true => "  reading".to_string(),
-                false => format!(
-                    "  could not be read: {} reads it again",
-                    bindings::spelling_of(&Command::Reload)
-                ),
+            // The title above already says which; the body adds the way in.
+            // A refusal's reason is in the note, on every width.
+            let reload = bindings::spelling_of(&Command::Reload);
+            return vec![Composed::of(&match self.graphing {
+                Graphing::Unasked => format!("  not asked: {reload} reads it"),
+                Graphing::Reading => "  reading".to_string(),
+                Graphing::Refused => format!("  could not be read: {reload} reads it again"),
             })
             .fitted(width)];
         }
@@ -3682,6 +3725,14 @@ impl App {
     /// window and never about the corpus, so what it costs is one frame drawn
     /// again at the new size (ADR-0bb7ea8991bc -- a screen being dragged about
     /// renews nothing).
+    ///
+    /// **Except that it may owe the graph one read** (TASK-afcd4f0f56ad). A
+    /// frame widened onto the dashboard draws the GRAPH panel, and with no
+    /// graph held and none asked it would be a panel with nothing in it and
+    /// nothing coming; so the graph is owed, as the wide opening owes it, and
+    /// [`App::read_asked`] runs that read. Owed only where nobody asked: a
+    /// refused read stays refused until `u`, so dragging a window about
+    /// spawns at most the one.
     pub fn resize(&mut self, columns: u16, rows: u16) {
         let size = (columns as usize, rows as usize);
         // The loop reads the window before every paint, so this is asked far
@@ -3691,6 +3742,15 @@ impl App {
             return;
         }
         self.size = size;
+        if self.dag.is_none() {
+            self.graphing = match (self.wide(), self.graphing) {
+                (true, Graphing::Unasked) => Graphing::Reading,
+                // Narrowed again before the read ran: nothing under the
+                // width reads a graph off the frame, so nothing is owed.
+                (false, Graphing::Reading) => Graphing::Unasked,
+                (_, kept) => kept,
+            };
+        }
         // A shorter window is a smaller page, so a cursor can fall off the
         // bottom of a listing that was fine a moment ago, and a narrower one
         // rewraps a body under an offset that was inside it.
@@ -4625,6 +4685,21 @@ const ANCHOR: &[&str] = &[
     "                     ",
     "          ank        ",
 ];
+
+/// Where the read of the graph stands while no graph is held
+/// (TASK-afcd4f0f56ad), which is what the GRAPH panel says in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Graphing {
+    /// Nobody has asked for it: a narrow frame that never went to GRAPH, or
+    /// one that dropped the graph on a reload with the panel off the frame.
+    Unasked,
+    /// A read is owed and is the next thing the session runs: the wide
+    /// frame's opening, or a resize onto the wide frame.
+    Reading,
+    /// The CLI refused the last read, and the note says why. `u` reads it
+    /// again.
+    Refused,
+}
 
 /// The graph, laid out: one row per task drawn, and the columns every prefix
 /// takes (TASK-643611645dea).
@@ -11049,6 +11124,109 @@ mod tests {
         let mut w = dashboard();
         w.reload_rest(&ank);
         assert!(graph_asked(&w), "the wide pass did not read: {:?}", w.note);
+    }
+
+    /// **The GRAPH panel words a graph never asked, a graph being read and a
+    /// graph whose read was refused three ways, and the refusal the same way
+    /// on every width** (TASK-afcd4f0f56ad).
+    ///
+    /// The refused read is the case that was wrong: on a wide frame a graph
+    /// not held was always "reading", so a read the CLI had refused said it
+    /// was still under way, with nothing running and nothing coming.
+    #[test]
+    fn the_graph_panel_tells_never_asked_reading_and_refused_apart() {
+        let ank = nowhere();
+        // Never asked: the panel on the frame, and no read wanted or tried.
+        let mut never = app();
+        never.focus = Focus::Graph;
+        let f = never.frame();
+        assert!(
+            f.contains("3 GRAPH   (not asked)"),
+            "a graph nobody asked is not worded so:\n{f}"
+        );
+        assert!(
+            f.contains("not asked: u reads it"),
+            "the body does not say how to ask:\n{f}"
+        );
+        assert!(!f.contains("reading"), "nobody is reading it:\n{f}");
+        // Being read: the wide frame's opening asks it in the pass after the
+        // rows, so between the two it is under way.
+        let reading = dashboard().frame();
+        assert!(
+            reading.contains("3 GRAPH   (reading)"),
+            "the opening's graph is not worded as being read:\n{reading}"
+        );
+        // Refused, on the wide frame: the narrow frame's sentence, never
+        // "reading".
+        let mut refused = dashboard();
+        refused.reload_rest(&ank);
+        let f = refused.frame();
+        assert!(
+            f.contains("3 GRAPH   (could not be read)"),
+            "a refused read on the wide frame is not worded as refused:\n{f}"
+        );
+        assert!(
+            f.contains("could not be read: u reads it again"),
+            "the wide frame's body does not say the read was refused:\n{f}"
+        );
+        assert!(
+            !f.contains("(reading)") && !f.contains("  reading"),
+            "a refused read is still said to be under way:\n{f}"
+        );
+    }
+
+    /// **A frame resized onto the dashboard's width with no graph held asks
+    /// for one read of it, as the opening does, and a second resize asks for
+    /// none** (TASK-afcd4f0f56ad).
+    ///
+    /// Two ways of arriving wide with no graph: a narrow session that never
+    /// went to GRAPH, and one that went and dropped the graph on a reload with
+    /// the panel off the frame. The CLI is addressed where there is none, so
+    /// the read the resize asked for is attempted and refused, and the panel
+    /// then says so rather than that it is reading.
+    #[test]
+    fn a_resize_onto_the_wide_frame_with_no_graph_held_reads_it_once() {
+        let ank = nowhere();
+        let graph_asked = |a: &App| {
+            a.note
+                .as_deref()
+                .is_some_and(|n| n.contains("cannot run") && n.contains("graph"))
+        };
+        let never = app();
+        let mut dropped = graphed();
+        tap(&mut dropped, &ank, KeyCode::Char('2'));
+        dropped.reload_rest(&ank);
+        assert!(dropped.dag.is_none(), "the narrow reload kept the graph");
+        for (how, mut a) in [("never went", never), ("dropped it", dropped)] {
+            a.note = None;
+            // Nothing is asked while the frame is narrow.
+            assert!(!a.read_asked(&ank), "{how}: a narrow frame asked a read");
+            a.resize(DASHBOARD, 40);
+            let f = a.frame();
+            assert!(
+                f.contains("3 GRAPH   (reading)"),
+                "{how}: the resize did not ask for the graph:\n{f}"
+            );
+            assert!(a.read_asked(&ank), "{how}: the resize's read was not run");
+            assert!(graph_asked(&a), "{how}: no graph was read: {:?}", a.note);
+            let f = a.frame();
+            assert!(
+                f.contains("3 GRAPH   (could not be read)"),
+                "{how}: the refused read is worded otherwise:\n{f}"
+            );
+            // One read: asked again, nothing is owed.
+            a.note = None;
+            assert!(!a.read_asked(&ank), "{how}: one resize read twice");
+            // A second resize, wider or narrow and back, asks for none.
+            for (columns, rows) in [(DASHBOARD + 40, 40), (DASHBOARD - 1, 40), (DASHBOARD, 40)] {
+                a.resize(columns, rows);
+                assert!(
+                    !a.read_asked(&ank),
+                    "{how}: the resize to {columns} asked a second read"
+                );
+            }
+            assert!(a.note.is_none(), "{how}: a second resize read {:?}", a.note);
+        }
     }
 
     /// **A reload under the width, with the graph off the frame, drops the
