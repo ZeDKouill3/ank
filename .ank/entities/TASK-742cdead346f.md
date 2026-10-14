@@ -5,7 +5,7 @@ slug: the-contract-summary-of-tui-names-the-graph-and
 title: The contract summary of tui names the graph, and the golden fixtures move with it
 created: 2026-10-14T09:16:49Z
 author: ankwork
-status: open
+status: done
 scope:
   - crates/ank-contract/src/verbs.rs
   - crates/ank-cli/tests/golden-json/**
@@ -15,8 +15,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/2cf19cb1ddf0@f1d536f
+    tree: scope/f848aa55dd20
+    criteria: 68e3b66c8e79
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@f1d536f
+    tree: scope/f848aa55dd20
+    criteria: 68e3b66c8e79
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Housekeeping the contract owes the screen. ADR-6fd69efb629c makes `ank help --json` the one description of every verb, generated from one table and pinned by a golden fixture, so the sentence that says what `ank tui` shows lives there and nowhere else -- and after the GRAPH screen lands it is short one thing. A summary narrower than the binary is read as the binary refusing, which the note beside the tui entry already says about its own history.
