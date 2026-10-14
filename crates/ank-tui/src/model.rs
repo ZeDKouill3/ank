@@ -459,6 +459,62 @@ fn waiting(value: &ank::Value) -> Row {
     }
 }
 
+/// One task of the `blocked_by` graph, as `ank graph --json` lists it in
+/// `tasks`: the four fields the document carries and nothing derived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DagTask {
+    pub id: String,
+    pub short: String,
+    pub status: String,
+    pub title: String,
+}
+
+/// One edge of the graph: `task` is blocked by `blocked_by`. The second end
+/// may name no row of `tasks`, as a peer task written `<id>@<peer>` does
+/// (ADR-c23bef1cc93e); it is kept as the document wrote it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edge {
+    pub task: String,
+    pub blocked_by: String,
+}
+
+/// The `blocked_by` graph, read out of one `ank graph --json` document
+/// (ADR-8bd76e8d7c4e). The model reads and derives nothing: no order, no
+/// readiness; the view does that. Rows keep the document's order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Dag {
+    pub tasks: Vec<DagTask>,
+    pub edges: Vec<Edge>,
+}
+
+impl Dag {
+    pub fn load(ank: &Ank) -> Result<Dag, Failed> {
+        Ok(Dag::read(&ank.json("graph", &[])?))
+    }
+
+    /// A document with no `tasks` and no `edges` is the empty graph.
+    pub fn read(doc: &ank::Value) -> Dag {
+        Dag {
+            tasks: ank::rows(doc, "tasks")
+                .iter()
+                .map(|t| DagTask {
+                    id: ank::text(t, "id"),
+                    short: ank::text(t, "short"),
+                    status: ank::text(t, "status"),
+                    title: ank::text(t, "title"),
+                })
+                .collect(),
+            edges: ank::rows(doc, "edges")
+                .iter()
+                .map(|e| Edge {
+                    task: ank::text(e, "task"),
+                    blocked_by: ank::text(e, "blocked_by"),
+                })
+                .collect(),
+        }
+    }
+}
+
 /// One key of `.ank`'s configuration, as `ank config <key> --json` answers it
 /// (TASK-b08d090f699c).
 ///
@@ -832,6 +888,67 @@ fn push_item(out: &mut Vec<String>, item: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A literal `ank graph --json` document: four tasks, three edges between
+    /// them and a fourth edge to a peer task that is no row of `tasks`.
+    const GRAPH: &str = r#"{"contract":1,"path":".","tasks":[
+        {"id":"TASK-aaaa00000001","short":"TASK-aaaa00","status":"done","title":"First"},
+        {"id":"TASK-bbbb00000002","short":"TASK-bbbb00","status":"open","title":"Second"},
+        {"id":"TASK-cccc00000003","short":"TASK-cccc00","status":"in_progress","title":"Third"},
+        {"id":"TASK-dddd00000004","short":"TASK-dddd00","status":"open","title":"Fourth"}],
+        "edges":[
+        {"task":"TASK-bbbb00000002","blocked_by":"TASK-aaaa00000001"},
+        {"task":"TASK-cccc00000003","blocked_by":"TASK-bbbb00000002"},
+        {"task":"TASK-dddd00000004","blocked_by":"TASK-cccc00000003"},
+        {"task":"TASK-dddd00000004","blocked_by":"TASK-eeee00000005@peer"}]}"#;
+
+    #[test]
+    fn the_dag_keeps_every_task_and_every_edge_the_document_states() {
+        let doc: ank::Value = serde_json::from_str(GRAPH).unwrap();
+        let dag = Dag::read(&doc);
+        assert_eq!(dag.tasks.len(), 4);
+        assert_eq!(dag.edges.len(), 4, "three inside the list and one outside");
+        let ids: Vec<&str> = dag.tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "TASK-aaaa00000001",
+                "TASK-bbbb00000002",
+                "TASK-cccc00000003",
+                "TASK-dddd00000004"
+            ],
+            "document order, nothing sorted"
+        );
+        assert_eq!(dag.tasks[2].short, "TASK-cccc00");
+        assert_eq!(dag.tasks[2].status, "in_progress");
+        assert_eq!(dag.tasks[2].title, "Third");
+        assert_eq!(dag.edges[0].task, "TASK-bbbb00000002");
+        assert_eq!(dag.edges[0].blocked_by, "TASK-aaaa00000001");
+    }
+
+    #[test]
+    fn an_edge_to_a_peer_is_kept_though_it_names_no_row() {
+        let doc: ank::Value = serde_json::from_str(GRAPH).unwrap();
+        let dag = Dag::read(&doc);
+        let outside: Vec<&Edge> = dag
+            .edges
+            .iter()
+            .filter(|e| !dag.tasks.iter().any(|t| t.id == e.blocked_by))
+            .collect();
+        assert_eq!(outside.len(), 1);
+        assert_eq!(outside[0].blocked_by, "TASK-eeee00000005@peer");
+        assert_eq!(outside[0].task, "TASK-dddd00000004");
+    }
+
+    #[test]
+    fn empty_arrays_read_as_an_empty_dag_and_not_as_an_error() {
+        let doc: ank::Value =
+            serde_json::from_str(r#"{"contract":1,"path":".","tasks":[],"edges":[]}"#).unwrap();
+        let dag = Dag::read(&doc);
+        assert!(dag.tasks.is_empty());
+        assert!(dag.edges.is_empty());
+        assert_eq!(dag, Dag::default());
+    }
 
     const ENTITY: &str = "---\nid: TASK-49746735127f\ntype: task\ntitle: A title\nscope:\n  - crates/ank-tui/**\n  - crates/ank-cli/src/cli.rs\nblocked_by: [TASK-8108e3771ba0]\nschema: 4\n---\n\nThe body.\n";
 
