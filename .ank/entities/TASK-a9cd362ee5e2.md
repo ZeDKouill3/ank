@@ -5,7 +5,7 @@ slug: screen-3-is-graph-the-digit-the-ring-and-the-tit
 title: "Screen 3 is GRAPH: the digit, the ring and the title move, and the document keeps no digit"
 created: 2026-10-14T09:15:28Z
 author: ankwork
-status: open
+status: done
 scope:
   - crates/ank-tui/src/view.rs
   - crates/ank-tui/src/bindings.rs
@@ -19,8 +19,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/84c481489659@18819dd
+    tree: scope/78ba5bbed471
+    criteria: bf1520a8c2d1
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@18819dd
+    tree: scope/78ba5bbed471
+    criteria: bf1520a8c2d1
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Option A of the GRAPH screen: only the slot, the digit and the name of screen 3 move. The document keeps its place as what a row opens into (ADR-559eebf5c6f5: "Opening a row replaces the list with the document it names"), and loses the digit that reached it directly -- which a document never needed, since there is nothing to show in it until a row has been opened.

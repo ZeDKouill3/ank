@@ -32,10 +32,12 @@
 //! a reader reaches for first and none of them moved.
 //!
 //! **And the screen in the region is a key too** (TASK-bb43cfe2192b). `Tab`
-//! walks the four screens in a ring, `1` to `4` reach one directly, and Left
-//! and Right cross between a listing and the document it opens. Three ways to
-//! the same place, deliberately: the digit is what the screen's own title
-//! carries, so a reader who can see `3` on the queue never has to remember
+//! walks the four screens in a ring -- claims, entities, graph, queue -- `1` to
+//! `4` reach one directly, and Left and Right cross between a listing and the
+//! document it opens, which is on no step of the ring and carries no digit
+//! (TASK-a9cd362ee5e2). Three ways to the same place, deliberately: the digit
+//! is what the screen's own title carries, so a reader who can see `3` on the
+//! graph never has to remember
 //! which key opens it; the arrows are what a hand reaches
 //! for with nothing read at all; and `Tab` is what a person who has used one of
 //! these before will press first.
@@ -561,7 +563,8 @@ mod tests {
     /// (TASK-bb43cfe2192b, ADR-559eebf5c6f5).
     #[test]
     fn focus_moves_by_key_in_a_ring_by_digit_and_across_the_columns() {
-        // The ring, forward from every panel and back again.
+        // The ring, forward from every panel and back again -- and from the
+        // document too, which is on no step of it (TASK-a9cd362ee5e2).
         for focus in Focus::ALL {
             assert_eq!(
                 typed(key(KeyCode::Tab), focus),
@@ -571,20 +574,46 @@ mod tests {
                 typed(key(KeyCode::BackTab), focus),
                 Press::Run(Command::Panel(focus.stepped(-1)))
             );
+            for tab in [KeyCode::Tab, KeyCode::BackTab] {
+                assert_ne!(
+                    typed(key(tab), focus),
+                    Press::Run(Command::Panel(Focus::Body)),
+                    "{tab:?} on {focus:?} lands on the document"
+                );
+            }
         }
-        // A digit reaches the panel whose title carries it.
-        for panel in Focus::ALL {
-            let digit = char::from_digit(panel.number() as u32, 10).expect("a digit");
+        // A digit reaches the panel whose title carries it, and `3` is the
+        // graph's.
+        for panel in Focus::RING {
+            let n = panel
+                .number()
+                .expect("a screen of the ring carries a digit");
+            let digit = char::from_digit(n as u32, 10).expect("a digit");
             assert_eq!(
                 press(digit, Focus::Entities),
                 Press::Run(Command::Panel(panel)),
                 "'{digit}'"
             );
         }
+        assert_eq!(
+            press('3', Focus::Entities),
+            Press::Run(Command::Panel(Focus::Graph))
+        );
+        // And no digit reaches the document, from anywhere.
+        for focus in Focus::ALL {
+            for c in '0'..='9' {
+                assert_ne!(
+                    press(c, focus),
+                    Press::Run(Command::Panel(Focus::Body)),
+                    "'{c}' on {focus:?} reaches the document"
+                );
+            }
+        }
         // Left and Right reach the pair that shares a row, from anywhere.
         for (focus, sideways, arrived) in [
             (Focus::Claims, KeyCode::Right, Focus::Body),
             (Focus::Entities, KeyCode::Right, Focus::Body),
+            (Focus::Queue, KeyCode::Right, Focus::Body),
             (Focus::Queue, KeyCode::Left, Focus::Entities),
             (Focus::Body, KeyCode::Left, Focus::Entities),
         ] {

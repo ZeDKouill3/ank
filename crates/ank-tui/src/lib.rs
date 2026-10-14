@@ -122,30 +122,40 @@
 //! the header sits above. Nothing else on the frame carries a border, and
 //! nothing on it collapses to a rule with nothing inside it.
 //!
-//! * [`view::Focus::Claims`] -- who holds what, the caller's own marked.
-//! * [`view::Focus::Entities`] -- every entity of every kind with its status,
-//!   windowed and filterable. Where a session opens.
-//! * [`view::Focus::Body`] -- one entity: what holds it, the constraints
-//!   binding its declared scope, and its body, paged rather than cut. This is
-//!   the only screen `accept` can be reached from. It is also where the config
-//!   pane is drawn (TASK-b08d090f699c): the one thing it shows that is not
-//!   about an entity at all, opened with `o`, read when a person arrives at it
-//!   and on no repaint.
-//! * [`view::Focus::Queue`] -- what is proposed and waiting for a signature,
-//!   and which regime the corpus is in: `ank review`, run when its person
-//!   arrives at the screen and never on the reader's own initiative.
+//! * [`view::Focus::Claims`], `1 CLAIMS` -- who holds what, the caller's own
+//!   marked.
+//! * [`view::Focus::Entities`], `2 ENTITIES` -- every entity of every kind with
+//!   its status, windowed and filterable. Where a session opens.
+//! * [`view::Focus::Graph`], `3 GRAPH` -- the `blocked_by` DAG
+//!   (TASK-a9cd362ee5e2). Not drawn yet: until it is, the screen holds one
+//!   sentence saying so, and never a border around nothing.
+//! * [`view::Focus::Queue`], `4 QUEUE` -- what is proposed and waiting for a
+//!   signature, and which regime the corpus is in: `ank review`, run when its
+//!   person arrives at the screen and never on the reader's own initiative.
 //!
-//! **Each is reached by the key it already had.** `Tab` walks the ring, `1` to
-//! `4` name one, and the number is on the region's title beside the name. What
-//! the change costs a reader who knew the old frame is nothing: the digit that
-//! reached a panel reaches its screen.
+//! **Each is reached by a digit, and the ring walks them in that order.** `Tab`
+//! and `BackTab` walk claims, entities, graph and queue, `1` to `4` name one,
+//! and the number is on the title beside the name. `3` is the graph's; it was
+//! the document's until TASK-a9cd362ee5e2.
 //!
-//! **Opening a row replaces the list with the document it names, and leaving
-//! the document gives that list back.** Enter on a row of any of the three
-//! listings shows the entity in the region; the reader remembers which listing
-//! it was reached from, and `Back` returns there with the same row still under
-//! the cursor. Every listing keeps its own cursor and nothing moves one by
-//! being left, which is what makes a screen a place rather than a mode.
+//! **The document is reached by opening a row, and leaving it gives that list
+//! back.** [`view::Focus::Body`] is not on the ring and no digit reaches it:
+//! Enter on a row of any of the three listings, or Right, shows the entity in
+//! the region -- what holds it, the constraints binding its declared scope, and
+//! its body, paged rather than cut -- under the title `BODY`, with no digit in
+//! front. This is the only screen `accept` can be reached from. It is also
+//! where the config pane is drawn (TASK-b08d090f699c), titled `CONFIG`: the one
+//! thing it shows that is not about an entity at all, opened with `o`, read
+//! when a person arrives at it and on no repaint. The reader remembers which
+//! listing the document was reached from, and `Back` returns there with the
+//! same row still under the cursor. Every listing keeps its own cursor and
+//! nothing moves one by being left, which is what makes a screen a place rather
+//! than a mode.
+//!
+//! On a window of [`view::DASHBOARD`] columns or more, the three listings are
+//! drawn at once in a left column, and the right panel beside them is `3 GRAPH`
+//! at rest and `BODY` once a row has been opened; `Back` gives it back to the
+//! graph (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa).
 //!
 //! There is no focus to arbitrate and so no focused border: one region has
 //! nothing to be told apart from, and its rule is one weight at every window.

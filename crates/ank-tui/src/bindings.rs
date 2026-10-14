@@ -525,9 +525,13 @@ pub static BINDINGS: &[Binding] = &[
         verb: None,
     },
     // A digit reaches its panel directly, which is what the number in a panel's
-    // title is for: a reader who can see `3` on the body never has to remember
+    // title is for: a reader who can see `3` on the graph never has to remember
     // which key opens it. Four rows and not one rule, so the key list can name
     // each of them by the panel it reaches.
+    //
+    // The document has no row here and no digit (TASK-a9cd362ee5e2). It is what
+    // a row opens into -- Enter on the row, or Right -- and there was nothing to
+    // show on it until one had been opened, so `3` went to the graph.
     Binding {
         key: KeyCode::Char('1'),
         aliases: &[],
@@ -549,8 +553,8 @@ pub static BINDINGS: &[Binding] = &[
     Binding {
         key: KeyCode::Char('3'),
         aliases: &[],
-        runs: Runs::Press(Press::Run(Command::Panel(Focus::Body))),
-        word: "body",
+        runs: Runs::Press(Press::Run(Command::Panel(Focus::Graph))),
+        word: "graph",
         group: Group::Panel,
         offered: Offered::Never,
         verb: None,
@@ -1706,8 +1710,11 @@ mod tests {
     /// [`Focus::of_digit`] are the same fact.
     #[test]
     fn the_digits_of_the_table_are_the_digits_the_panels_carry() {
-        for panel in Focus::ALL {
-            let digit = char::from_digit(panel.number() as u32, 10).expect("a digit");
+        for panel in Focus::RING {
+            let n = panel
+                .number()
+                .expect("a screen of the ring carries a digit");
+            let digit = char::from_digit(n as u32, 10).expect("a digit");
             let binding = of_key(KeyCode::Char(digit)).expect("a digit reaches a panel");
             assert_eq!(
                 binding.press(Focus::Entities),
