@@ -643,7 +643,8 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
 /// Enter costs exactly what the document costs to read: one `ank show`, and
 /// one `ank scope` for every scope the task declares, which is how the
 /// document finds the constraints binding it -- read off those verbs run by
-/// hand (TASK-44e35bd40c83). `u` reads the graph again, in the pass it runs.
+/// hand (TASK-44e35bd40c83). `u` reads the graph again, in the pass it runs,
+/// and the document still held after Back with it.
 #[cfg(unix)]
 #[test]
 fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_graph_again() {
@@ -809,22 +810,28 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         );
 
         // `u` reads it again, in its pass: `find` and the graph under the
-        // width, and the claims and the queue beside them on it.
+        // width, and the claims and the queue beside them on it. And the
+        // document Enter opened is still held after Back, so the reload reads
+        // it again too, as it does wherever one is held: the `show` and the
+        // scopes run by hand above, once more (TASK-44e35bd40c83).
         // Waited on until the whole pass has landed, then settled before it
         // is counted: the old graph stays drawn while the pass runs, so a
         // frame that says "drawn" says nothing about which read is last, and a
         // read past the pass has had the settling to land in.
         let before_u = trace(&trace_path);
         let pass = if wide(columns) { 4 } else { 2 };
+        let document = reads(&hand);
         live.send("u");
         live.until("the reload to land", |t| {
-            reads(&trace(&trace_path)) >= reads(&before_u) + pass && graph_drawn(t)
+            reads(&trace(&trace_path)) >= reads(&before_u) + pass + document && graph_drawn(t)
         });
         let reloaded = live.frame();
-        let cost = reads(&added(&before_u, &trace(&trace_path)));
+        let cost = added(&before_u, &trace(&trace_path));
         assert_eq!(
-            cost, pass,
-            "u did not read the graph again, once, at {columns}x{rows}:\n{reloaded}"
+            reads(&cost),
+            pass + document,
+            "u did not read the graph again, once, beside the {document} read(s) of the \
+             document it holds, at {columns}x{rows}: {cost:?}\n{reloaded}"
         );
         live.quit();
     }
