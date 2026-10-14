@@ -394,7 +394,7 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Run(Command::Open)),
         word: "open",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Queue]),
+        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Graph, Focus::Queue]),
         verb: None,
     },
     // `s` and no longer `c`, which is `claim`'s now. The letter is not a
@@ -1843,5 +1843,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **Enter, which opens a row, is offered on GRAPH as it is on the other
+    /// listings** (TASK-647b1e906ae1).
+    ///
+    /// GRAPH draws rows and Enter already opens the one under the cursor, so a
+    /// key list on GRAPH that omits it reads as the key refusing. The open
+    /// binding is offered on exactly the panels it was offered on before, with
+    /// GRAPH added; no other binding's offer moves.
+    #[test]
+    fn open_is_offered_on_graph_beside_the_other_listings() {
+        let open = BINDINGS
+            .iter()
+            .find(|b| b.word == "open")
+            .expect("the table binds open");
+        let offered_on: Vec<Focus> = Focus::ALL
+            .into_iter()
+            .filter(|&f| open.is_offered(Holding::Panel(f)))
+            .collect();
+        assert_eq!(
+            offered_on,
+            vec![Focus::Claims, Focus::Entities, Focus::Graph, Focus::Queue],
+            "open is offered on {offered_on:?}"
+        );
     }
 }
