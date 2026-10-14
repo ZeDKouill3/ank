@@ -426,7 +426,9 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Cycle),
         word: "kind",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Entities]),
+        // The graph too (TASK-67583993ef0d): there the key walks the fold,
+        // and `entry` says so in the cell's own words.
+        offered: Offered::Panels(&[Focus::Entities, Focus::Graph]),
         verb: None,
     },
     Binding {
@@ -435,7 +437,9 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Find),
         word: "find",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Entities]),
+        // The graph narrows on the needle as the listing does
+        // (TASK-67583993ef0d).
+        offered: Offered::Panels(&[Focus::Entities, Focus::Graph]),
         verb: None,
     },
     // `u` and no longer `r`, which is `release`'s now: the corpus is a working
@@ -884,8 +888,61 @@ impl Binding {
     /// on the row and is not drawn, because no line reaches a verb any more:
     /// a list reading `d done <proof>` would be teaching a grammar this reader
     /// does not have.
+    ///
+    /// One row says a second thing, and it is the row whose key does a second
+    /// thing (TASK-67583993ef0d): the key that walks the kind walks the fold
+    /// on GRAPH, and the list says so in the words the header's cell draws
+    /// there, read out of [`Fold::word`] rather than spelled again.
     pub fn entry(&self) -> String {
-        format!("{} {}", self.spelling(), self.word)
+        let said = format!("{} {}", self.spelling(), self.word);
+        if self.runs != Runs::Press(Press::Cycle) {
+            return said;
+        }
+        let folds: Vec<&str> = Fold::EVERY.iter().map(|fold| fold.word()).collect();
+        format!("{said}; {} on {}", folds.join(" or "), Focus::Graph.name())
+    }
+}
+
+/// How much of the corpus the graph lays out: what the key that cycles the
+/// kind elsewhere cycles on GRAPH (TASK-67583993ef0d).
+///
+/// **The key is the kind's and not a letter of its own**, because
+/// ADR-559eebf5c6f5 gives a verb's initial to the verb and the letters left
+/// over are few. On a listing of tasks only, the next thing to narrow by is
+/// time rather than kind, and the cell that says which kind is in force says
+/// which fold is, on the one screen where that is the question.
+///
+/// **The words are declared here, once**, because two surfaces draw them: the
+/// cell in the header and the row of the key list. A word written beside each
+/// would be two vocabularies for one fact the day one of them moved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Fold {
+    /// The work that is alive -- every task neither done nor closed -- and
+    /// every task one of those directly names in `blocked_by`.
+    #[default]
+    Open,
+    /// Every task the corpus holds.
+    All,
+}
+
+impl Fold {
+    /// Every fold, in the order the key walks them.
+    pub const EVERY: [Fold; 2] = [Fold::Open, Fold::All];
+
+    /// The word the header cell and the key list call it by.
+    pub fn word(self) -> &'static str {
+        match self {
+            Fold::Open => "open",
+            Fold::All => "all",
+        }
+    }
+
+    /// The fold one press of the key reaches, and back again after the last.
+    pub fn next(self) -> Fold {
+        match self {
+            Fold::Open => Fold::All,
+            Fold::All => Fold::Open,
+        }
     }
 }
 
