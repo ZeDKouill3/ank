@@ -781,3 +781,289 @@ fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
     assert_eq!(doc.matches("\"blocked_by\":").count(), 7, "{doc}");
     let _: &Graphed = &fixture;
 }
+
+// ---------------------------------------------------------------------------
+// The fold, and the search, on GRAPH (TASK-67583993ef0d)
+// ---------------------------------------------------------------------------
+
+/// The title of the task [`historied`] finishes.
+const HISTORY: &str = "A task finished with nothing waiting on it";
+
+/// Escape, as a terminal sends it.
+const ESCAPE: &str = "\u{1b}";
+
+/// [`Repo::graphed`], and one task more: finished through `done` and named
+/// by nothing, which is the history the graph folds away at rest.
+///
+/// Built here rather than in the fixture because the fixture's every task is
+/// on the graph at rest -- its one closed task has an open dependent -- and
+/// a fold measured over a corpus with nothing to fold would be green about
+/// nothing. `done` and not `close`, because the criterion says *done*: a
+/// claim, a commit for the proof to name, and the verb.
+fn historied() -> (Graphed, String) {
+    let fixture = Repo::graphed();
+    let repo = &fixture.repo;
+    let made = repo.stdout(&[
+        "new",
+        "task",
+        "--title",
+        HISTORY,
+        "--scope",
+        "src/**",
+        "--criteria",
+        "The graph folds this row away until the fold is all.",
+        "--json",
+    ]);
+    let ids = terminal::ids_of(&made);
+    assert_eq!(ids.len(), 1, "one task was written: {made}");
+    let history = ids[0].clone();
+    repo.ank(&["claim", &history]);
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "the work the finished task proves"]);
+    let sha = String::from_utf8_lossy(&repo.git(&["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    repo.ank(&["done", "--proof", &format!("commit:{sha}")]);
+    let doc = repo.stdout(&["graph", "--json"]);
+    assert!(
+        doc.contains(&format!("\"id\":\"{history}\""))
+            && doc.matches("\"status\":\"done\"").count() == 1,
+        "the history is not one done task:\n{doc}"
+    );
+    (fixture, history)
+}
+
+/// Every task the corpus holds: the fixture's and the history.
+fn every_task(fixture: &Graphed, history: &str) -> Vec<String> {
+    fixture
+        .open()
+        .into_iter()
+        .map(String::from)
+        .chain([fixture.closed.clone(), history.to_string()])
+        .collect()
+}
+
+/// The key that cycles the kind elsewhere and the fold on GRAPH, read out of
+/// the binding table rather than written here.
+fn cycle_key() -> String {
+    let binding = ank_tui::bindings::BINDINGS
+        .iter()
+        .find(|b| b.runs == ank_tui::bindings::Runs::Press(ank_tui::keys::Press::Cycle))
+        .expect("a row of the table cycles the kind");
+    match binding.key {
+        ratatui::crossterm::event::KeyCode::Char(c) => c.to_string(),
+        other => panic!("the cycle is bound to {other:?}, which this suite cannot type"),
+    }
+}
+
+/// The cell the header draws for a fold, as the reader spells it.
+fn cell(fold: ank_tui::bindings::Fold) -> String {
+    ank_tui::view::fold_target(fold)
+}
+
+/// The header's first row, which is where the cell is drawn.
+fn header(frame: &str) -> &str {
+    frame.lines().next().unwrap_or_default()
+}
+
+/// The identifiers of the graph's rows, top first.
+fn shorts(frame: &str, columns: u16) -> Vec<String> {
+    graph_rows(frame, columns)
+        .iter()
+        .map(GraphRow::short)
+        .collect()
+}
+
+/// The graph reached on a session traced by `ANK_TRACE_READS`, with every
+/// read the opening asked for landed, and the trace at that moment.
+fn settled_on_graph(
+    fixture: &Graphed,
+    columns: u16,
+    rows: u16,
+    trace_path: &std::path::Path,
+) -> (Live, String) {
+    let _ = std::fs::remove_file(trace_path);
+    let traced = trace_path.to_str().expect("a UTF-8 path");
+    let mut live = Live::with(&fixture.repo, columns, rows, &[("ANK_TRACE_READS", traced)]);
+    opened(&live, columns);
+    if wide(columns) {
+        live.until("the opening's second pass to land", |t| {
+            graph_drawn(t) && !t.contains("not asked") && !t.contains("reading")
+        });
+    }
+    let frame = on_graph(&mut live, columns);
+    (live, frame)
+}
+
+/// **At rest the graph holds no row for a done task nothing open waits on;
+/// the key that cycles the kind elsewhere shows every task, one row each,
+/// with the title saying all and the header cell saying the fold; the key
+/// again gives the frame at rest back; and none of it reads the graph or
+/// moves the cursor off its row** (TASK-67583993ef0d), at both windows.
+#[test]
+fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
+    let (fixture, history) = historied();
+    fixture.repo.warm_find();
+    let key = cycle_key();
+    let every = every_task(&fixture, &history);
+    for (columns, rows) in WINDOWS {
+        let trace_path = fixture.repo.0.join(format!("fold-{columns}.trace"));
+        let (mut live, rest) = settled_on_graph(&fixture, columns, rows, &trace_path);
+        let at_rest = shorts(&rest, columns);
+        assert_eq!(
+            at_rest.len(),
+            10,
+            "ten rows at rest at {columns}x{rows}:\n{rest}"
+        );
+        assert!(
+            !at_rest.contains(&short_of(&history)),
+            "the done task nothing waits on is a row at rest at {columns}x{rows}:\n{rest}"
+        );
+        assert!(
+            header(&rest).contains(&cell(ank_tui::bindings::Fold::Open)),
+            "the header cell does not say the fold at rest at {columns}x{rows}:\n{rest}"
+        );
+        assert!(
+            rest.contains("3 GRAPH all 10   (11 tasks in the corpus)"),
+            "\n{rest}"
+        );
+
+        // The cursor off the first row, so a fold that reset it is seen.
+        live.send("j");
+        live.send("j");
+        let moved = live.until("the cursor to reach the third row", |t| {
+            under_cursor(t).as_deref() == Some(at_rest[2].as_str())
+        });
+        let on = selected(&moved);
+        let settled = trace(&trace_path);
+
+        live.send(&key);
+        let all = live.until("the fold to open to every task", |t| {
+            t.contains("3 GRAPH all 11   (11 tasks in the corpus)")
+                && header(t).contains(&cell(ank_tui::bindings::Fold::All))
+                && graph_rows(t, columns).len() == 11
+        });
+        let unfolded = shorts(&all, columns);
+        for id in &every {
+            assert_eq!(
+                unfolded.iter().filter(|s| **s == short_of(id)).count(),
+                1,
+                "{id} is not exactly one row after the key at {columns}x{rows}:\n{all}"
+            );
+        }
+        assert_eq!(
+            selected(&all),
+            on,
+            "the fold moved the cursor off its row at {columns}x{rows}:\n{all}"
+        );
+
+        live.send(&key);
+        let back = live.until("the fold to come back to the open work", |t| {
+            header(t).contains(&cell(ank_tui::bindings::Fold::Open))
+                && graph_rows(t, columns).len() == 10
+        });
+        assert_eq!(
+            graph_rows(&back, columns)
+                .into_iter()
+                .map(|r| r.text)
+                .collect::<Vec<_>>(),
+            graph_rows(&moved, columns)
+                .into_iter()
+                .map(|r| r.text)
+                .collect::<Vec<_>>(),
+            "the second press is not the graph as it was at {columns}x{rows}:\n{back}"
+        );
+        assert_eq!(
+            header(&back),
+            header(&moved),
+            "the header is not as it was at {columns}x{rows}"
+        );
+        assert_eq!(
+            trace(&trace_path),
+            settled,
+            "changing the fold spawned a read at {columns}x{rows}"
+        );
+        live.quit();
+    }
+}
+
+/// **A search for the title of one task leaves that task and only it on the
+/// screen, with the edges to what it hid counted as outside; Escape gives
+/// the fold back; and none of it reads the graph** (TASK-67583993ef0d), at
+/// both windows.
+///
+/// Typed as a person types it, the search key and then the title. On the
+/// dashboard the listing beside the graph narrows on the same needle, so
+/// "only it on the screen" is held over the whole frame: no other task of
+/// the corpus is named anywhere on it.
+#[test]
+fn a_search_narrows_the_graph_to_one_task_and_escape_gives_the_fold_back() {
+    let (fixture, history) = historied();
+    fixture.repo.warm_find();
+    let every = every_task(&fixture, &history);
+    let left = fixture.diamond[1].clone();
+    let title = "The left of a diamond";
+    for (columns, rows) in WINDOWS {
+        let trace_path = fixture.repo.0.join(format!("search-{columns}.trace"));
+        let (mut live, rest) = settled_on_graph(&fixture, columns, rows, &trace_path);
+        let at_rest = shorts(&rest, columns);
+        let settled = trace(&trace_path);
+
+        live.send(&format!("{}{title}", ank_tui::keys::FIND));
+        let narrowed = live.until("the graph to narrow to one row", |t| {
+            t.contains(&format!("{}{title}", ank_tui::view::SEARCH))
+                && graph_rows(t, columns).len() == 1
+        });
+        assert_eq!(
+            shorts(&narrowed, columns),
+            [short_of(&left)],
+            "the search left another row at {columns}x{rows}:\n{narrowed}"
+        );
+        for id in every.iter().filter(|id| **id != left) {
+            assert!(
+                !narrowed.contains(&short_of(id)),
+                "{id} is still on the screen at {columns}x{rows}:\n{narrowed}"
+            );
+        }
+        let row = &graph_rows(&narrowed, columns)[0];
+        assert_eq!(
+            row.lane_cells(),
+            1,
+            "the lanes were not laid out over the one survivor at {columns}x{rows}: {:?}",
+            row.text
+        );
+        // Seventy-seven columns of row in a region seventy-eight wide, so the
+        // count is whole at the desk as well as on the dashboard.
+        assert!(
+            row.text.contains("(+1 blocker(s) outside)"),
+            "the hidden blocker is not counted on the row at {columns}x{rows}: {:?}\n{narrowed}",
+            row.text
+        );
+
+        live.send(ESCAPE);
+        let back = live.until("the fold to come back", |t| {
+            graph_rows(t, columns).len() == at_rest.len()
+                && !t.contains(&format!("{}{title}", ank_tui::view::SEARCH))
+        });
+        assert_eq!(
+            shorts(&back, columns),
+            at_rest,
+            "Escape did not give the fold back at {columns}x{rows}:\n{back}"
+        );
+        assert!(
+            !back.contains("outside") && !back.contains("matching"),
+            "the fold came back still narrowed at {columns}x{rows}:\n{back}"
+        );
+        assert_eq!(
+            selected(&back),
+            short_of(&left),
+            "Escape moved the cursor off the row it was on at {columns}x{rows}:\n{back}"
+        );
+        assert_eq!(
+            trace(&trace_path),
+            settled,
+            "the search spawned a read at {columns}x{rows}"
+        );
+        live.quit();
+    }
+}

@@ -340,7 +340,7 @@
 //! it.
 
 use crate::ank::{Ank, Failed, Ran};
-use crate::bindings::{self, Binding, Holding, Runs};
+use crate::bindings::{self, Binding, Fold, Holding, Runs};
 use crate::form::{Filled, Form, SET as SETTING};
 use crate::graph::{self, Alphabet, Mark, Node};
 use crate::input::{Act, Command, Subject};
@@ -718,6 +718,12 @@ pub struct App {
     /// per frame. A few hundred rows and a dozen lanes is cheap to hold and
     /// would not be cheap to lay out on every keystroke.
     drawn: Drawn,
+    /// How much of the graph is laid out: the open work and what it directly
+    /// waits on, or every task (TASK-67583993ef0d). What the key that cycles
+    /// the kind elsewhere cycles on GRAPH, and what the header's cell says
+    /// there. Changing it lays [`App::drawn`] out again from the graph already
+    /// held and reads nothing.
+    fold: Fold,
     /// Every key `ank config` declares with what it is set to, once somebody
     /// has opened the pane that draws them, and `None` before that
     /// (TASK-b08d090f699c).
@@ -871,6 +877,7 @@ impl App {
             queue: None,
             dag: None,
             drawn: Drawn::default(),
+            fold: Fold::default(),
             config: None,
             needle: None,
             pending: None,
@@ -1088,6 +1095,22 @@ impl App {
         self.clamp(Focus::Graph);
     }
 
+    /// The graph already held, laid out again because the fold or the search
+    /// moved (TASK-67583993ef0d).
+    ///
+    /// **Nothing is read.** The rows are a function of the graph as `graph`
+    /// answered it, the fold and the needle, and the first of those has not
+    /// moved, so what changes is the layout and never the corpus behind it.
+    /// The cursor stays on the row it was on wherever that row survives the
+    /// change: a person who widened the graph to look around a task is still
+    /// standing on it.
+    fn refold(&mut self) {
+        let on = self.selected_id(Focus::Graph);
+        self.relayout();
+        self.keep_graph_on(on);
+        self.clamp(Focus::Graph);
+    }
+
     /// The graph's cursor, put back on the row that was under it before the
     /// rows moved, where that row is still drawn.
     fn keep_graph_on(&mut self, id: Option<String>) {
@@ -1142,13 +1165,29 @@ impl App {
         }
         let alive = |task: &DagTask| !finished(&task.status);
         let mut shown: HashSet<&str> = HashSet::new();
-        for task in dag.tasks.iter().filter(|t| alive(t)) {
-            shown.insert(task.id.as_str());
-            for blocker in blockers.get(task.id.as_str()).into_iter().flatten() {
-                if tasks.contains_key(blocker) {
-                    shown.insert(blocker);
+        match self.fold {
+            Fold::Open => {
+                for task in dag.tasks.iter().filter(|t| alive(t)) {
+                    shown.insert(task.id.as_str());
+                    for blocker in blockers.get(task.id.as_str()).into_iter().flatten() {
+                        if tasks.contains_key(blocker) {
+                            shown.insert(blocker);
+                        }
+                    }
                 }
             }
+            Fold::All => shown.extend(dag.tasks.iter().map(|t| t.id.as_str())),
+        }
+        // The search, over what the fold shows (TASK-67583993ef0d): the rows
+        // whose identifier or title carries the needle, matched as the
+        // listing matches it. What it hides is hidden from the layout too, so
+        // the lanes are laid out over the survivors and an edge to a hidden
+        // task is the layout's `unknown`, counted on its row as outside.
+        if let Some(needle) = self.search.as_ref().map(|s| s.to_ascii_lowercase()) {
+            shown.retain(|id| {
+                id.to_ascii_lowercase().contains(&needle)
+                    || tasks[id].title.to_ascii_lowercase().contains(&needle)
+            });
         }
         let mut order: Vec<&str> = Vec::with_capacity(shown.len());
         let mut placed: HashSet<&str> = HashSet::new();
@@ -1195,6 +1234,7 @@ impl App {
                         status: task.status.clone(),
                         title: task.title.clone(),
                         prefix: row.prefix,
+                        outside: row.unknown,
                     }
                 })
                 .collect(),
@@ -1469,6 +1509,17 @@ impl App {
         }
         match keys::typed(key, self.focus) {
             Press::Run(command) => self.act(command, ank),
+            // On GRAPH the same key walks the fold rather than the kind
+            // (TASK-67583993ef0d): the graph is a listing of tasks only, so
+            // the next thing to narrow it by is time, and the cell that says
+            // which kind is in force says which fold is. Laid out again from
+            // the graph held, and nothing is read.
+            Press::Cycle if self.focus == Focus::Graph => {
+                self.note = None;
+                self.fold = self.fold.next();
+                self.refold();
+                false
+            }
             Press::Cycle => {
                 let next = next_row_kind(self.kind.as_deref());
                 self.act(Command::Kind(next), ank)
@@ -1968,6 +2019,10 @@ impl App {
                 self.search = text;
                 self.cursors[Focus::Entities.slot()] = Cursor::default();
                 self.cursors[Focus::Queue.slot()] = Cursor::default();
+                // The graph narrows on the same needle (TASK-67583993ef0d),
+                // laid out again from the graph held: nothing is read, and the
+                // cursor stays on its row wherever the row survives.
+                self.refold();
             }
             Command::Constraints => self.pane_to(Pane::Constraints),
             // The pane, opened, and the keys read once because it was
@@ -2888,8 +2943,15 @@ impl App {
                     let rows = onto.total;
                     let c = self.cursors[Focus::Graph.slot()];
                     let shown = self.page(Focus::Graph).min(rows.saturating_sub(c.top));
+                    // The needle and never the kind: the graph is narrowed by
+                    // the search and folded by its own cell, and a kind it
+                    // does not filter by would be a note that lies.
+                    let narrowed = match &self.search {
+                        Some(s) => format!("   [matching '{s}']"),
+                        None => String::new(),
+                    };
                     Composed::of(&format!(
-                        "{name} {}   ({} tasks in the corpus)",
+                        "{name} {}{narrowed}   ({} tasks in the corpus)",
                         window(c.top, shown, rows),
                         dag.tasks.len()
                     ))
@@ -3104,9 +3166,12 @@ impl App {
             .fitted(width)];
         }
         if self.drawn.rows.is_empty() {
-            return vec![
-                Composed::of("  nothing is open, so nothing waits on anything").fitted(width),
-            ];
+            let said = match (&self.search, self.fold) {
+                (Some(_), _) => "  no task on the graph matches this search",
+                (None, Fold::Open) => "  nothing is open, so nothing waits on anything",
+                (None, Fold::All) => "  the corpus holds no task",
+            };
+            return vec![Composed::of(said).fitted(width)];
         }
         let c = self.cursors[Focus::Graph.slot()];
         let page = self.page(Focus::Graph);
@@ -3131,8 +3196,9 @@ impl App {
                         Field::id(&lane.id),
                         Field::word(&lane.status, STATUS, role),
                         Field::rest(&format!(
-                            "{}{}",
+                            "{}{}{}",
                             lane.title,
+                            outside(lane.outside),
                             if held(&lane.id) { "  [held]" } else { "" }
                         )),
                     ],
@@ -3898,7 +3964,7 @@ impl App {
     /// for itself, applied to the two targets that are not in that band.
     fn header_tail(&self, width: usize) -> String {
         let help = help_target();
-        let both = format!("{}{help}", kind_target(self.kind.as_deref()));
+        let both = format!("{}{help}", self.filter_cell());
         for tail in [both, help] {
             if width > tail.chars().count() {
                 return tail;
@@ -3928,6 +3994,20 @@ impl App {
         format!("{}{tail}", pad(said, width - tail.chars().count()))
     }
 
+    /// The cell beside the key list's target: the kind in force, or on GRAPH
+    /// the fold in force (TASK-67583993ef0d).
+    ///
+    /// One cell and one key, and what the cell says is what the key moves on
+    /// the screen a person is on, so a finger reaches the fold exactly where
+    /// it already reaches the kind. The two are padded to one width, so the
+    /// cell does not move when the screen changes under it.
+    fn filter_cell(&self) -> String {
+        match self.focus {
+            Focus::Graph => fold_target(self.fold),
+            _ => kind_target(self.kind.as_deref()),
+        }
+    }
+
     /// Where the key list's target is, which is [`App::help_line`] read
     /// backwards.
     ///
@@ -3952,7 +4032,7 @@ impl App {
     /// filter nobody was shown.
     fn kind_rect(&self, area: Rect) -> Rect {
         let header = self.arrange(area).header;
-        let wide = kind_target(self.kind.as_deref()).chars().count() as u16;
+        let wide = self.filter_cell().chars().count() as u16;
         let drawn = self.header_tail(header.width as usize).chars().count() as u16;
         let help = help_target().chars().count() as u16;
         if header.height == 0 || wide == 0 || drawn < wide + help {
@@ -4570,6 +4650,23 @@ struct Lane {
     status: String,
     title: String,
     prefix: String,
+    /// How many tasks it is blocked by are not rows of this layout -- folded,
+    /// hidden by the search, or named and never listed -- so the edges to
+    /// them are counted here rather than drawn (TASK-67583993ef0d).
+    outside: usize,
+}
+
+/// What a graph row says after its title about the blockers it names that
+/// are not rows (TASK-67583993ef0d), and nothing where there are none.
+///
+/// `ank graph`'s own words for a blocker outside its perimeter, so the CLI
+/// and the reader say one thing about one fact: a task drawn without the
+/// tasks it waits on still says that it waits on something.
+fn outside(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        n => format!("  (+{n} blocker(s) outside)"),
+    }
 }
 
 /// Whether a status is one the graph counts as finished: `done` or `closed`,
@@ -4691,12 +4788,33 @@ pub fn kind_target(kind: Option<&str>) -> String {
     }
 }
 
+/// The same cell on GRAPH, where the key behind it walks the fold
+/// (TASK-67583993ef0d): the fold in force, in the word [`Fold::word`] gives
+/// it, which is the word the key list uses for it too.
+///
+/// Padded to the width [`kind_target`] is padded to, so the cell is one
+/// rectangle on every screen and a second press lands where the first did.
+/// Public for [`kind_target`]'s reason: the suite driving the binary finds
+/// this cell on the grid rather than spelling it.
+pub fn fold_target(fold: Fold) -> String {
+    match cycle_binding() {
+        Some(binding) => format!(
+            "[{} {}]",
+            named(binding.key),
+            pad(fold.word(), widest_kind())
+        ),
+        None => String::new(),
+    }
+}
+
 /// The columns the kind's word is drawn in: the longest of every word that can
-/// stand there, which is the kinds a row may have and [`EVERY_KIND`].
+/// stand there, which is the kinds a row may have, [`EVERY_KIND`], and the
+/// folds the same cell names on GRAPH.
 fn widest_kind() -> usize {
     row_kinds()
         .into_iter()
         .chain(std::iter::once(EVERY_KIND))
+        .chain(Fold::EVERY.iter().map(|fold| fold.word()))
         .map(|kind| kind.chars().count())
         .max()
         .unwrap_or(0)
@@ -10962,5 +11080,306 @@ mod tests {
             "a graph the reload made stale is still drawn:\n{}",
             a.frame()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The fold, and the search, on GRAPH (TASK-67583993ef0d)
+    // -----------------------------------------------------------------------
+
+    /// The key the kind is cycled by elsewhere, read out of the table.
+    fn cycle_key() -> KeyCode {
+        cycle_binding()
+            .expect("a row of the table cycles the kind filter")
+            .key
+    }
+
+    /// The header's first row, which is where the cell is drawn.
+    fn head(a: &App) -> String {
+        a.frame().lines().next().unwrap_or_default().to_string()
+    }
+
+    /// **On GRAPH the key that cycles the kind elsewhere cycles the fold
+    /// between open and all, and the header cell shows the fold in force**
+    /// (TASK-67583993ef0d).
+    ///
+    /// Open is the default: ten rows of twelve, the two finished tasks
+    /// nothing open names folded. All is every task of the corpus, each on
+    /// one row, every dependent above what it is blocked by -- the history
+    /// included. And the second press gives back the frame at rest, character
+    /// for character.
+    #[test]
+    fn the_cycle_key_on_the_graph_walks_the_fold_and_the_header_cell_says_which() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let rest = a.frame();
+        assert!(
+            head(&a).contains("[f open]"),
+            "the cell does not say the graph is folded to the open work:\n{rest}"
+        );
+        assert_eq!(graph_ids(&a).len(), 10, "\n{rest}");
+
+        tap(&mut a, &ank, cycle_key());
+        let all = a.frame();
+        assert!(
+            head(&a).contains("[f all ]"),
+            "the cell does not say every task is shown:\n{all}"
+        );
+        assert!(
+            all.contains("3 GRAPH all 12   (12 tasks in the corpus)"),
+            "\n{all}"
+        );
+        let ids = graph_ids(&a);
+        assert_eq!(ids.len(), 12, "\n{all}");
+        for id in SHOWN.iter().chain([HISTORY, HISTORY_ON_HISTORY].iter()) {
+            assert_eq!(
+                ids.iter().filter(|i| **i == short_of(id)).count(),
+                1,
+                "{id} is not on exactly one row:\n{all}"
+            );
+        }
+        let at = |id: &str| ids.iter().position(|i| *i == short_of(id)).unwrap();
+        for (task, blocker) in [
+            (CHAIN_2, CHAIN_1),
+            (CHAIN_3, CHAIN_2),
+            (DIAMOND_LEFT, DIAMOND_TOP),
+            (DIAMOND_RIGHT, DIAMOND_TOP),
+            (DIAMOND_BOTTOM, DIAMOND_LEFT),
+            (DIAMOND_BOTTOM, DIAMOND_RIGHT),
+            (ITS_DEPENDENT, CLOSED_BLOCKER),
+            (HISTORY_ON_HISTORY, HISTORY),
+        ] {
+            assert!(
+                at(task) < at(blocker),
+                "{task} is not above {blocker}:\n{all}"
+            );
+        }
+        // The kind is the entities' and the fold did not touch it.
+        assert_eq!(a.kind, None, "the key on the graph moved the kind");
+
+        tap(&mut a, &ank, cycle_key());
+        assert_eq!(a.frame(), rest, "the second press is not the graph at rest");
+        assert!(a.note.is_none(), "the fold reached the CLI: {:?}", a.note);
+
+        // Off the graph the same key is the kind's again, and the cell says so.
+        tap(&mut a, &ank, KeyCode::Char('2'));
+        tap(&mut a, &ank, cycle_key());
+        assert_eq!(a.kind.as_deref(), Some("adr"));
+        assert!(head(&a).contains("[f adr ]"), "\n{}", a.frame());
+    }
+
+    /// **A finger reaches the fold where it already reaches the kind**
+    /// (TASK-67583993ef0d, ADR-559eebf5c6f5): a touch on the header's cell
+    /// on GRAPH is the key pressed, at every window the cell is drawn on.
+    #[test]
+    fn touching_the_cell_on_the_graph_walks_the_fold() {
+        let ank = nowhere();
+        for window in [PHONE, (80, 24), (120, 40), (160, 45)] {
+            let made = || {
+                let mut a = graphed();
+                a.resize(window.0 as u16, window.1 as u16);
+                a
+            };
+            let (mut touched, mut pressed) = (made(), made());
+            for step in ["[f all ]", "[f open]"] {
+                let cell = touched.kind_rect(touched.area());
+                assert!(cell.width > 0, "no cell to press at {window:?}");
+                touch(&mut touched, &ank, Position::new(cell.x, cell.y));
+                tap(&mut pressed, &ank, cycle_key());
+                assert!(
+                    head(&touched).contains(step),
+                    "the touch did not reach {step} at {window:?}:\n{}",
+                    touched.frame()
+                );
+                assert_eq!(
+                    touched.frame(),
+                    pressed.frame(),
+                    "touching the cell is not pressing the key at {window:?}"
+                );
+            }
+        }
+    }
+
+    /// **The fold changes and the cursor stays on the row it was on**, and
+    /// nothing reaches the CLI (TASK-67583993ef0d).
+    #[test]
+    fn the_fold_keeps_the_cursor_on_its_row_and_reads_nothing() {
+        let ank = nowhere();
+        let mut a = graphed();
+        while a.selected_id(Focus::Graph).as_deref() != Some(CLOSED_BLOCKER) {
+            tap(&mut a, &ank, KeyCode::Char('j'));
+        }
+        for _ in 0..3 {
+            tap(&mut a, &ank, cycle_key());
+            assert_eq!(
+                a.selected_id(Focus::Graph).as_deref(),
+                Some(CLOSED_BLOCKER),
+                "the fold moved the cursor off its row:\n{}",
+                a.frame()
+            );
+            assert!(
+                graph_row(&a, CLOSED_BLOCKER).starts_with("> "),
+                "the row is not drawn under the cursor:\n{}",
+                a.frame()
+            );
+        }
+        assert!(a.note.is_none(), "the fold reached the CLI: {:?}", a.note);
+    }
+
+    /// **The key list names what the key does on GRAPH in the words the
+    /// header cell uses there** (TASK-67583993ef0d).
+    ///
+    /// The words are read off the cell as drawn, under each fold, and found
+    /// on the row `?` draws for the key: a list saying one thing and a cell
+    /// another would be two vocabularies for one key.
+    #[test]
+    fn the_key_list_names_the_fold_in_the_words_of_the_cell() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let row = format!("  {}", cycle_binding().expect("the cycle").entry());
+        assert_eq!(row, "  f kind; open or all on GRAPH");
+        for _ in 0..2 {
+            let head = head(&a);
+            let at = head.find("[f ").expect("the cell is drawn") + 3;
+            let word = head[at..].split(']').next().unwrap().trim().to_string();
+            assert!(
+                row.contains(&format!(" {word} ")),
+                "the cell says {word:?} and the key list does not: {row:?}"
+            );
+            tap(&mut a, &ank, cycle_key());
+        }
+        tap(&mut a, &ank, KeyCode::Char('?'));
+        assert!(
+            a.list_lines().iter().any(|(line, _)| *line == row),
+            "`?` does not draw the row:\n{}",
+            a.frame()
+        );
+    }
+
+    /// The search opened and a needle typed into it, one key at a time.
+    fn searched(a: &mut App, ank: &Ank, needle: &str) {
+        tap(a, ank, KeyCode::Char(keys::FIND));
+        for c in needle.chars() {
+            tap(a, ank, KeyCode::Char(c));
+        }
+    }
+
+    /// **The search narrows the graph as it is typed to the rows whose
+    /// identifier or title carries the needle, the lanes are laid out again
+    /// over the survivors, and an edge to a task the search hid is counted on
+    /// its row as outside rather than drawn** (TASK-67583993ef0d).
+    ///
+    /// `left of` leaves the diamond's left alone: its blocker, the top, is
+    /// hidden, so the row has one lane and says one blocker is outside, which
+    /// is the count and the words `ank graph` uses for a blocker outside its
+    /// perimeter. Escape gives the fold back, row for row.
+    #[test]
+    fn the_search_narrows_the_graph_and_counts_what_it_hid_as_outside() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let rest = graph_ids(&a);
+        searched(&mut a, &ank, "left of");
+        assert_eq!(
+            graph_ids(&a),
+            [short_of(DIAMOND_LEFT)],
+            "the needle did not narrow the graph to its one task:\n{}",
+            a.frame()
+        );
+        assert_eq!(
+            region_rows(&a)[0].trim_end(),
+            "> ○  TASK-d1a2   open          The left of a diamond  (+1 blocker(s) outside)",
+            "\n{}",
+            a.frame()
+        );
+        assert!(
+            a.frame().contains("3 GRAPH all 1   [matching 'left of']"),
+            "the title does not say the graph is narrowed:\n{}",
+            a.frame()
+        );
+        // And whole at the desk, which `tests/graph.rs` asserts of the binary.
+        a.resize(80, 24);
+        assert!(
+            region_rows(&a)[0]
+                .trim_end()
+                .ends_with("The left of a diamond  (+1 blocker(s) outside)"),
+            "the count is cut at eighty columns:\n{}",
+            a.frame()
+        );
+        a.resize(DASHBOARD - 1, 40);
+        // An identifier narrows it too, as on the listing.
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(graph_ids(&a), rest, "Escape did not give the fold back");
+        searched(&mut a, &ank, "c0a2");
+        assert_eq!(graph_ids(&a), [short_of(CHAIN_2)], "\n{}", a.frame());
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(graph_ids(&a), rest, "Escape did not give the fold back");
+        assert!(
+            !a.frame().contains("outside") && !a.frame().contains("matching"),
+            "the whole fold still says it is narrowed:\n{}",
+            a.frame()
+        );
+
+        // Under the other fold the search narrows every task: two survivors
+        // that name each other keep their edge, and one alone counts it.
+        tap(&mut a, &ank, cycle_key());
+        searched(&mut a, &ank, "history");
+        assert_eq!(
+            graph_ids(&a),
+            [short_of(HISTORY_ON_HISTORY), short_of(HISTORY)],
+            "\n{}",
+            a.frame()
+        );
+        assert!(!a.frame().contains("outside"), "\n{}", a.frame());
+        tap(&mut a, &ank, KeyCode::Esc);
+        searched(&mut a, &ank, "on history");
+        assert_eq!(graph_ids(&a), [short_of(HISTORY_ON_HISTORY)]);
+        assert!(
+            graph_row(&a, HISTORY_ON_HISTORY)
+                .trim_end()
+                .ends_with("History on history  (+1 blocker(s) outside)"),
+            "\n{}",
+            a.frame()
+        );
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(
+            graph_ids(&a).len(),
+            12,
+            "Escape did not give every task back"
+        );
+        assert!(a.note.is_none(), "the search reached the CLI: {:?}", a.note);
+    }
+
+    /// **The search keeps the cursor on the row it was on wherever that row
+    /// survives**, and reads nothing (TASK-67583993ef0d).
+    #[test]
+    fn the_search_keeps_the_cursor_on_its_row_where_it_survives() {
+        let ank = nowhere();
+        let mut a = graphed();
+        while a.selected_id(Focus::Graph).as_deref() != Some(DIAMOND_TOP) {
+            tap(&mut a, &ank, KeyCode::Char('j'));
+        }
+        tap(&mut a, &ank, KeyCode::Char(keys::FIND));
+        for c in "of a diamond".chars() {
+            tap(&mut a, &ank, KeyCode::Char(c));
+            assert_eq!(
+                a.selected_id(Focus::Graph).as_deref(),
+                Some(DIAMOND_TOP),
+                "the needle moved the cursor off a row it kept:\n{}",
+                a.frame()
+            );
+        }
+        assert_eq!(graph_ids(&a).len(), 4, "\n{}", a.frame());
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(
+            a.selected_id(Focus::Graph).as_deref(),
+            Some(DIAMOND_TOP),
+            "Escape moved the cursor off its row:\n{}",
+            a.frame()
+        );
+        assert!(
+            graph_row(&a, DIAMOND_TOP).starts_with("> "),
+            "\n{}",
+            a.frame()
+        );
+        assert!(a.note.is_none(), "the search reached the CLI: {:?}", a.note);
     }
 }
