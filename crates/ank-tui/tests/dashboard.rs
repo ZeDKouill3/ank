@@ -62,14 +62,28 @@ fn focused_line(frame: &str) -> String {
 /// panel beside it -- so the panel is the title the marker itself prefixes.
 fn focused_title(frame: &str) -> &'static str {
     let line = focused_line(frame);
-    let at = line.find(FOCUSED).unwrap();
-    let after = &line[at..];
+    nearest_after_marker(&line)
+        .unwrap_or_else(|| panic!("the focus marker prefixes no title: {line}\n{frame}"))
+}
+
+/// The title nearest after the focus marker on `line`, where it carries one.
+fn nearest_after_marker(line: &str) -> Option<&'static str> {
+    let after = &line[line.find(FOCUSED)?..];
     TITLES
         .into_iter()
         .filter_map(|t| after.find(t).map(|i| (i, t)))
         .min()
         .map(|(_, t)| t)
-        .unwrap_or_else(|| panic!("the focus marker prefixes no title: {line}\n{frame}"))
+}
+
+/// [`focused_title`], answering `None` rather than failing: a frame waited on
+/// may carry no marker yet, or two while it is half repainted.
+fn marked(frame: &str) -> Option<&'static str> {
+    let mut lines = frame.lines().filter(|l| l.contains(FOCUSED));
+    match (lines.next(), lines.next()) {
+        (Some(line), None) => nearest_after_marker(line),
+        _ => None,
+    }
 }
 
 /// The ring, whole, which is a wide frame with no document open.
@@ -146,12 +160,12 @@ fn the_focus_moves_and_no_panel_leaves_a_wide_frame() {
         ("\t", "4 QUEUE"),
     ] {
         live.send(key);
+        // The title the marker prefixes, and not any title after it on its
+        // line: `3 GRAPH` stands on the right panel at rest
+        // (TASK-a9cd362ee5e2), on the line `1 CLAIMS` opens, so a frame still
+        // focused on the claims carries it after the marker as well.
         let frame = live.until(&format!("{lands} to have the focus"), |t| {
-            every_title(t) && t.lines().filter(|l| l.contains(FOCUSED)).count() == 1 && {
-                let line = t.lines().find(|l| l.contains(FOCUSED)).unwrap();
-                let at = line.find(FOCUSED).unwrap();
-                line[at..].contains(lands)
-            }
+            every_title(t) && marked(t) == Some(lands)
         });
         assert_eq!(focused_title(&frame), lands, "{frame}");
         assert!(
