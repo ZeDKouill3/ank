@@ -23,14 +23,21 @@
 //! A key that spawned a read would grow it; the keys that move a cursor
 //! leave it byte for byte.
 //!
-//! `#[cfg(unix)]` for the reason every sibling suite gives: a pseudo-terminal
-//! on Windows is ConPTY, and reaching it means the console API this workspace
-//! does not otherwise call.
+//! Every session here is `#[cfg(unix)]` for the reason every sibling suite
+//! gives: a pseudo-terminal on Windows is ConPTY, and reaching it means the
+//! console API this workspace does not otherwise call. **The instrument that
+//! reads the frame is not** (TASK-44e35bd40c83): [`graph_rows`] is pure text,
+//! and it is held to a literal frame on every platform, so the one piece of
+//! this suite that every PTY count rests on is measured where the suite was
+//! written and not only where it runs.
 
-#![cfg(unix)]
+// What only the sessions call is unused where the sessions are not compiled.
+#![cfg_attr(not(unix), allow(dead_code))]
 
+#[cfg(unix)]
 mod terminal;
 
+#[cfg(unix)]
 use terminal::{short_of, Graphed, Live, Repo};
 
 /// The desk, under the dashboard's width: one region.
@@ -56,6 +63,7 @@ fn wide(columns: u16) -> bool {
 /// Under the dashboard's width the region draws one screen, so its title is
 /// the whole of it. On the dashboard every title of the ring is on every frame,
 /// and the one with the focus is the one the marker stands in front of.
+#[cfg(unix)]
 fn reached(columns: u16, title: &str) -> String {
     match wide(columns) {
         true => terminal::focused(title),
@@ -64,6 +72,7 @@ fn reached(columns: u16, title: &str) -> String {
 }
 
 /// The session, open on the entities with the corpus read.
+#[cfg(unix)]
 fn opened(live: &Live, columns: u16) -> String {
     live.until("the session to open", |t| {
         t.contains(&reached(columns, "2 ENTITIES")) && !t.contains(terminal::UNREAD)
@@ -116,6 +125,7 @@ fn graph_drawn(frame: &str) -> bool {
 /// Under the dashboard's width `3` puts it in the region and the arrival
 /// reads it; on the dashboard it was read on the opening and `3` only moves
 /// the focus onto it.
+#[cfg(unix)]
 fn on_graph(live: &mut Live, columns: u16) -> String {
     live.send("3");
     live.until("the graph to be drawn with the focus on it", |t| {
@@ -159,25 +169,34 @@ impl GraphRow {
 
 /// The rows of the graph panel, top first.
 ///
-/// Under the dashboard's width the panel is the region, against the window's
-/// left edge; on the dashboard it is the right panel, found by the column its
-/// title starts at -- the title is drawn three columns in from the panel's
-/// corner, after the focus mark.
+/// **The panel is a rectangle, and a row is what lies inside it.** Under the
+/// dashboard's width the panel is the region, against the window's left edge;
+/// on the dashboard it is the right panel, found by the column its title
+/// starts at -- the title is drawn three columns in from the panel's corner,
+/// after the focus mark. Either way it runs to the window's right edge, so its
+/// right border is the window's last column. A line is a row when a vertical
+/// stands at the left border, and its text is every column between the two
+/// borders.
+///
+/// Never the first vertical glyph after the border (TASK-44e35bd40c83): `│`
+/// and `|` are the layout's Pass glyph as well as the border's, so a row
+/// cut there loses the identifier behind a passing lane.
 fn graph_rows(frame: &str, columns: u16) -> Vec<GraphRow> {
     let left = match wide(columns) {
         true => column_of(frame, "3 GRAPH").expect("the graph's title") - 3,
         false => 0,
     };
+    let right = usize::from(columns) - 1;
     let vertical = |c: char| c == '\u{2503}' || c == '\u{2502}' || c == '|';
     frame
         .lines()
         .enumerate()
         .filter_map(|(line, l)| {
-            let cells: Vec<char> = l.chars().skip(left).collect();
-            if !cells.first().is_some_and(|c| vertical(*c)) {
+            let cells: Vec<char> = l.chars().collect();
+            if !cells.get(left).is_some_and(|c| vertical(*c)) {
                 return None;
             }
-            let inside: String = cells[1..].iter().take_while(|c| !vertical(**c)).collect();
+            let inside: String = cells[left + 1..right.min(cells.len())].iter().collect();
             inside.contains("TASK-").then(|| GraphRow {
                 line,
                 text: inside.trim_end().to_string(),
@@ -187,11 +206,127 @@ fn graph_rows(frame: &str, columns: u16) -> Vec<GraphRow> {
 }
 
 /// The row carrying one task.
+#[cfg(unix)]
 fn row_of<'a>(rows: &'a [GraphRow], id: &str) -> &'a GraphRow {
     let short = short_of(id);
     rows.iter()
         .find(|r| r.short() == short)
         .unwrap_or_else(|| panic!("{id} is not a row of the graph: {rows:?}"))
+}
+
+/// A dashboard frame, a hundred and twenty columns in the box-drawing
+/// alphabet: the header, the rule, the entities in a left column forty-eight
+/// wide, and the graph's panel beside them to the window's edge, focused,
+/// with lanes passing through most of its rows.
+const DRAWN_WIDE: &str = "\
+ank  10 tasks   TASK-c3a3 is held
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭ 2 ENTITIES ──────────────────────────────────╮┏▶ 3 GRAPH all 10   (10 tasks in the corpus) ━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  TASK-a10e   open   A task with no edge      │┃> ●      TASK-a10e   open          A task with no edge                ┃
+│  TASK-de9e   open   A dependent of the c     │┃  ●      TASK-de9e   open          A dependent of the closed one      ┃
+│  TASK-b077   open   The bottom of a diam     │┃  │ ○─┐  TASK-b077   open          The bottom of a diamond            ┃
+│                                              │┃  │ │ ○  TASK-4167   open          The right of a diamond             ┃
+│                                              │┃  │ ○─┤  TASK-1ef7   open          The left of a diamond              ┃
+│                                              │┃  │   ●  TASK-7090   open          The top of a diamond               ┃
+│                                              │┃  │ ○    TASK-c3a3   open          The third of a chain               ┃
+│                                              │┃  │ ○    TASK-c2a2   open          The second of a chain              ┃
+│                                              │┃  │ ●    TASK-c1a1   open          The first of a chain               ┃
+│                                              │┃  ·      TASK-c105   closed        A blocker that was closed          ┃
+│                                              │┃                                                                      ┃
+│                                              │┃                                                                      ┃
+╰──────────────────────────────────────────────╯┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
+
+/// The same graph at the desk, eighty columns, on a terminal that declared
+/// itself dumb: one region from the window's left edge to its right, ruled in
+/// ASCII, where a passing lane is the very `|` the border is drawn with.
+const DRAWN_DESK: &str = "\
+ank  10 tasks   TASK-c3a3 is held
+--------------------------------------------------------------------------------
++> 3 GRAPH all 10   (10 tasks in the corpus) ==================================+
+|> *      TASK-a10e   open          A task with no edge                        |
+|  *      TASK-de9e   open          A dependent of the closed one              |
+|  | o-+  TASK-b077   open          The bottom of a diamond                    |
+|  | | o  TASK-4167   open          The right of a diamond                     |
+|  | o-+  TASK-1ef7   open          The left of a diamond                      |
+|  |   *  TASK-7090   open          The top of a diamond                       |
+|  | o    TASK-c3a3   open          The third of a chain                       |
+|  | o    TASK-c2a2   open          The second of a chain                      |
+|  | *    TASK-c1a1   open          The first of a chain                       |
+|  .      TASK-c105   closed        A blocker that was closed                  |
+|                                                                              |
+|                                                                              |
++==============================================================================+";
+
+/// **The rows of the graph are found inside the panel's rectangle and never
+/// end at the first vertical glyph** (TASK-44e35bd40c83), on every platform.
+///
+/// `│` and `|` are the border's and the layout's Pass glyph both, so a row
+/// whose lane field carries a passing lane is the row an instrument cutting
+/// at the first vertical loses. Two literal frames, one per alphabet and one
+/// per arrangement, and every row, identifier and lane field of each comes
+/// back -- while the left column's rows and the header, which name tasks too,
+/// are not rows of the graph.
+#[test]
+fn the_graph_rows_are_found_inside_the_panel_whatever_lanes_pass_through_them() {
+    let shorts = [
+        "TASK-a10e",
+        "TASK-de9e",
+        "TASK-b077",
+        "TASK-4167",
+        "TASK-1ef7",
+        "TASK-7090",
+        "TASK-c3a3",
+        "TASK-c2a2",
+        "TASK-c1a1",
+        "TASK-c105",
+    ];
+    let boxes = [
+        "●",
+        "●",
+        "│ ○─┐",
+        "│ │ ○",
+        "│ ○─┤",
+        "│   ●",
+        "│ ○",
+        "│ ○",
+        "│ ●",
+        "·",
+    ];
+    let ascii = [
+        "*", "*", "| o-+", "| | o", "| o-+", "|   *", "| o", "| o", "| *", ".",
+    ];
+    for (frame, columns, lanes, third) in [
+        (
+            DRAWN_WIDE,
+            120,
+            boxes,
+            "  │ ○─┐  TASK-b077   open          The bottom of a diamond",
+        ),
+        (
+            DRAWN_DESK,
+            80,
+            ascii,
+            "  | o-+  TASK-b077   open          The bottom of a diamond",
+        ),
+    ] {
+        let rows = graph_rows(frame, columns);
+        assert_eq!(
+            rows.iter().map(GraphRow::short).collect::<Vec<_>>(),
+            shorts,
+            "at {columns} columns: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().map(|r| r.line).collect::<Vec<_>>(),
+            (3..=12).collect::<Vec<_>>(),
+            "at {columns} columns: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().map(GraphRow::lanes).collect::<Vec<_>>(),
+            lanes,
+            "at {columns} columns: {rows:?}"
+        );
+        assert_eq!(rows[2].text, third, "at {columns} columns");
+    }
 }
 
 /// The lines of the trace file, which is what a read costs in the one unit
@@ -219,16 +354,47 @@ fn added(before: &[String], after: &[String]) -> Vec<String> {
     after[before.len()..].to_vec()
 }
 
+/// The scopes an entity declares, read off the `content` of what
+/// `ank show --json` printed: the items under `scope:` in its frontmatter.
+///
+/// Written here rather than borrowed from the reader, because what is being
+/// measured is the reader's cost against the verbs a person would run, and
+/// an instrument that asked the reader which verbs to run would be measuring
+/// the reader against itself.
+fn declared_scopes(shown: &str) -> Vec<String> {
+    let doc: serde_json::Value = serde_json::from_str(shown).expect("show printed JSON");
+    let content = doc["content"].as_str().expect("show printed the content");
+    let mut lines = content
+        .lines()
+        .skip(1)
+        .take_while(|l| l.trim_end() != "---")
+        .skip_while(|l| !l.starts_with("scope:"));
+    match lines.next().map(|l| l["scope:".len()..].trim()) {
+        None => Vec::new(),
+        Some(flow) if flow.starts_with('[') => flow
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(_) => lines
+            .map_while(|l| l.trim_start().strip_prefix("- "))
+            .map(|item| item.trim().to_string())
+            .collect(),
+    }
+}
+
 /// **`3` reaches `3 GRAPH`, and what the graph holds is one row per open
 /// task of the fixture, placed above everything it waits on**, at both
 /// windows (TASK-a9cd362ee5e2, TASK-643611645dea).
 ///
 /// Ten tasks and ten rows: nine open, and the closed blocker drawn because
 /// its dependent is open, under that dependent. The row of the task with two
-/// blockers leaves toward a second lane and the row under it carries two;
+/// blockers leaves toward a second lane and the row under it carries both;
 /// the two tasks sharing a blocker join one lane before the blocker's row,
-/// which carries one. And the title counts what is shown and what the corpus
+/// which gathers none. And the title counts what is shown and what the corpus
 /// holds, as the entities title does.
+#[cfg(unix)]
 #[test]
 fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers() {
     let fixture = Repo::graphed();
@@ -287,25 +453,66 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
                 "{task} is not above {blocker} at {columns}x{rows}:\n{frame}"
             );
         }
+        // The lanes are read by column and never counted across the row: the
+        // rows come in the listing's order, which within one second of
+        // `created` is the order of the identifiers, so which other lanes pass
+        // beside the diamond is the hash's to decide (TASK-44e35bd40c83).
+        use ank_tui::graph::Glyph;
+        let glyph = |g: Glyph| ank_tui::graph::Alphabet::Boxes.glyph(g);
+        let leaves = [Glyph::LeaveRight, Glyph::LeaveLeft, Glyph::LeaveThrough].map(glyph);
+        let joins = [Glyph::JoinRight, Glyph::JoinLeft, Glyph::JoinThrough].map(glyph);
+        let cells = |r: &GraphRow| r.lanes().chars().collect::<Vec<char>>();
         // Two blockers: the row leaves to a second lane, and the row under it
-        // carries two lanes.
+        // carries both lanes, the node's own and the one it left toward.
         let bottom_row = row_of(&drawn, bottom);
+        let bottom_cells = cells(bottom_row);
+        let node = bottom_cells
+            .iter()
+            .position(|c| *c == glyph(Glyph::Waiting))
+            .unwrap_or_else(|| panic!("the diamond's bottom has no node: {bottom_row:?}"));
+        let corner = bottom_cells
+            .iter()
+            .position(|c| leaves.contains(c))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the diamond's bottom leaves toward no second lane at \
+                     {columns}x{rows}: {:?}\n{frame}",
+                    bottom_row.lanes()
+                )
+            });
         let under = drawn
             .iter()
             .find(|r| r.line == bottom_row.line + 1)
             .unwrap_or_else(|| panic!("no row under the diamond's bottom:\n{frame}"));
-        assert_eq!(
-            under.lane_cells(),
-            2,
-            "two lanes under a task with two blockers: {:?} then {:?} at \
-             {columns}x{rows}:\n{frame}",
-            bottom_row.lanes(),
-            under.lanes()
+        for column in [node, corner] {
+            assert!(
+                cells(under).get(column).is_some_and(|c| *c != ' '),
+                "the lane in column {column} stops under a task with two blockers: \
+                 {:?} then {:?} at {columns}x{rows}:\n{frame}",
+                bottom_row.lanes(),
+                under.lanes()
+            );
+        }
+        // One blocker shared: the second of the two tasks waiting on it joins
+        // the lane already waiting, so the blocker's row gathers nothing.
+        let second = match at(left) > at(right) {
+            true => left,
+            false => right,
+        };
+        assert!(
+            row_of(&drawn, second)
+                .lanes()
+                .chars()
+                .any(|c| joins.contains(&c)),
+            "{second} does not join the lane already waiting for {top} at \
+             {columns}x{rows}: {:?}\n{frame}",
+            row_of(&drawn, second).lanes()
         );
-        // One blocker shared: the two lanes have joined before its row.
-        assert_eq!(
-            row_of(&drawn, top).lane_cells(),
-            1,
+        assert!(
+            !row_of(&drawn, top)
+                .lanes()
+                .chars()
+                .any(|c| joins.contains(&c) || leaves.contains(&c)),
             "the lanes did not join before the shared blocker's row: {:?} at \
              {columns}x{rows}:\n{frame}",
             row_of(&drawn, top).lanes()
@@ -320,6 +527,7 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
 /// The status column keeps the word the CLI gave -- `open` on the dependent
 /// whose blocker is closed and on the chain's third, which waits -- and the
 /// cell on the lane tells them apart.
+#[cfg(unix)]
 #[test]
 fn the_node_character_says_ready_waiting_or_finished() {
     let fixture = Repo::graphed();
@@ -356,6 +564,7 @@ fn the_node_character_says_ready_waiting_or_finished() {
 /// **The frame painted and the frame drawn with `NO_COLOR` are identical
 /// character for character** (TASK-643611645dea, ADR-1f70ce2c3eac), at both
 /// windows.
+#[cfg(unix)]
 #[test]
 fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
     let fixture = Repo::graphed();
@@ -383,6 +592,7 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
 /// **On a terminal declaring `TERM=dumb` the lanes and nodes are the ASCII
 /// alphabet the layout module declares** (TASK-643611645dea,
 /// ADR-559eebf5c6f5), at both windows.
+#[cfg(unix)]
 #[test]
 fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
     let fixture = Repo::graphed();
@@ -430,8 +640,12 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
 /// rows while the graph still said it was being read. Under that width the
 /// opening costs one read and the arrival at the graph one more; a second
 /// arrival costs nothing. Every movement leaves the trace byte for byte.
-/// Enter costs exactly what one `ank show` costs, read off a `show` run by
-/// hand. `u` reads the graph again, in the pass it runs.
+/// Enter costs exactly what the document costs to read: one `ank show`, and
+/// one `ank scope` for every scope the task declares, which is how the
+/// document finds the constraints binding it -- read off those verbs run by
+/// hand (TASK-44e35bd40c83). `u` reads the graph again, in the pass it runs,
+/// and the document still held after Back with it.
+#[cfg(unix)]
 #[test]
 fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_graph_again() {
     let fixture = Repo::graphed();
@@ -521,8 +735,10 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         live.resize(columns, rows);
         moved(&mut live, "j", &at(2));
 
-        // Enter opens the row's document, and costs one `show` and nothing
-        // else: measured against the same verb run by hand.
+        // Enter opens the row's document, and costs one `show` and one
+        // `scope` for every scope the task declares, which is how the document
+        // finds the constraints binding it, and nothing else: measured against
+        // the same verbs run by hand (TASK-44e35bd40c83).
         let row = at(2);
         let full = fixture
             .open()
@@ -533,11 +749,17 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
             .expect("the row names a task of the fixture");
         let by_hand = fixture.repo.0.join(format!("show-{columns}.trace"));
         let _ = std::fs::remove_file(&by_hand);
-        let shown = fixture.repo.tried(
-            &["show", &full, "--json"],
-            &[("ANK_TRACE_READS", by_hand.to_str().expect("a UTF-8 path"))],
-        );
+        let hand_traced = [("ANK_TRACE_READS", by_hand.to_str().expect("a UTF-8 path"))];
+        let shown = fixture.repo.tried(&["show", &full, "--json"], &hand_traced);
         assert!(shown.status.success(), "show by hand: {shown:?}");
+        // Read off what `show` printed, and held to what the fixture wrote:
+        // one scope, `src/**`, on every task.
+        let globs = declared_scopes(&String::from_utf8_lossy(&shown.stdout));
+        assert_eq!(globs, ["src/**"], "the scopes {full} declares: {shown:?}");
+        for glob in &globs {
+            let scoped = fixture.repo.tried(&["scope", glob, "--json"], &hand_traced);
+            assert!(scoped.status.success(), "scope {glob} by hand: {scoped:?}");
+        }
         let before_enter = trace(&trace_path);
         live.send("\r");
         let open = live.until("the document to open", |t| {
@@ -549,7 +771,8 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         hand.sort();
         assert_eq!(
             cost, hand,
-            "Enter cost something other than one show at {columns}x{rows}:\n{open}"
+            "Enter cost something other than one show and a scope for each of \
+             {globs:?} at {columns}x{rows}:\n{open}"
         );
         for n in 0..=9 {
             assert!(
@@ -587,18 +810,28 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         );
 
         // `u` reads it again, in its pass: `find` and the graph under the
-        // width, and the claims and the queue beside them on it.
+        // width, and the claims and the queue beside them on it. And the
+        // document Enter opened is still held after Back, so the reload reads
+        // it again too, as it does wherever one is held: the `show` and the
+        // scopes run by hand above, once more (TASK-44e35bd40c83).
+        // Waited on until the whole pass has landed, then settled before it
+        // is counted: the old graph stays drawn while the pass runs, so a
+        // frame that says "drawn" says nothing about which read is last, and a
+        // read past the pass has had the settling to land in.
         let before_u = trace(&trace_path);
+        let pass = if wide(columns) { 4 } else { 2 };
+        let document = reads(&hand);
         live.send("u");
-        let reloaded = live.until("the reload to land", |t| {
-            reads(&trace(&trace_path)) > reads(&before_u) + usize::from(wide(columns)) * 2
-                && graph_drawn(t)
+        live.until("the reload to land", |t| {
+            reads(&trace(&trace_path)) >= reads(&before_u) + pass + document && graph_drawn(t)
         });
-        let cost = reads(&added(&before_u, &trace(&trace_path)));
+        let reloaded = live.frame();
+        let cost = added(&before_u, &trace(&trace_path));
         assert_eq!(
-            cost,
-            if wide(columns) { 4 } else { 2 },
-            "u did not read the graph again at {columns}x{rows}:\n{reloaded}"
+            reads(&cost),
+            pass + document,
+            "u did not read the graph again, once, beside the {document} read(s) of the \
+             document it holds, at {columns}x{rows}: {cost:?}\n{reloaded}"
         );
         live.quit();
     }
@@ -606,6 +839,7 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
 
 /// **A tap selects the row under it and a second tap on it opens it**
 /// (TASK-643611645dea, ADR-559eebf5c6f5), at both windows.
+#[cfg(unix)]
 #[test]
 fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
     let fixture = Repo::graphed();
@@ -638,6 +872,7 @@ fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
 /// **`Tab` from the entities reaches the graph, then the queue, then the
 /// claims**, at both windows (TASK-a9cd362ee5e2): the ring is claims,
 /// entities, graph, queue, and it never lands on the document.
+#[cfg(unix)]
 #[test]
 fn tab_from_the_entities_walks_graph_queue_claims() {
     let repo = Repo::seeded();
@@ -664,6 +899,7 @@ fn tab_from_the_entities_walks_graph_queue_claims() {
 ///
 /// The row is moved off the first one before it is opened, so a reader that
 /// gave the listing back with its cursor reset could not pass.
+#[cfg(unix)]
 #[test]
 fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
     let repo = Repo::seeded();
@@ -711,6 +947,7 @@ fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
 /// The right panel is read off the column a title starts at: the listings'
 /// titles open against the window's left edge, and the right panel's opens
 /// past the column of listings, whatever width the layout gave that column.
+#[cfg(unix)]
 #[test]
 fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
     let repo = Repo::seeded();
@@ -751,6 +988,7 @@ fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
 
 /// The fixture is what it says it is, read back through the CLI rather than
 /// trusted: ten tasks, nine open, one closed, and the seven edges.
+#[cfg(unix)]
 #[test]
 fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
     let fixture = Repo::graphed();
@@ -800,6 +1038,7 @@ const ESCAPE: &str = "\u{1b}";
 /// a fold measured over a corpus with nothing to fold would be green about
 /// nothing. `done` and not `close`, because the criterion says *done*: a
 /// claim, a commit for the proof to name, and the verb.
+#[cfg(unix)]
 fn historied() -> (Graphed, String) {
     let fixture = Repo::graphed();
     let repo = &fixture.repo;
@@ -834,6 +1073,7 @@ fn historied() -> (Graphed, String) {
 }
 
 /// Every task the corpus holds: the fixture's and the history.
+#[cfg(unix)]
 fn every_task(fixture: &Graphed, history: &str) -> Vec<String> {
     fixture
         .open()
@@ -876,6 +1116,7 @@ fn shorts(frame: &str, columns: u16) -> Vec<String> {
 
 /// The graph reached on a session traced by `ANK_TRACE_READS`, with every
 /// read the opening asked for landed, and the trace at that moment.
+#[cfg(unix)]
 fn settled_on_graph(
     fixture: &Graphed,
     columns: u16,
@@ -900,6 +1141,7 @@ fn settled_on_graph(
 /// with the title saying all and the header cell saying the fold; the key
 /// again gives the frame at rest back; and none of it reads the graph or
 /// moves the cursor off its row** (TASK-67583993ef0d), at both windows.
+#[cfg(unix)]
 #[test]
 fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
     let (fixture, history) = historied();
@@ -996,6 +1238,7 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
 /// dashboard the listing beside the graph narrows on the same needle, so
 /// "only it on the screen" is held over the whole frame: no other task of
 /// the corpus is named anywhere on it.
+#[cfg(unix)]
 #[test]
 fn a_search_narrows_the_graph_to_one_task_and_escape_gives_the_fold_back() {
     let (fixture, history) = historied();
