@@ -5,7 +5,7 @@ slug: the-graph-panel-says-it-could-not-be-read-rather
 title: The graph panel says it could not be read rather than reading, and the cycle break waits on whole components
 created: 2026-10-14T14:52:18Z
 author: ankwork
-status: open
+status: done
 scope:
   - crates/ank-tui/src/view.rs
   - crates/ank-tui/src/graph.rs
@@ -15,8 +15,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/8883eaedfa07@f8fcd39
+    tree: scope/e9ef7bf344df
+    criteria: 8beaffb54d60
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@f8fcd39
+    tree: scope/e9ef7bf344df
+    criteria: 8beaffb54d60
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Found by the review of the GRAPH screen (2026-10-14). title_of and graph_lines word a None dag as reading on the wide frame, which is false after a refused read and after a narrow session is resized wide. order() in graph.rs counts outside dependents per node: with S1={0,1}, S2={2,3}, 2 blocked by 0, it yields 1,2,0,3 and draws 1 above 2 although 2 reaches 1 through 0.
