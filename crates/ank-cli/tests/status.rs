@@ -14,7 +14,7 @@
 //! also the only place `CARGO_BIN_EXE_ank` is defined (`ank-cli` has no library
 //! target), so there is no unit test that could spawn it even if we wanted one.
 
-mod scratch;
+use crate::scratch;
 
 use std::ffi::OsStr;
 use std::io::Write as _;

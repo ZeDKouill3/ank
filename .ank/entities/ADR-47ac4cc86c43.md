@@ -5,7 +5,7 @@ slug: ank-signers-sync-reads-a-principal-s-github-sign
 title: ank signers sync reads a principal's GitHub signing keys through gh, and writes them as a diff to review
 created: 2026-10-11T18:26:24Z
 author: claude-code/opus-5.5
-status: accepted
+status: superseded
 scope:
   - crates/ank-cli/src/config.rs
   - crates/ank-cli/src/git.rs
@@ -18,7 +18,7 @@ verified:
   - by: haksolot@omarchy
     at: 2026-10-11T19:04:21Z
 schema: 4
-version: 2
+version: 3
 ---
 
 Builds on ADR-5c6db7a161b8, which moves signers into `config.yml` and makes

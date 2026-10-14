@@ -11,7 +11,7 @@
 //! one platform where a path, a hook and a `PATH` lookup all behave
 //! differently. A program runs the same everywhere.
 
-mod scratch;
+use crate::scratch;
 
 use std::ffi::OsString;
 use std::fs;

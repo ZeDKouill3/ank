@@ -42,8 +42,8 @@
 //! created, and a page quoting one commit under two names fails.
 
 #[allow(dead_code)]
-mod fixture;
-mod scratch;
+use crate::fixture;
+use crate::scratch;
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

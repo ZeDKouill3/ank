@@ -5,7 +5,7 @@
 //! present and empty on an ADR with neither, and a spec and a log entry
 //! answering the shape they answered before.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

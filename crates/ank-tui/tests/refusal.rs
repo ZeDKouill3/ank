@@ -13,9 +13,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Live, Repo};
+use crate::terminal::{Live, Repo};
 
 /// Wide enough that the note is not cut before its error.
 const WINDOW: (u16, u16) = (120, 40);

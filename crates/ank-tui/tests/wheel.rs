@@ -38,9 +38,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Live, Repo};
+use crate::terminal::{Live, Repo};
 
 /// Wide enough that a row keeps its identifier and its title, and twenty-four
 /// rows because that is the window every criterion of this reader has been

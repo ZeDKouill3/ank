@@ -38,10 +38,10 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{Live, Repo};
 use ank_tui::view::SECOND_PRESS;
-use terminal::{Live, Repo};
 
 /// The windows this suite opens: a phone in portrait, and the terminal every
 /// criterion of this reader has been written for.

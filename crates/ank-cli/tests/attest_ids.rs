@@ -14,7 +14,7 @@
 //! findings are `ank check --json` as printed, and the ids are what
 //! `.github/scripts/unanchored.sh` prints from them.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::io::Write;

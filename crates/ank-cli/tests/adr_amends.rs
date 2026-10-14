@@ -6,7 +6,7 @@
 //! resolves it the way it resolves a spec's `references`, `archive` keeps an
 //! amended ADR hot, and `help new` names the flag under `adr` only.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

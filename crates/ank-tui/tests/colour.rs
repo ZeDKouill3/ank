@@ -47,23 +47,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use std::sync::Mutex;
-use terminal::{ids_of, Live, Repo};
-
-/// One pseudo-terminal open at a time, in this suite.
-///
-/// **Not politeness: `ptsname(3)` answers out of a static buffer.**
-/// `terminal::pty::open` calls `posix_openpt` and then asks `ptsname` for the
-/// slave's path, and two threads of one test binary doing that at once can both
-/// read the same answer -- so two sessions attach to one terminal and each
-/// reads frames the other drew. LOG-3b0bc419c884 records the defect and where
-/// its fix belongs (`ptsname_r`, in `terminal/mod.rs`, once this wave has
-/// landed); `tests/bindings.rs` already takes this local answer, and this suite
-/// is the one it bites hardest -- three tests, six sessions, and every
-/// assertion here is that two screens are the same characters.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+use crate::terminal::{ids_of, Live, Repo, ONE_AT_A_TIME};
 
 /// The window every session here opens on. Wide enough that the two panels in
 /// the middle both draw rows, which is where the painted fields are.

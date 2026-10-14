@@ -12,7 +12,7 @@
 //! **Through the binary**, for both files: `config.yml` and the reader's
 //! `corpora.yml`, whose location only the environment of a child process moves.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

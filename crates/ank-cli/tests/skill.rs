@@ -13,7 +13,7 @@
 //! criterion nothing executes is a criterion nobody checked, and a proof that
 //! covers less than it appears to is worse than a missing one.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

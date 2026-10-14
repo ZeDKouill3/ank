@@ -17,7 +17,7 @@
 //!
 //! **Through the binary**, every case.
 
-mod scratch;
+use crate::scratch;
 
 use std::collections::BTreeMap;
 use std::fs;

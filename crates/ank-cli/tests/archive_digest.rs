@@ -14,8 +14,8 @@
 //! Through the binary, because the criterion is about what `check` reports, and
 //! with a corpus `ank archive` itself moved and a commit carries.
 
-mod index_file;
-mod scratch;
+use crate::index_file;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

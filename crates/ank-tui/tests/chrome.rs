@@ -21,9 +21,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Live, Repo};
+use crate::terminal::{Live, Repo};
 
 /// The windows the criterion names: the desk, the phone, a tall desk, a phone
 /// with almost nothing left, and a wide one.

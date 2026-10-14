@@ -27,9 +27,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Editor, Live, Repo};
+use crate::terminal::{Editor, Live, Repo};
 
 /// What the confirmation says above the command line, and what it says after a
 /// person has declined one. Read out of the reader, never spelled here.

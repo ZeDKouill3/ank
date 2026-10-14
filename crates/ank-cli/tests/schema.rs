@@ -31,8 +31,8 @@
 //! inside `ConfigFile` and the outer deserialize fails before `schema` is ever
 //! compared. This stops the next occurrence, not that one.
 
-mod fixture;
-mod scratch;
+use crate::fixture;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

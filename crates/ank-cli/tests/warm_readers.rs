@@ -16,8 +16,8 @@
 //! checkpointed and no `-shm` beside it make the recovery long enough that the
 //! twelve readers started together are certain to meet it.
 
-mod index_file;
-mod scratch;
+use crate::index_file;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

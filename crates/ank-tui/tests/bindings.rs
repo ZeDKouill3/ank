@@ -31,11 +31,10 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{Live, Repo, ONE_AT_A_TIME};
 use ank_tui::bindings::{self, BINDINGS};
-use std::sync::Mutex;
-use terminal::{Live, Repo};
 
 /// A panel's vertical border, at either weight, as characters.
 ///
@@ -61,22 +60,6 @@ fn peeled(line: &str) -> String {
         .trim_end()
         .to_string()
 }
-
-/// One pseudo-terminal open at a time, in this suite.
-///
-/// **Not a slow test being polite: `ptsname(3)` answers out of a static
-/// buffer.** `terminal::pty::open` calls `posix_openpt` and then asks
-/// `ptsname` for the slave's path, and two threads doing that at once can both
-/// read the same answer -- so two sessions attach to one terminal, one of them
-/// resizes it to the other's window, and the second child is left writing down
-/// a pipe nobody is draining. That is what this suite tripped: it is the first
-/// to open two sessions at *different* sizes, which is what makes a crossed
-/// path visible rather than merely wrong.
-///
-/// The defect is the harness's and the fix belongs there (`ptsname_r`, or a
-/// lock around the four calls); LOG-3b0bc419c884 records it. This is the local
-/// answer -- the two tests below take it in turn -- and it costs a second.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// A window the key list fits on whole.
 ///

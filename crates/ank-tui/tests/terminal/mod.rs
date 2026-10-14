@@ -1,15 +1,16 @@
 //! A terminal, a corpus and a driven `ank tui`, shared by the suites that need
 //! all three.
 //!
-//! **Why it is here rather than in `src/`.** A Rust integration test is its own
-//! crate, so two of them share nothing that is not in a library -- and a
-//! pseudo-terminal in `ank-tui`'s own `src/` is not an option:
+//! **Why it is here rather than in `src/`.** The suites are modules of one
+//! integration test target, `tests/main.rs`, which declares this module once
+//! and every suite reaches it as `crate::terminal` -- and a pseudo-terminal in
+//! `ank-tui`'s own `src/` is not an option:
 //! `tests/dependencies.rs` forbids this crate a foreign symbol and forbids it
 //! `unsafe`, which is the whole of what ADR-559eebf5c6f5 bought by taking
 //! crossterm. A test may name what the crate may not, and that file's
 //! `sources()` reads only `src/`, which is exactly the exemption it is written
 //! to give. So the smallest terminal that can answer these questions lives in a
-//! module both suites declare, and nothing above it is duplicated at all.
+//! test module, and nothing above it is duplicated at all.
 //!
 //! **Why the binary is found rather than named.** `CARGO_BIN_EXE_ank` is
 //! defined only for the package that declares the binary, and that is
@@ -22,9 +23,8 @@
 //! not otherwise call. What runs on all three platforms is the layout, the
 //! keystroke mapping and the render, in `src/view.rs`.
 
-// A shared test module is compiled into every suite that declares it, and each
-// of them uses the part it needs. What one suite does not reach is not dead
-// code; it is code the other suite is using.
+// Each suite uses the part of this module it needs, and what no suite reaches
+// today is kept for the next one rather than deleted.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -710,6 +710,26 @@ pub const BODY: &str = "BODY   ";
 pub fn focused(title: &str) -> String {
     format!("{}{title}", ank_tui::view::BOXES.focus())
 }
+
+/// One pseudo-terminal open at a time, across every suite that takes it.
+///
+/// **Not a slow test being polite: `ptsname(3)` answers out of a static
+/// buffer.** `pty::open` calls `posix_openpt` and then asks `ptsname` for the
+/// slave's path, and two threads doing that at once can both read the same
+/// answer -- so two sessions attach to one terminal, one of them resizes it to
+/// the other's window, and the second child is left writing down a pipe nobody
+/// is draining. `tests/bindings.rs` tripped it first, being the first suite to
+/// open two sessions at *different* sizes, which is what makes a crossed path
+/// visible rather than merely wrong.
+///
+/// One lock and not one per suite: the suites are modules of one test binary,
+/// so under `cargo test` they share one process and a lock per suite would
+/// let two of them open a session at once. Under nextest every test is its own
+/// process and this lock serialises nothing, so `.config/nextest.toml` names
+/// the same tests in its `pty-serial` group. The defect is the harness's and
+/// the fix belongs in `pty::open` (`ptsname_r`, or a lock around the four
+/// calls); LOG-3b0bc419c884 records it.
+pub static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // The terminal

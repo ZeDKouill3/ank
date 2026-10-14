@@ -75,7 +75,45 @@ pub fn definition_hash(v: &Verifier) -> String {
     h.update(v.run.trim().as_bytes());
     h.update([0]);
     h.update(v.timeout.as_secs().to_string().as_bytes());
+    // `inputs` and `env` are appended only when declared (ADR-d8a328e311b9),
+    // so a verifier declaring neither keeps the hash every proof recorded
+    // before they existed. Each string goes in length-prefixed: two fields
+    // can never trade bytes and produce one hash.
+    if let Some(inputs) = &v.inputs {
+        // A set, not a sequence: the order globs are listed in changes
+        // nothing about which files can change the result.
+        let globs: std::collections::BTreeSet<&str> = inputs.iter().map(String::as_str).collect();
+        h.update(b"\0inputs");
+        for g in globs {
+            put(&mut h, g);
+        }
+    }
+    if let Some(env) = &v.env {
+        h.update(b"\0env");
+        for (field, value) in [
+            ("image", env.image.as_deref()),
+            ("platform", env.platform.as_deref()),
+            // Resolved by the parser: `network: none` written out and left to
+            // its default under an image are one environment.
+            ("network", env.network.map(crate::config::Network::as_str)),
+        ] {
+            if let Some(value) = value {
+                put(&mut h, field);
+                put(&mut h, value);
+            }
+        }
+        for (name, value) in &env.vars {
+            put(&mut h, "var");
+            put(&mut h, name);
+            put(&mut h, value);
+        }
+    }
     hex::encode(h.finalize())[..12].to_string()
+}
+
+fn put(h: &mut Sha256, s: &str) {
+    h.update((s.len() as u64).to_le_bytes());
+    h.update(s.as_bytes());
 }
 
 pub fn definition_ref(name: &str, v: &Verifier) -> String {
@@ -317,6 +355,8 @@ mod tests {
         Verifier {
             run: run.to_string(),
             timeout: Duration::from_secs(secs),
+            inputs: None,
+            env: None,
         }
     }
 
@@ -436,6 +476,61 @@ mod tests {
         assert_eq!(
             definition_ref("cargo-test", &a),
             format!("cargo-test@{}", definition_hash(&a))
+        );
+    }
+
+    /// ADR-d8a328e311b9: `inputs` and `env` are part of what ran, and a
+    /// verifier declaring neither hashes exactly as it did before they existed.
+    #[test]
+    fn the_definition_hash_covers_inputs_and_env_and_nothing_when_neither_is_declared() {
+        let p = std::path::Path::new("config.yml");
+        let hash = |yaml: &str| {
+            let cfg = crate::config::parse(&format!("schema: 1\nverifiers:\n  t:\n{yaml}"), p)
+                .unwrap_or_else(|e| panic!("{yaml}: {}", e.message));
+            definition_hash(&cfg.verifiers["t"])
+        };
+        let bare = hash("    run: cargo test\n");
+        // sha256("cargo test\0600"), first twelve hex digits: the formula
+        // every proof recorded so far was hashed with.
+        assert_eq!(bare, "ea889101030e");
+        assert_eq!(
+            hash("    run: cargo test\n    env: {}\n"),
+            bare,
+            "an env declaring nothing is no environment"
+        );
+
+        let inputs = hash("    run: cargo test\n    inputs: [\"src/**\", \"Cargo.toml\"]\n");
+        assert_ne!(inputs, bare);
+        assert_eq!(
+            hash("    run: cargo test\n    inputs:\n      - Cargo.toml\n      - src/**\n"),
+            inputs,
+            "a set of globs, whatever order and style lists them"
+        );
+        assert_ne!(
+            hash("    run: cargo test\n    inputs: [\"src/**\"]\n"),
+            inputs
+        );
+
+        let image = "    run: cargo test\n    env:\n      image: r@sha256:\
+                     0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n      \
+                     platform: linux/amd64\n";
+        let pinned = hash(image);
+        assert_ne!(pinned, bare);
+        assert_eq!(
+            hash(&format!("{image}      network: none\n")),
+            pinned,
+            "network none written out is the default under an image"
+        );
+        assert_ne!(hash(&format!("{image}      network: open\n")), pinned);
+        let with_var = hash(&format!("{image}      vars:\n        LANG: C\n"));
+        assert_ne!(with_var, pinned);
+        assert_ne!(
+            hash(&format!("{image}      vars:\n        LANG: POSIX\n")),
+            with_var
+        );
+        assert_ne!(
+            hash("    run: cargo test\n    env:\n      platform: linux/arm64\n"),
+            hash("    run: cargo test\n    env:\n      platform: linux/amd64\n")
         );
     }
 

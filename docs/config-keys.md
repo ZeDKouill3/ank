@@ -18,6 +18,11 @@ The file declares `schema: 1`, the only version this build reads. A duration is 
 | `verifiers.<name>.run` | command | required | what `done` runs through `sh`; required in a declared verifier |
 | `verifiers.<name>.timeout` | duration | `10m` | how long `done` lets the command run |
 | `verifiers.<name>.default` | boolean | `false` | `true` writes the verifier into every task `ank new task` creates |
+| `verifiers.<name>.inputs` | list of globs | none | the files whose content can change the result, relative to the root; absent, the whole tree; written as one flow sequence, never empty |
+| `verifiers.<name>.env.image` | string | none | the OCI image the verifier is meant to run in, pinned as `<name>@sha256:<digest>`; a tag is refused; ank never runs it |
+| `verifiers.<name>.env.platform` | string | none | `os/arch`, required with `env.image` |
+| `verifiers.<name>.env.network` | `none` or `open` | none | absent, `none` under an image and the host's network without one |
+| `verifiers.<name>.env.vars.<var>` | string | none | a variable with a fixed value; nothing is passed through from the caller |
 | `verifier_jobs` | integer | none | how many verifiers one `done` runs at once, at least 1; absent, the machine's available parallelism |
 | `roles.<name>.can` | list of strings | `[]` | what the role may do, declared |
 | `roles.<name>.cannot` | list of strings | `[]` | what the role may not do, declared |

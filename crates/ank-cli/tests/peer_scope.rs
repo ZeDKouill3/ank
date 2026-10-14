@@ -11,7 +11,7 @@
 //! carries one entity per side of the boundary. `b` exists so the declaration
 //! resolves to a readable corpus, which is the shape the issue was reported in.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::Path;

@@ -13,7 +13,7 @@ scope:
 references: [SPEC-15a56aeedcfd, SPEC-93531977642f, SPEC-ac4aad6d1edb, ADR-5c6db7a161b8]
 supersedes: SPEC-77d99d8d1ef2
 schema: 4
-version: 1
+version: 2
 ---
 
 One of the ten documents that carry the Ank specification (ADR-5a690829388d).
@@ -92,9 +92,28 @@ verifiers:
 
 The reason: a task may arrive through a PR from a fork. An inline command would be arbitrary code execution triggered by `ank done`. Git has exactly this problem with hooks and solved it by never running them on clone. Here, verifiers live in a file controlled by the repository, so modifying one goes through code review like any other change.
 
+**A verifier may declare what it reads and where it is meant to run** (ADR-d8a328e311b9).
+
+```yaml
+verifiers:
+  auth-tests:
+    run: cargo test -p auth
+    inputs: ["crates/auth/**", "Cargo.toml", "Cargo.lock"]
+    env:
+      image: ghcr.io/example/rust@sha256:<64 hex digits>
+      platform: linux/amd64
+      vars:
+        RUSTFLAGS: "-D warnings"
+      network: none
+```
+
+`inputs` is a list of globs relative to the repository root: the files whose content can change the verifier's result. Without it, the whole tree is the input; an empty list is refused, because it would declare that nothing can. `env` describes the environment: `image`, an OCI image pinned by `sha256:` digest, a tag refused when the file is parsed because a tag names different environments over time; `platform`, `os/arch`, required with `image`; `vars`, variables with fixed values, nothing passed through from the caller; `network`, `none` or `open`, and `none` when `image` is present and `network` is not. Every one of these keys is written and read through `ank config verifiers.<name>.inputs` and `verifiers.<name>.env.<key>`, `env.vars.<VAR>` for a variable. A verifier is hermetic if and only if its image is pinned and its network is `none`: derived, never declared. **Ank still runs every verifier on the host**, through `sh -c`, and needs no container runtime: `env` is parsed, validated and hashed, never executed here, and a local proof claims that `name@hash` ran, never that it ran inside `env`. Running inside it is an independent executor's job.
+
+**What the definition hash covers.** `run`, trimmed, and `timeout`, in seconds; then `inputs`, sorted and deduplicated, and `env`, with `network` resolved to its default, each only when the verifier declares it. A verifier declaring neither therefore keeps the hash it always had, and every proof recorded before these fields existed still matches its definition. `default` is not covered: it decides what a task is born with, never what running one proves. Changing `inputs` or `env` is a verifier change like any other, and `check` reports it as one.
+
 **Execution: always `sh -c`, on all three operating systems.** Linux, macOS and Windows are supported natively in v1. On Windows, `sh` is resolved from Git for Windows, which ships it — Ank already requires git, so the dependency is free and verifiers are written once, in POSIX syntax, for the whole team. An `sh` that cannot be found is an explicit error with the installation link, never a silent fallback to `cmd`. **A broken environment is not a task failure**: `sh` not found, command absent (shell code 126/127), inability to spawn the process all exit with code 9 and the exact command that failed — the agent should report or repair the environment, not conclude that its code is wrong. Code 5 stays reserved for a verifier that ran and said no. The **timeout is fixed** (formerly open point 4): 10 minutes by default, overridable per verifier, exceeding it is a code 5 failure with the elapsed time in the message.
 
-`config.yml` remains editable by an agent — replacing a verifier with `true` is the obvious workaround. Two complementary defences, neither resting on good faith. First, **the proof records the hash of the definition that ran** (`verifier: auth-tests@<hash>`, a normalised hash of the `run` + `timeout` entry): what actually ran is anchored in the proof, not in the current state of `config.yml`, so a verifier weakened before or after the `done` — in the same commit or another — is detectable by comparing the proof's hash with the definition at the corresponding commit. Second, `check` reports the patterns: **verifier modified inside the task's activity window** (between the first log entry and the `done`), and **proof hash diverging from the definition in force at the `done` commit**. Splitting the workaround across several commits no longer hides it; it stays a diff in review — faithful to the principle that faking must cost more than doing.
+`config.yml` remains editable by an agent — replacing a verifier with `true` is the obvious workaround. Two complementary defences, neither resting on good faith. First, **the proof records the hash of the definition that ran** (`verifier: auth-tests@<hash>`, a normalised hash of the entry, whose coverage is stated above): what actually ran is anchored in the proof, not in the current state of `config.yml`, so a verifier weakened before or after the `done` — in the same commit or another — is detectable by comparing the proof's hash with the definition at the corresponding commit. Second, `check` reports the patterns: **verifier modified inside the task's activity window** (between the first log entry and the `done`), and **proof hash diverging from the definition in force at the `done` commit**. Splitting the workaround across several commits no longer hides it; it stays a diff in review — faithful to the principle that faking must cost more than doing.
 
 ### Trust hierarchy
 

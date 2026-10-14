@@ -24,10 +24,10 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{Live, Repo};
 use std::time::{Duration, Instant};
-use terminal::{Live, Repo};
 
 /// The corpus the criterion names. One above a thousand, so that "at least a
 /// thousand" is met by the fixture and not by rounding.

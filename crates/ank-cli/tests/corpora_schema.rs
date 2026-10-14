@@ -32,7 +32,7 @@
 //! whose declarations look like this". `CARGO_BIN_EXE_ank` is defined only for
 //! an integration test, and `ank-cli` has no library target.
 
-mod scratch;
+use crate::scratch;
 
 use std::collections::HashMap;
 use std::fs;

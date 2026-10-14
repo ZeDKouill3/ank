@@ -15,8 +15,8 @@
 //! Process counts are read from `GIT_TRACE` at an absolute path and never from a
 //! wall clock (CLAUDE.md).
 
-mod fixture;
-mod scratch;
+use crate::fixture;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

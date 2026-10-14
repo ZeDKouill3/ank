@@ -15,7 +15,7 @@
 //! and across two real checkouts, because the defect lives in the index a tree
 //! keeps from one of them to the next.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

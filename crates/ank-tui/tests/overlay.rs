@@ -25,23 +25,13 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
+use crate::terminal::{Live, Repo, ONE_AT_A_TIME};
 use ank_tui::bindings::{self, Runs};
 use ank_tui::input::Command;
 use ank_tui::keys::Press;
 use ratatui::crossterm::event::KeyCode;
-use std::sync::Mutex;
-use terminal::{Live, Repo};
-
-/// One pseudo-terminal open at a time, in this suite.
-///
-/// `ptsname(3)` answers out of a static buffer, so two sessions opened at once
-/// can both read the same slave path -- and this suite is one of the two that
-/// opens sessions at *different* sizes, which is what makes a crossed path
-/// visible rather than merely wrong. LOG-3b0bc419c884 records the defect and
-/// `tests/bindings.rs` carries the same lock for the same reason.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// The desk this reader's frame is measured on, and the phone it was written
 /// for.

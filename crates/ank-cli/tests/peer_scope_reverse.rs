@@ -11,7 +11,7 @@
 //! declares `a` as `aa`, and `c` exists so the declaration `cc` resolves to a
 //! readable corpus that is not `b`.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::Path;

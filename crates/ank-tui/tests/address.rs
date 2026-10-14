@@ -15,9 +15,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{ids_of, scratch, Live, Repo};
+use crate::terminal::{ids_of, scratch, Live, Repo};
 
 /// Wide enough that a panel title is not cut before its count.
 const WINDOW: (u16, u16) = (120, 40);

@@ -15,7 +15,7 @@
 //! against the constant: a glob that git reads differently from how it looks
 //! would pass the second and fail the first.
 
-mod scratch;
+use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};

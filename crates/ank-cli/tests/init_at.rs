@@ -24,7 +24,7 @@
 //! is every path under the target with its contents, plus the target
 //! repository's own local git config, taken before the run and after it.
 
-mod scratch;
+use crate::scratch;
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -14,8 +14,8 @@
 //! **Through the binary**, and each hint a refusal prints is run in its turn:
 //! a hint that fails the way its refusal did is the defect this task exists for.
 
-mod index_file;
-mod scratch;
+use crate::index_file;
+use crate::scratch;
 
 use std::collections::BTreeMap;
 use std::fs;

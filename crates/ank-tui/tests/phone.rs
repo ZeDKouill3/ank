@@ -27,9 +27,9 @@
 
 #![cfg(unix)]
 
-mod terminal;
+use crate::terminal;
 
-use terminal::{Live, Repo};
+use crate::terminal::{Live, Repo};
 
 /// The letter `claim` is bound to, read out of the reader's own table
 /// (TASK-1a415107fd56).
