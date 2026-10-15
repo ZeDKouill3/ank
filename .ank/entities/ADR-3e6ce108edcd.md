@@ -10,12 +10,16 @@ scope:
   - crates/ank-cli/**
 constraint: |
   The attention budget cuts what a human is shown and never what a program receives. A listing verb -- find, review, scope, graph -- answers with every row under --json, whatever the budget, and its human output is unchanged, cut notice included. context keeps the budget under --json, because deciding what a reader is handed first is that verb's answer rather than a limit on it. In a --json listing shown and total agree unless a filter removed rows, and hidden names only what a filter withheld. No flag lifts the budget: a caller who has to know to ask is a caller who still gets a short answer.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#find_json_answers_every_row_whatever_the_budget
+  - crates/ank-cli/tests/cli.rs#the_human_page_of_all_four_listings_is_unchanged
+  - crates/ank-cli/tests/cli.rs#the_json_document_of_context_is_served_under_the_same_budget
 ratified: aaf75acd3031
 verified:
   - by: claude-code/opus-5
     at: 2026-08-22T20:55:55Z
 schema: 4
-version: 2
+version: 3
 ---
 
 Measured on this corpus on 2026-08-22: `ank find --type adr --json` answers

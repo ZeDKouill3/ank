@@ -16,12 +16,16 @@ constraint: |
   What the verb answers does not move to buy this. status --json keeps every field it has, under the same key and with the same type: the machine contract lets a document gain a field within a version and never lose, rename or retype one, so no counter becomes absent, optional or null in exchange for speed. Speed is bought from where an answer is computed and never from what the answer says.
   
   A cache whose key is wrong makes the verb lie, and a lying status is worse than a slow one. So the key is stated here rather than left to the implementation, and a verb that cannot establish its key pays the full cost rather than guessing.
+enforced_by:
+  - crates/ank-cli/tests/status.rs#an_entity_written_edited_or_removed_moves_the_counters
+  - crates/ank-cli/tests/status.rs#a_claim_ref_appearing_moves_the_counters_with_no_file_touched
+  - crates/ank-cli/tests/cli.rs#json_golden_status
 ratified: 8ea02acf7f91
 verified:
   - by: haksolot@vmi3223161
     at: 2026-08-28T16:39:54Z
 schema: 4
-version: 2
+version: 3
 ---
 
 `ank status --json` costs 2750 to 2850 milliseconds on this corpus of 1471
