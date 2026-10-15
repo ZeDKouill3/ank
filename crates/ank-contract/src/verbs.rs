@@ -2080,35 +2080,52 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     // After `config` and before `init`: §4's order. It writes one block of the
     // file `config` maintains, the block `config` refuses (ADR-5c6db7a161b8).
-    // `migrate` is the subcommand that ships first; `add`, `retire` and
-    // `remove` arrive with TASK-68313ec97cd6.
+    // Its flags are the verb's and not a subcommand's, as `new`'s are; a flag a
+    // subcommand has no use for is refused by name rather than dropped.
     CommandSpec {
         name: "signers",
         group: "set up a repository",
         renews: Renews::Never,
         writes: Writes::Files,
         coordinates: false,
-        summary: "writes who may ratify under signers: in .ank/config.yml; migrate moves a former .ank/allowed_signers there",
-        subcommands: &["migrate"],
+        summary: "writes who may ratify under signers: in .ank/config.yml: add declares a key, retire dates it, remove deletes it, migrate moves a former .ank/allowed_signers there",
+        subcommands: &["add", "retire", "remove", "migrate"],
         kinds: &[],
-        max_positionals: 0,
-        positional_help: "",
-        flags: &[],
+        max_positionals: 1,
+        positional_help: "[<key>]",
+        flags: &[
+            flag("--key"),
+            flag("--principal"),
+            flag("--note"),
+            flag("--date"),
+        ],
         refuses: &[
-            refuses(ExitCode::Prerequisite, "no .ank/allowed_signers to migrate"),
+            refuses(ExitCode::Transition, "add: the key is already declared, under whichever principal: named, and nothing is written"),
+            refuses(ExitCode::Prerequisite, "add: no --key and git names no user.signingkey, or no --principal and git names no user.email"),
+            refuses(ExitCode::Prerequisite, "retire and remove: no <key> to act on"),
+            refuses(ExitCode::Generic, "retire and remove: signers: declares no key matching <key>"),
+            refuses(ExitCode::Generic, "a --date that is not YYYY-MM-DD, a key that is not '<keytype> <key>', or a flag the subcommand has no use for"),
+            refuses(ExitCode::Prerequisite, "migrate: no .ank/allowed_signers to migrate"),
             refuses(
                 ExitCode::Generic,
-                "a line the block cannot carry, an option other than valid-before among them, or keys to add beside a signers: block already written: named, and nothing is written",
+                "migrate: a line the block cannot carry, an option other than valid-before among them, or keys to add beside a signers: block already written: named, and nothing is written",
             ),
         ],
         notes: &[
             "declaring who may ratify is a trust act: the skills reserve it to a human, as they reserve accept",
+            "add declares the key user.signingkey names under the principal user.email names; --key <file> reads a public key file, or takes '<keytype> <key>' as written, --principal and --note override the rest",
+            "retire <key> sets valid_before, today in UTC or --date YYYY-MM-DD: the key ratifies nothing committed from that day, and what it signed before stays verified",
+            "remove <key> deletes the key, the act for a compromised one: every ratification it signed becomes a fault in check",
+            "<key> is '<keytype> <key>' or the key alone, as signers: declares it",
             "migrate keeps each comment above a key, and the comment after it, as that key's note, carries valid-before as valid_before, and deletes the file",
-            "every byte of config.yml above the block it appends is left as it was",
+            "each writes only the lines of its change: comments, order and quoting elsewhere in config.yml are left as they were",
             "it writes files and never commits: review with git diff .ank",
         ],
         refuses_globals: &[],
-        output: &[one(&[f("principals", Type::Num), f("keys", Type::Num), f("removed", Type::Str)])],
+        output: &[
+            when("add, retire, remove", &[f("action", Type::Str), f("principal", Type::Str), f("key", Type::Str), opt("valid_before", Type::Str)]),
+            when("migrate", &[f("principals", Type::Num), f("keys", Type::Num), f("removed", Type::Str)]),
+        ],
         owner_task: None,
     },
     CommandSpec {

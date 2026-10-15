@@ -61,7 +61,46 @@ ratify anything there.
 
 **The block has one writer, and it is not `ank config`.** Declaring who may
 ratify is a trust act the skills reserve to a human, as they reserve `accept`:
-`ank config signers.*` is refused and names `ank signers`.
+`ank config signers.*` is refused and names `ank signers`, which writes only the
+lines of its change and leaves every comment, order and quoting elsewhere in
+`config.yml` as it was.
+
+## A new machine
+
+A key that is not declared ratifies nothing, so a new machine is declared before
+it ratifies, and the declaration lands on `main` the way any change does. With
+git set up to sign on that machine, as above, from a branch cut from `main`:
+
+    git switch -c signers/laptop main
+    ank signers add --note "laptop"
+
+`add` declares the key `user.signingkey` names, under the principal
+`user.email` names. `--key` takes a public key file or `'<keytype> <key>'`
+instead, `--principal` another principal, and `--note` what a reviewer should
+know about the key. A key already declared, under any principal, is refused at
+6 and nothing is written. `add` commits nothing: review the diff, then land it
+by pull request:
+
+    git diff .ank/config.yml
+    git commit -am "Declare the laptop key"
+    git push -u origin signers/laptop
+    gh pr create --fill --base main --head signers/laptop
+
+Until that pull request is merged, a ratification signed on the new machine is
+judged against the `signers:` that `main` holds, and the key is not in it.
+
+## Retiring and removing a key
+
+    ank signers retire 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAJ...'
+    ank signers retire 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAJ...' --date 2026-10-11
+
+`retire` sets `valid_before`, today in UTC or the date `--date` names. `remove`
+deletes the key outright:
+
+    ank signers remove 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAJ...'
+
+Both take the key as `signers:` declares it, `<keytype> <key>` or the key alone,
+and both land by pull request, as `add` does.
 
 **A key is retired by date rather than removed.** With `valid_before` set, the
 key ratifies nothing committed from that day on (midnight UTC), and what it

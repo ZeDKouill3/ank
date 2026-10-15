@@ -2660,22 +2660,600 @@ pub fn run(inv: &Invocation, repo: &crate::repo::Repo, out: &mut dyn Write) -> R
 // `ank signers` (ADR-5c6db7a161b8)
 // ---------------------------------------------------------------------------
 
-/// `ank signers <subcommand>`. `migrate` is the one that ships; the parser
-/// refuses the others before this is reached, because the contract names no
-/// other subcommand yet.
+/// `ank signers <subcommand>`. Every subcommand writes `signers:` through the
+/// line-level writer `config` uses (ADR-e64dfaafd578), so what it does not
+/// name is left byte for byte as it was.
 pub fn run_signers(
     inv: &Invocation,
     repo: &crate::repo::Repo,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match inv.subcommand.as_deref() {
-        Some("migrate") => migrate_signers(inv, repo, out),
-        other => Err(CliError::new(
-            ExitCode::Generic,
-            format!("unknown subcommand '{}'", other.unwrap_or_default()),
-        )
-        .with_hint("ank signers migrate")),
+    let sub = inv.subcommand.as_deref().unwrap_or_default();
+    let (takes, positional): (&[&str], bool) = match sub {
+        "add" => (&["--key", "--principal", "--note"], false),
+        "retire" => (&["--date"], true),
+        "remove" => (&[], true),
+        "migrate" => (&[], false),
+        other => {
+            return Err(
+                CliError::new(ExitCode::Generic, format!("unknown subcommand '{other}'"))
+                    .with_hint("ank help signers"),
+            )
+        }
+    };
+    for name in ["--key", "--principal", "--note", "--date"] {
+        if inv.has(name) && !takes.contains(&name) {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("'ank signers {sub}' takes no {name}"),
+            )
+            .with_hint("ank help signers"));
+        }
     }
+    if !positional {
+        if let Some(extra) = inv.positionals.first() {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("extra argument '{extra}': 'ank signers {sub}' takes none"),
+            )
+            .with_hint("ank help signers"));
+        }
+    }
+    match sub {
+        "add" => add_signer(inv, repo, out),
+        "retire" | "remove" => {
+            let Some(target) = inv.positionals.first() else {
+                return Err(CliError::new(
+                    ExitCode::Prerequisite,
+                    format!("'ank signers {sub}' needs the key it acts on"),
+                )
+                .with_hint(format!("ank signers {sub} '<keytype> <key>'")));
+            };
+            edit_signer(inv, repo, sub, target, out)
+        }
+        _ => migrate_signers(inv, repo, out),
+    }
+}
+
+/// One `- key:` entry of a principal's list, as lines of the file.
+struct KeyItem {
+    /// The line carrying the dash.
+    start: usize,
+    /// One past its last line of content: a comment below it introduces what
+    /// follows, so it is not the entry's to take.
+    end: usize,
+    /// The indentation of its fields, the one after the dash.
+    fields: usize,
+    /// The `key:` value, unquoted.
+    key: Option<String>,
+    /// The line declaring `valid_before`, when it has one.
+    valid_before: Option<usize>,
+}
+
+/// A line of an entry as a mapping line: the dash that opens the entry read
+/// as the space it stands in for, so `key_of` and `value_span` find the field
+/// at the same byte offsets.
+fn as_field(text: &str, dash: Option<usize>) -> String {
+    match dash {
+        Some(d) => format!("{} {}", &text[..d], &text[d + 1..]),
+        None => text.to_string(),
+    }
+}
+
+fn opens_item(text: &str, indent: usize) -> bool {
+    let rest = &text[indent..];
+    rest == "-" || rest.starts_with("- ")
+}
+
+/// The entries of the sequence under `keys:` on line `ki`, and the indentation
+/// of their dashes. YAML lets a sequence sit at its key's own indentation, so
+/// `block_under`, which wants deeper lines, cannot find it.
+fn key_items(lines: &[Line], ki: usize, kindent: usize) -> (Option<usize>, Vec<KeyItem>) {
+    let mut dash: Option<usize> = None;
+    let mut items: Vec<KeyItem> = Vec::new();
+    for (i, line) in lines.iter().enumerate().skip(ki + 1) {
+        let Some(n) = content_indent(&line.text) else {
+            continue;
+        };
+        let d = match dash {
+            None if n >= kindent && opens_item(&line.text, n) => {
+                dash = Some(n);
+                n
+            }
+            None => break,
+            Some(d) => d,
+        };
+        let first = n == d && opens_item(&line.text, n);
+        if first {
+            items.push(KeyItem {
+                start: i,
+                end: i + 1,
+                fields: 0,
+                key: None,
+                valid_before: None,
+            });
+        } else if n <= d {
+            break;
+        }
+        let Some(item) = items.last_mut() else { break };
+        item.end = i + 1;
+        let text = as_field(&line.text, first.then_some(d));
+        let Some(fi) = content_indent(&text) else {
+            continue;
+        };
+        if first {
+            item.fields = fi;
+        }
+        if fi != item.fields {
+            continue;
+        }
+        if let Some((name, at)) = key_of(&text) {
+            match name.as_str() {
+                "key" => item.key = Some(value_span(&text, at).value),
+                "valid_before" => item.valid_before = Some(i),
+                _ => {}
+            }
+        }
+    }
+    (dash, items)
+}
+
+/// Where a principal's keys are: the principal's line, the end of its block,
+/// the `keys:` line and its indentation.
+struct PrincipalAt {
+    line: usize,
+    end: usize,
+    keys: Option<(usize, usize)>,
+}
+
+fn locate_principal(lines: &[Line], name: &str) -> Option<PrincipalAt> {
+    let (_, block) = named_block(lines, "signers")?;
+    let child = block.indent?;
+    let line = find_key(lines, block.range, child, name)?;
+    let own = block_under(lines, line, child);
+    let keys = own.indent.and_then(|k| {
+        let ki = find_key(lines, own.range.clone(), k, "keys")?;
+        Some((ki, k))
+    });
+    // The block of a principal ends with the last of its keys, which may sit
+    // at the principal's own indentation plus nothing: take the further one.
+    let end = keys
+        .and_then(|(ki, k)| key_items(lines, ki, k).1.last().map(|i| i.end))
+        .map_or(own.range.end, |e| e.max(own.range.end));
+    Some(PrincipalAt { line, end, keys })
+}
+
+/// Whether a declared key is the one `target` names: `<keytype> <key>`, or
+/// the key alone.
+fn names_key(declared: &str, target: &str) -> bool {
+    let d: Vec<&str> = declared.split_whitespace().collect();
+    let t: Vec<&str> = target.split_whitespace().collect();
+    match (d.as_slice(), t.as_slice()) {
+        ([dt, dk], [tt, tk]) => dt.eq_ignore_ascii_case(tt) && dk == tk,
+        ([_, dk], [tk]) => dk == tk,
+        _ => false,
+    }
+}
+
+/// `<keytype> <key>` out of the text of a public key, its comment dropped.
+fn public_key(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))?;
+    let mut fields = line.split_whitespace();
+    let keytype = fields.next()?;
+    let key = fields.next()?;
+    is_keytype(keytype).then(|| format!("{} {key}", keytype.to_ascii_lowercase()))
+}
+
+fn git_config(repo: &crate::repo::Repo, key: &str) -> Option<String> {
+    crate::git::output(&repo.worktree, &["config", "--get", key])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// What `--key` names: a public key file, or `<keytype> <key>` as written.
+fn key_from_flag(value: &str) -> Result<String> {
+    let path = Path::new(value);
+    if path.is_file() {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+        return public_key(&text).ok_or_else(|| {
+            CliError::new(
+                ExitCode::Generic,
+                format!("--key {value}: the file holds no public key '<keytype> <key>'"),
+            )
+            .with_hint("ank signers add --key <file>.pub")
+        });
+    }
+    public_key(value).ok_or_else(|| {
+        CliError::new(
+            ExitCode::Generic,
+            format!("--key {value}: neither a file nor '<keytype> <key>'"),
+        )
+        .with_hint("ank signers add --key ~/.ssh/id_ed25519.pub")
+    })
+}
+
+/// The key git signs with, in the form `signers:` declares it.
+fn key_from_git(repo: &crate::repo::Repo) -> Result<String> {
+    let missing = |why: String| {
+        CliError::new(ExitCode::Prerequisite, why)
+            .with_hint("ank signers add --key <file> (or: git config user.signingkey <key>)")
+    };
+    let Some(value) = git_config(repo, "user.signingkey") else {
+        return Err(missing(
+            "git names no user.signingkey, and no --key was given".to_string(),
+        ));
+    };
+    let format = git_config(repo, "gpg.format").unwrap_or_else(|| "openpgp".to_string());
+    match format.as_str() {
+        "ssh" => {
+            if let Some(literal) = value.strip_prefix("key::") {
+                return public_key(literal).ok_or_else(|| {
+                    missing(format!(
+                        "user.signingkey '{value}' is not '<keytype> <key>'"
+                    ))
+                });
+            }
+            if let Some(k) = public_key(&value) {
+                return Ok(k);
+            }
+            // A path, to the public half or to the private one beside it.
+            let path = std::path::PathBuf::from(&value);
+            let path = if path.is_relative() {
+                repo.worktree.join(path)
+            } else {
+                path
+            };
+            let mut public = path.clone().into_os_string();
+            public.push(".pub");
+            [path, public.into()]
+                .iter()
+                .find_map(|p| std::fs::read_to_string(p).ok().and_then(|t| public_key(&t)))
+                .ok_or_else(|| {
+                    missing(format!(
+                        "user.signingkey '{value}' names no readable public key"
+                    ))
+                })
+        }
+        "openpgp" => {
+            let id = value
+                .trim_start_matches("0x")
+                .trim_end_matches('!')
+                .to_ascii_uppercase();
+            let hex = id.bytes().all(|b| b.is_ascii_hexdigit());
+            if hex && [16, 40, 64].contains(&id.len()) {
+                Ok(format!("gpg {id}"))
+            } else {
+                Err(missing(format!(
+                    "user.signingkey '{value}' is not a fingerprint or a long key id"
+                )))
+            }
+        }
+        other => Err(missing(format!(
+            "gpg.format {other}: signers: declares gpg and ssh keys only"
+        ))),
+    }
+}
+
+/// Inserts lines at `at`, with the file's own terminator.
+fn insert_lines(lines: &mut Vec<Line>, at: usize, new: Vec<String>) {
+    let eol = dominant_eol(lines);
+    if at == lines.len() {
+        terminate_last(lines, &eol);
+    }
+    let new: Vec<Line> = new
+        .into_iter()
+        .map(|text| Line {
+            text,
+            eol: eol.clone(),
+        })
+        .collect();
+    lines.splice(at..at, new);
+}
+
+fn hand_edit(what: String) -> CliError {
+    CliError::new(ExitCode::Generic, format!("refused: {what}"))
+        .with_hint("edit signers: in .ank/config.yml by hand, then ank check")
+}
+
+/// Reads the result back through the parser every verb uses, and writes it
+/// only when it says what the subcommand meant.
+fn write_signers(path: &Path, lines: &[Line], holds: impl Fn(&[Signer]) -> bool) -> Result<()> {
+    let after = join_lines(lines);
+    let read = parse(&after, path).map_err(|e| {
+        hand_edit(format!(
+            "the change would leave {} unreadable",
+            path.display()
+        ))
+        .with_hint(e.message)
+    })?;
+    if !holds(&read.signers) {
+        return Err(hand_edit(
+            "the change would not read back as written".to_string(),
+        ));
+    }
+    std::fs::write(path, after)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))
+}
+
+fn report_signer(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    action: &str,
+    principal: &str,
+    key: &str,
+    valid_before: Option<&str>,
+) {
+    if inv.json() {
+        let doc = crate::json::Obj::document()
+            .str("action", action)
+            .str("principal", principal)
+            .str("key", key)
+            .opt_str("valid_before", valid_before)
+            .finish();
+        let _ = writeln!(out, "{doc}");
+    } else if !inv.quiet() {
+        let keytype = key.split_whitespace().next().unwrap_or_default();
+        let _ = match valid_before {
+            Some(d) => writeln!(
+                out,
+                "{action} {keytype} key of {principal}, valid before {d}"
+            ),
+            None => writeln!(out, "{action} {keytype} key of {principal}"),
+        };
+        let _ = writeln!(out, "  review: git diff .ank");
+    }
+}
+
+/// `ank signers add`: one key, under its principal, after the last key there;
+/// a principal not yet declared after the last one; a block not yet written
+/// at the end of the file.
+fn add_signer(inv: &Invocation, repo: &crate::repo::Repo, out: &mut dyn Write) -> Result<ExitCode> {
+    let key = match inv.value("--key") {
+        Some(v) => key_from_flag(v)?,
+        None => key_from_git(repo)?,
+    };
+    let principal = match inv.value("--principal").map(str::to_string) {
+        Some(p) => p,
+        None => git_config(repo, "user.email").ok_or_else(|| {
+            CliError::new(
+                ExitCode::Prerequisite,
+                "git names no user.email, and no --principal was given",
+            )
+            .with_hint("ank signers add --principal <email>")
+        })?,
+    };
+    let note: Vec<String> = inv
+        .value("--note")
+        .map(|n| n.lines().map(str::to_string).collect())
+        .unwrap_or_default();
+
+    let path = repo.config_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    let current = parse(&text, &path)?;
+    if let Some(s) = current
+        .signers
+        .iter()
+        .find(|s| names_key(&format!("{} {}", s.keytype, s.key), &key))
+    {
+        return Err(CliError::new(
+            ExitCode::Transition,
+            format!(
+                "refused: the {} key is already declared under {}",
+                s.keytype, s.principal
+            ),
+        )
+        .with_hint(format!(
+            "ank signers retire '{key}', or ank signers remove '{key}'"
+        )));
+    }
+
+    let mut lines = split_lines(&text);
+    let entry = |dash: usize| {
+        let pad = " ".repeat(dash);
+        let mut l = vec![format!("{pad}- key: {}", scalar(&key))];
+        if !note.is_empty() {
+            l.extend(note_lines(&note, &format!("{pad}  ")));
+        }
+        l
+    };
+    let declared = current.signers.iter().any(|s| s.principal == principal);
+    match named_block(&lines, "signers") {
+        None => {
+            let block = render_signers(&[Migrated {
+                principal: principal.clone(),
+                keytype: key
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+                key: key
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string(),
+                note: note.clone(),
+                valid_before: None,
+            }]);
+            let at = lines.len();
+            insert_lines(&mut lines, at, block);
+        }
+        Some((si, block)) => {
+            if !value_span(&lines[si].text, key_of(&lines[si].text).map_or(0, |k| k.1))
+                .value
+                .is_empty()
+            {
+                return Err(hand_edit("signers: is not written as a block".to_string()));
+            }
+            match locate_principal(&lines, &principal) {
+                Some(PrincipalAt {
+                    keys: Some((ki, kindent)),
+                    ..
+                }) => {
+                    let (dash, items) = key_items(&lines, ki, kindent);
+                    let at = items.last().map_or(ki + 1, |i| i.end);
+                    insert_lines(&mut lines, at, entry(dash.unwrap_or(kindent + 2)));
+                }
+                Some(_) => {
+                    return Err(hand_edit(format!(
+                        "{principal} under signers: carries no keys: list to add to"
+                    )))
+                }
+                None if declared => {
+                    return Err(hand_edit(format!(
+                        "{principal} under signers: is not written as a block"
+                    )))
+                }
+                None => {
+                    let indent = block.indent.unwrap_or(2);
+                    let pad = " ".repeat(indent);
+                    let mut new = vec![
+                        format!("{pad}{}:", scalar(&principal)),
+                        format!("{pad}  keys:"),
+                    ];
+                    new.extend(entry(indent + 4));
+                    insert_lines(&mut lines, block.range.end, new);
+                }
+            }
+        }
+    }
+    let wanted_note = (!note.is_empty()).then(|| note.join("\n"));
+    write_signers(&path, &lines, |read| {
+        read.iter().any(|s| {
+            s.principal == principal
+                && names_key(&format!("{} {}", s.keytype, s.key), &key)
+                && s.note == wanted_note
+        }) && read.len() == current.signers.len() + 1
+    })?;
+    report_signer(inv, out, "added", &principal, &key, None);
+    Ok(ExitCode::Ok)
+}
+
+/// `ank signers retire` and `ank signers remove`, which find one declared key
+/// and change only its lines.
+fn edit_signer(
+    inv: &Invocation,
+    repo: &crate::repo::Repo,
+    sub: &str,
+    target: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let date = match inv.value("--date") {
+        Some(d) if date_days(d).is_none() => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("--date '{d}' is not a YYYY-MM-DD date"),
+            )
+            .with_hint(format!("ank signers retire '{target}' --date 2026-01-31")))
+        }
+        Some(d) => d.to_string(),
+        None => crate::claim::now_utc()[..10].to_string(),
+    };
+
+    let path = repo.config_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    let current = parse(&text, &path)?;
+    let matching: Vec<&Signer> = current
+        .signers
+        .iter()
+        .filter(|s| names_key(&format!("{} {}", s.keytype, s.key), target))
+        .collect();
+    let signer = match matching.as_slice() {
+        [one] => (*one).clone(),
+        [] => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("signers: declares no key matching '{target}'"),
+            )
+            .with_hint("ank review"))
+        }
+        _ => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("'{target}' matches {} declared keys", matching.len()),
+            )
+            .with_hint(format!("ank signers {sub} '<keytype> <key>'")))
+        }
+    };
+    let full = format!("{} {}", signer.keytype, signer.key);
+
+    let mut lines = split_lines(&text);
+    let at = locate_principal(&lines, &signer.principal).and_then(|p| {
+        let (ki, kindent) = p.keys?;
+        let (_, items) = key_items(&lines, ki, kindent);
+        let i = items
+            .into_iter()
+            .position(|i| i.key.as_deref().is_some_and(|k| names_key(k, &full)))?;
+        Some((p, ki, kindent, i))
+    });
+    let Some((p, ki, kindent, index)) = at else {
+        return Err(hand_edit(format!(
+            "the key of {} is declared in a form this writer does not locate",
+            signer.principal
+        )));
+    };
+    let (dash, items) = key_items(&lines, ki, kindent);
+    let item = &items[index];
+
+    if sub == "retire" {
+        match item.valid_before {
+            Some(vi) => {
+                let field = as_field(&lines[vi].text, dash.filter(|_| vi == item.start));
+                let colon = key_of(&field).map_or(0, |k| k.1);
+                let span = value_span(&field, colon);
+                splice(&mut lines[vi], &span, &date);
+            }
+            None => {
+                let pad = " ".repeat(item.fields);
+                insert_lines(
+                    &mut lines,
+                    item.end,
+                    vec![format!("{pad}valid_before: {date}")],
+                );
+            }
+        }
+        write_signers(&path, &lines, |read| {
+            read.iter().any(|s| {
+                s.principal == signer.principal
+                    && s.keytype == signer.keytype
+                    && s.key == signer.key
+                    && s.note == signer.note
+                    && s.valid_before.as_deref() == Some(date.as_str())
+            }) && read.len() == current.signers.len()
+        })?;
+        report_signer(inv, out, "retired", &signer.principal, &full, Some(&date));
+        return Ok(ExitCode::Ok);
+    }
+
+    // remove: the entry, then the principal it leaves empty, then the block.
+    let last_of_principal = items.len() == 1;
+    let last_principal = current
+        .signers
+        .iter()
+        .all(|s| s.principal == signer.principal);
+    if last_of_principal && last_principal {
+        let (si, block) = named_block(&lines, "signers").expect("located above");
+        remove_lines(&mut lines, si..block.range.end.max(p.end));
+    } else if last_of_principal {
+        remove_lines(&mut lines, p.line..p.end);
+    } else {
+        remove_lines(&mut lines, item.start..item.end);
+    }
+    write_signers(&path, &lines, |read| {
+        read.len() + 1 == current.signers.len()
+            && !read
+                .iter()
+                .any(|s| s.keytype == signer.keytype && s.key == signer.key)
+    })?;
+    report_signer(inv, out, "removed", &signer.principal, &full, None);
+    Ok(ExitCode::Ok)
 }
 
 /// One key read out of `.ank/allowed_signers`, before it is written anywhere.

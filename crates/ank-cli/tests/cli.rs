@@ -7547,7 +7547,11 @@ fn the_listing_describes_each_verb_as_its_own_help_does() {
                 let (_, desc) = described
                     .last_mut()
                     .expect("a continuation before any verb");
-                desc.push(' ');
+                // A usage wider than the column stands alone, and its whole
+                // description is continuation.
+                if !desc.is_empty() {
+                    desc.push(' ');
+                }
                 desc.push_str(line.trim());
             }
         }
@@ -13996,13 +14000,14 @@ const PATH_FLAGS: [(&str, &str); 4] = [
 /// The flags naming a path that must **not** be normalised against this
 /// repository, because being outside it is the whole of what they mean.
 ///
-/// A third category rather than a hole in the first two, and there is exactly
-/// one member: `ank init --at` names where a corpus goes for a tree that must
-/// stay untouched (ADR-96174f1ac2b7). `context::normalised` refuses a path
-/// outside the repository, which is the correct answer for a scope and the
-/// wrong one here — running it would refuse the only value this flag is ever
-/// given.
-const OUTSIDE_THE_REPOSITORY: [(&str, &str); 1] = [("init", "--at")];
+/// A third category rather than a hole in the first two. `ank init --at`
+/// names where a corpus goes for a tree that must stay untouched
+/// (ADR-96174f1ac2b7), and `ank signers --key` a public key file, which lives
+/// in `~/.ssh` and not in the repository (ADR-5c6db7a161b8).
+/// `context::normalised` refuses a path outside the repository, which is the
+/// correct answer for a scope and the wrong one here — running it would refuse
+/// the only value these flags are ever given.
+const OUTSIDE_THE_REPOSITORY: [(&str, &str); 2] = [("init", "--at"), ("signers", "--key")];
 const GLOB_FLAGS: [(&str, &str); 3] = [
     ("new", "--scope"),
     ("amend", "--scope"),
@@ -14015,7 +14020,12 @@ const GLOB_FLAGS: [(&str, &str); 3] = [
 /// path if it is called `--scope`" — is exactly what would let the next
 /// `--under <glob>` through in silence, which is the failure this whole task is
 /// a correction of.
-const NOT_A_PATH: [&str; 41] = [
+const NOT_A_PATH: [&str; 44] = [
+    // Who may ratify, what a reviewer should know of the key, and the date it
+    // stops ratifying: an email, prose and a day (ADR-5c6db7a161b8).
+    "--principal",
+    "--note",
+    "--date",
     // A word naming a rule of `check`, and never a file (ADR-df1035934387).
     "--kind",
     // Carries no value at all: `done --fresh` reuses no recorded run
