@@ -13972,7 +13972,10 @@ const GLOB_FLAGS: [(&str, &str); 3] = [
 /// path if it is called `--scope`" — is exactly what would let the next
 /// `--under <glob>` through in silence, which is the failure this whole task is
 /// a correction of.
-const NOT_A_PATH: [&str; 39] = [
+const NOT_A_PATH: [&str; 40] = [
+    // Carries no value at all: `done --fresh` reuses no recorded run
+    // (ADR-a2faf59f6ce0).
+    "--fresh",
     // Carries no value at all: `accept --pr` names nothing, it carries the
     // ratifications to a pull request (ADR-2a63c0c87691).
     "--pr",

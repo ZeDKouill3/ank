@@ -279,6 +279,7 @@ fn every_config_key_is_printed_with_its_type_and_default() {
             ("`verifiers.<name>.env.platform`", "string", "none"),
             ("`verifiers.<name>.env.network`", "`none` or `open`", "none"),
             ("`verifiers.<name>.env.vars.<var>`", "string", "none"),
+            ("`proof.reuse_max_age`", "duration", "`24h`"),
             ("`verifier_jobs`", "integer", "none"),
             ("`roles.<name>.can`", "list of strings", "`[]`"),
             ("`roles.<name>.cannot`", "list of strings", "`[]`"),
