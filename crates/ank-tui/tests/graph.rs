@@ -1407,7 +1407,12 @@ fn a_search_narrows_the_graph_to_one_task_and_escape_gives_the_fold_back() {
             [short_of(&left)],
             "the search left another row at {columns}x{rows}:\n{narrowed}"
         );
-        for id in every.iter().filter(|id| **id != left) {
+        // The task under way is held, and the claims panel beside the graph
+        // lists a held task whatever the needle: the search narrows the
+        // graph and the entities, not the claims. It is held to the graph's
+        // own rows above, and to the rest of the screen below.
+        let claimed = &fixture.under_way;
+        for id in every.iter().filter(|id| **id != left && *id != claimed) {
             assert!(
                 !narrowed.contains(&short_of(id)),
                 "{id} is still on the screen at {columns}x{rows}:\n{narrowed}"
