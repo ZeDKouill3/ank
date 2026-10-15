@@ -5,7 +5,7 @@ slug: no-environment-makes-a-pipe-colored-proves-the-c
 title: no_environment_makes_a_pipe_colored proves the colour rule in at most 20 ank spawns
 created: 2026-10-15T16:59:10Z
 author: claude-code/opus-5.5+ba8e
-status: open
+status: in_progress
 scope:
   - crates/ank-cli/tests/cli.rs
 blocked_by: []
@@ -14,7 +14,7 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 schema: 4
-version: 1
+version: 2
 ---
 
 Measured by TASK-ba8ec1f11085 (see its log): the largest ank spawn count in cli.rs and status.rs, 92 spawns and 592 git under them, which on a Windows runner at about 25ms a process is the most expensive test of either file. The colour decision is one function; the product of every styled verb by every environment re-proves it thirteen times.
