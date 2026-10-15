@@ -44,8 +44,8 @@ $ ank claim 820d && ank log "jwt.verify removed from session.ts" && ank done
     $ ank check
     signal: ADR-06d29e727d24: ratified by its own author (human:marie)
     signal: TASK-820d259af6a7: finished on another branch, main has not caught up
-    signal: allowed_signers: no ratification key declared: permissions are advisory, not enforced (§8)
     signal: corpus: 4 entity file(s) differ from main: this checkout does not carry the corpus the default branch does (git merge main)
+    signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
     check: ok — 1 tasks, 1 adr, 4 signal(s)
 
 Four signals and no fault, so exit 0, and each line starts with its subject.
@@ -71,9 +71,9 @@ Commit, and the completion record is pruned:
     $ git add -A && git commit -m "the migration is done"
     $ ank check
     signal: ADR-06d29e727d24: ratified by its own author (human:marie)
-    signal: allowed_signers: no ratification key declared: permissions are advisory, not enforced (§8)
     signal: corpus: 3 hot entities are cold and belong in .ank/archive/entities/, with every entry about them (ank archive)
     └── ank archive --dry-run lists them and moves nothing
+    signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
     pruned refs/ank/claims/TASK-820d259af6a7
     check: ok — 1 tasks, 1 adr, 3 signal(s)
 
@@ -115,10 +115,10 @@ $ f=.ank/entities/TASK-51c2a0f6d418.md && sed 's/names no JWT/names nothing/' "$
     error: TASK-51c2a0f6d418: done_criteria diverges from the claim (claimed 03c659e46adf, now ef485fff585a)
     signal: ADR-06d29e727d24: ratified by its own author (human:marie)
     signal: TASK-51c2a0f6d418: content is 3eff92338baa where the last write left 2e29f326854e: it was edited outside the CLI, which is legal and leaves no entry
-    signal: allowed_signers: no ratification key declared: permissions are advisory, not enforced (§8)
     signal: corpus: 2 entity file(s) differ from main: this checkout does not carry the corpus the default branch does (git merge main)
     signal: corpus: 3 hot entities are cold and belong in .ank/archive/entities/, with every entry about them (ank archive)
     └── ank archive --dry-run lists them and moves nothing
+    signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
     check: 1 fault(s) — 2 tasks, 1 adr, 5 signal(s)
     exit 8
 

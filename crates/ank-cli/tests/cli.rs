@@ -20578,6 +20578,17 @@ fn json_golden_verbs_needing_their_own_environment() {
     assert_eq!(code(&out), 0, "migrate: {}", stderr(&out));
     fixture::pin("migrate", &stdout(&out));
 
+    // signers migrate, over a former allowed_signers (ADR-5c6db7a161b8)
+    let r = Repo::new();
+    std::fs::write(
+        r.0.join(".ank/allowed_signers"),
+        "# the release key\nmarie@laptop gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n",
+    )
+    .unwrap();
+    let out = r.ank(AGENT, &["signers", "migrate", "--json"]);
+    assert_eq!(code(&out), 0, "signers: {}", stderr(&out));
+    fixture::pin("signers", &stdout(&out));
+
     // archive, over a corpus holding what is cold, and without moving it: the
     // list is the document (TASK-97fd1992567a)
     let r = cold_corpus();
@@ -20734,8 +20745,9 @@ fn every_golden_conforms_to_the_shape_its_verb_declares() {
     // `tests/update.rs` against a bare repository standing in for the releases,
     // and thirty-two since TASK-53a8f5ca2539, which gave `context --since` one,
     // pinned in `tests/context_since.rs` across two worktrees, and thirty-three
-    // since TASK-15b59a393a38, which gave `verify` one.
-    assert_eq!(checked, 33, "one fixture per document the surface returns");
+    // since TASK-15b59a393a38, which gave `verify` one, and thirty-four since
+    // TASK-3a7a73ccf2b7, which gave `signers migrate` one.
+    assert_eq!(checked, 34, "one fixture per document the surface returns");
     // **A declaration is unexercised when no instance of it anywhere carries a
     // row**, which is the reading this list is about (TASK-fbdf25e30058). It
     // used to be one instance at a time: a path went on the list every time the

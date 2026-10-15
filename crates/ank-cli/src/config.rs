@@ -171,9 +171,8 @@ pub fn date_days(text: &str) -> Option<i64> {
 
 /// Reads `signers:` into one row per key, in the order the file declares them.
 fn parse_signers(map: serde_yaml::Mapping, path: &Path) -> Result<Vec<Signer>> {
-    let refuse = |what: String| {
-        CliError::new(ExitCode::Generic, format!("{}: {what}", path.display()))
-    };
+    let refuse =
+        |what: String| CliError::new(ExitCode::Generic, format!("{}: {what}", path.display()));
     let mut out = Vec::new();
     for (principal, value) in map {
         let Some(principal) = principal.as_str().map(str::to_string) else {
@@ -2734,11 +2733,7 @@ fn read_allowed_signers(text: &str) -> std::result::Result<Vec<Migrated>, String
                         .ok_or_else(|| at("valid-before is not a YYYYMMDD date"))?;
                     valid_before = Some(date);
                 }
-                None => {
-                    return Err(at(&format!(
-                        "'{f}' is an option signers: has no field for"
-                    )))
-                }
+                None => return Err(at(&format!("'{f}' is an option signers: has no field for"))),
             }
         };
         let Some(key) = fields.next() else {
@@ -2767,9 +2762,11 @@ fn read_allowed_signers(text: &str) -> std::result::Result<Vec<Migrated>, String
         // Comments below the last key belong to no key; they are kept on the
         // last one rather than lost, after a blank line.
         let Some(last) = keys.last_mut() else {
-            return Err(".ank/allowed_signers declares no key: nothing to move, and its \
+            return Err(
+                ".ank/allowed_signers declares no key: nothing to move, and its \
                  comments would have nowhere to go"
-                .to_string());
+                    .to_string(),
+            );
         };
         if !last.note.is_empty() {
             last.note.push(String::new());
@@ -2829,7 +2826,10 @@ fn render_signers(keys: &[Migrated]) -> Vec<String> {
         out.push(format!("  {}:", scalar(p)));
         out.push("    keys:".to_string());
         for k in keys.iter().filter(|k| k.principal == p) {
-            out.push(format!("      - key: {}", scalar(&format!("{} {}", k.keytype, k.key))));
+            out.push(format!(
+                "      - key: {}",
+                scalar(&format!("{} {}", k.keytype, k.key))
+            ));
             if !k.note.is_empty() {
                 out.extend(note_lines(&k.note, "        "));
             }
@@ -2889,7 +2889,6 @@ fn migrate_signers(
     };
     let remaining: Vec<Migrated> = keys.iter().filter(|k| !declared(k)).cloned().collect();
     let mut lines = split_lines(&text);
-    let mut after_text = text.clone();
     if !remaining.is_empty() {
         if find_key(&lines, 0..lines.len(), 0, "signers").is_some() {
             return Err(CliError::new(
@@ -2900,7 +2899,9 @@ fn migrate_signers(
                     remaining.len()
                 ),
             )
-            .with_hint("move them under signers: by hand, then ank signers migrate removes the file"));
+            .with_hint(
+                "move them under signers: by hand, then ank signers migrate removes the file",
+            ));
         }
         let eol = dominant_eol(&lines);
         terminate_last(&mut lines, &eol);
@@ -2910,14 +2911,17 @@ fn migrate_signers(
                 eol: eol.clone(),
             });
         }
-        after_text = join_lines(&lines);
+        let after_text = join_lines(&lines);
         // Read back through the parser, and compared field by field: a note
         // YAML would fold or a principal it would retype is caught here,
         // before the file that held it is gone.
         let read = parse(&after_text, &path).map_err(|e| {
             CliError::new(
                 ExitCode::Generic,
-                format!("refused: the block would leave {} unreadable", path.display()),
+                format!(
+                    "refused: the block would leave {} unreadable",
+                    path.display()
+                ),
             )
             .with_hint(e.message)
         })?;
@@ -2947,7 +2951,6 @@ fn migrate_signers(
         .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", source.display())))?;
 
     let mut principals: Vec<&str> = remaining.iter().map(|k| k.principal.as_str()).collect();
-    principals.dedup();
     principals.sort_unstable();
     principals.dedup();
     if inv.json() {
@@ -2967,7 +2970,6 @@ fn migrate_signers(
         );
         let _ = writeln!(out, "  review: git diff .ank");
     }
-    let _ = after_text;
     Ok(ExitCode::Ok)
 }
 

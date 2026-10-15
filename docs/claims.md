@@ -168,7 +168,7 @@ $ git init -q --bare ../origin.git && git remote add origin ../origin.git
 <!-- replay travel part -->
 
     $ ank check
-    signal: allowed_signers: no ratification key declared: permissions are advisory, not enforced (§8)
+    signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
 
 A clone that already has the refspec pays nothing for it, and with no `origin`
 nothing is written, so `git remote add origin` keeps working. An `origin` that

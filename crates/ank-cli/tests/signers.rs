@@ -71,11 +71,7 @@ fn git_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
         c.env(k, v);
     }
     let out = c.output().expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        text(&out.stderr)
-    );
+    assert!(out.status.success(), "git {args:?}: {}", text(&out.stderr));
     text(&out.stdout).trim().to_string()
 }
 
@@ -194,7 +190,10 @@ impl Corpus {
 
     fn sign_with_gpg(&self) {
         git(&self.repo, &["config", "gpg.format", "openpgp"]);
-        git(&self.repo, &["config", "gpg.program", gpg_stub().to_str().unwrap()]);
+        git(
+            &self.repo,
+            &["config", "gpg.program", gpg_stub().to_str().unwrap()],
+        );
         git(&self.repo, &["config", "user.signingkey", FPR]);
     }
 
@@ -267,7 +266,8 @@ fn an_ssh_key_ratifies_nothing_committed_after_its_valid_before() {
     );
     let b = faults_about(&report, B);
     assert!(
-        b.iter().any(|l| l.contains("valid_before") && l.contains("2026-10-01")),
+        b.iter()
+            .any(|l| l.contains("valid_before") && l.contains("2026-10-01")),
         "signed after valid_before is a fault naming the date: {report}"
     );
 }
@@ -292,7 +292,8 @@ fn a_gpg_key_ratifies_nothing_committed_after_its_valid_before() {
     );
     let b = faults_about(&report, B);
     assert!(
-        b.iter().any(|l| l.contains("valid_before") && l.contains("2026-10-01")),
+        b.iter()
+            .any(|l| l.contains("valid_before") && l.contains("2026-10-01")),
         "signed after valid_before is a fault naming the date: {report}"
     );
 }
@@ -440,7 +441,12 @@ fn config_refuses_signers_and_names_ank_signers() {
         &["config", "--unset", "signers.marie@laptop"][..],
     ] {
         let out = c.ank(args);
-        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", text(&out.stdout));
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            text(&out.stdout)
+        );
         assert!(
             text(&out.stderr).contains("ank signers"),
             "{args:?}: {}",

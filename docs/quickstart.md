@@ -294,8 +294,8 @@ like any other change. Before you commit, `check` has something to say:
     $ ank check
     signal: ADR-06d29e727d24: ratified by its own author (human:marie)
     signal: TASK-820d259af6a7: finished on another branch, main has not caught up
-    signal: allowed_signers: no ratification key declared: permissions are advisory, not enforced (§8)
     signal: corpus: 4 entity file(s) differ from main: this checkout does not carry the corpus the default branch does (git merge main)
+    signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
     check: ok — 1 tasks, 1 adr, 4 signal(s)
 
 Commit, and the two signals about the uncommitted work go:
@@ -305,9 +305,9 @@ Commit, and the two signals about the uncommitted work go:
     $ git add -A && git commit -m "the migration is done"
     $ ank check
     signal: ADR-06d29e727d24: ratified by its own author (human:marie)
-    signal: allowed_signers: no ratification key declared: permissions are advisory, not enforced (§8)
     signal: corpus: 3 hot entities are cold and belong in .ank/archive/entities/, with every entry about them (ank archive)
     └── ank archive --dry-run lists them and moves nothing
+    signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
     pruned refs/ank/claims/TASK-820d259af6a7
     check: ok — 1 tasks, 1 adr, 3 signal(s)
 

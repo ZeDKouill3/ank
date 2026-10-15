@@ -1675,18 +1675,21 @@ pub fn classify_signature(
             let matching: Vec<&Signer> = declared
                 .iter()
                 .filter(|s| match ssh {
-                    true => s.keytype != "gpg" && ssh_fingerprint(&s.key).as_deref() == Some(facts.fingerprint.as_str()),
-                    false => s.keytype == "gpg" && declares(std::slice::from_ref(*s), &facts.fingerprint),
+                    true => {
+                        s.keytype != "gpg"
+                            && ssh_fingerprint(&s.key).as_deref()
+                                == Some(facts.fingerprint.as_str())
+                    }
+                    false => {
+                        s.keytype == "gpg" && declares(std::slice::from_ref(*s), &facts.fingerprint)
+                    }
                 })
                 .collect();
             // A key is honoured where at least one declaration of it is live
             // at the committer date; where every one is retired, the date
             // is what refuses it, and the reader is told which.
             let live = matching.iter().any(|s| !retired(s, committed));
-            let retired_on = matching
-                .iter()
-                .filter_map(|s| s.valid_before.clone())
-                .max();
+            let retired_on = matching.iter().filter_map(|s| s.valid_before.clone()).max();
             if ssh {
                 // Under SSH git has already done the allowlist check, because
                 // it is the only format it will do it for: measured against
@@ -7149,7 +7152,12 @@ fn signature_cache<T>(repo: &Repo, with: impl FnOnce(&Index, &str) -> T) -> Opti
     // `valid_before` is judged after the cache, against the commit's date.
     let text: String = declared_signers(repo)
         .iter()
-        .map(|s| format!("{} {} {} {:?}\n", s.principal, s.keytype, s.key, s.valid_before))
+        .map(|s| {
+            format!(
+                "{} {} {} {:?}\n",
+                s.principal, s.keytype, s.key, s.valid_before
+            )
+        })
         .collect();
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     sha2::Digest::update(&mut hasher, text.as_bytes());
