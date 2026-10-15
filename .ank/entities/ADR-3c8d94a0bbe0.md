@@ -5,15 +5,19 @@ slug: the-ank-directory-is-reached-only-through-the-cl
 title: The .ank directory is reached only through the CLI, and the contract says which verbs write
 created: 2026-10-14T10:16:07Z
 author: claude-code/fable-5.1+plan
-status: proposed
+status: accepted
 scope:
   - .ank/**
   - crates/ank-contract/src/verbs.rs
 constraint: |
   Entities in .ank/ are read and written through the ank CLI only. No agent opens, greps, lists or edits a file under .ank/ directly. This constrains the agent and not the tool: a human with an editor keeps every power they had, and check remains what notices. Which verbs write is not a list this document keeps: every CommandSpec declares writes, one of nothing, files, refs or both, ank help --json carries it on every verb, and a test holds every verb to a declaration confronted with what the verb leaves on disk and in refs/ank. The reading side is the verbs that declare nothing, the writing side is the rest, and a verb added later is on one of the two sides on the day it dispatches.
 supersedes: ADR-e45e1a29fe91
+ratified: 4edee06b1a14
+verified:
+  - by: haksolot@vmi3223161
+    at: 2026-10-15T13:33:43Z
 schema: 4
-version: 1
+version: 2
 ---
 
 ## Context

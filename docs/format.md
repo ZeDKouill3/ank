@@ -144,10 +144,13 @@ refusals answer different questions: `priorty:` in a `task` is a typo, and
 ### Task
 
 A `proof` entry emits its own keys in order: `type`, `ref`, then `tree`,
-`criteria`, `verifier` and `via`, each omitted when absent. The values `type`
-and `via` take are listed [with the fields](entity-fields.md#proof-type). `via`
+`criteria`, `verifier`, `via`, `reused` and `by`, each omitted when absent. The
+values `type` and `via` take are listed [with the fields](entity-fields.md#proof-type). `via`
 is the route by which the entry arrived, and its absence means the entry was
-written before the field existed, never a fourth route.
+written before the field existed, never a fourth route. `reused` and `by` mark
+an entry `done` took from a recorded run rather than from an execution for this
+task: `reused` says where from, `local` for the run registry, and `by` names the
+identity that ran it. Their absence means the entry was run for its task.
 
 A `verified` entry emits `by`, then `at`. Both are required in an entry that
 exists at all, an entry missing either being rejected, while the list itself is

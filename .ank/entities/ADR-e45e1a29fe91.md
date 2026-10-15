@@ -5,7 +5,7 @@ slug: the-ank-directory-is-reached-only-through-the-cl
 title: The .ank directory is reached only through the CLI, and the routes are the ones that dispatch
 created: 2026-08-31T04:01:01Z
 author: claude-code/opus-5+corpus
-status: accepted
+status: superseded
 scope:
   - .ank/**
 constraint: |
@@ -16,7 +16,7 @@ verified:
   - by: claude-code/opus-5+ratify
     at: 2026-08-31T08:12:42Z
 schema: 4
-version: 2
+version: 3
 ---
 
 `.ank/` should be as opaque to an agent as `.git/` is. Nobody opens
