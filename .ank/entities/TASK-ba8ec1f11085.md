@@ -5,7 +5,7 @@ slug: count-the-processes-each-test-of-cli-rs-and-stat
 title: Count the processes each test of cli.rs and status.rs starts
 created: 2026-10-13T10:11:07Z
 author: claude-code/2.x
-status: in_progress
+status: done
 scope:
   - crates/ank-cli/tests/cli.rs
   - crates/ank-cli/tests/status.rs
@@ -14,8 +14,21 @@ done_criteria: |
   An ank log records, for the 20 tests of cli.rs and status.rs that start the most processes, the count of ank and git processes each starts, measured with GIT_TRACE at an absolute path and a count of ank spawns, never with a clock; one task is filed per reduction it motivates, each with a numeric bound on the count.
 criteria_by: creator
 verify: [cargo-test, fmt-check]
+proof:
+  - type: test
+    ref: local/03030e7a7fed@193c342
+    tree: scope/0c7ac1a4a777
+    criteria: 41f43b68793e
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@193c342
+    tree: scope/0c7ac1a4a777
+    criteria: 41f43b68793e
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 2
+version: 3
 ---
 
 On Windows, cli.rs takes 407.6s against 36s on Linux, and status.rs 89.3s
