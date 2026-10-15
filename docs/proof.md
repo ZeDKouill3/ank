@@ -217,6 +217,8 @@ and adds `reused: local` and `by: <identity>`. A failure is never reused, nor a
 run from another machine, nor an attestation. Split a suite into verifiers with
 disjoint `inputs` and only those whose files changed run again;
 `ank done --fresh` runs every one (ADR-a2faf59f6ce0).
+[Splitting a suite into verifiers](splitting-verifiers.md) walks through it on
+two packages, with `ank verify` running ahead of the close.
 
 `done` records what ran on the machine that ran it, which is a local claim.
 [Anchoring a run](ci.md#anchoring-a-run) is how a pipeline adds the external
