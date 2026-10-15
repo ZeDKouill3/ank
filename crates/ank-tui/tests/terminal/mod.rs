@@ -278,6 +278,18 @@ fn in_this_runs_root(command: &mut Command) {
         .env("TEMP", root);
 }
 
+/// Waits until the wall clock has moved to a later second than the one it
+/// is in now, so that what is written next carries a `created` later than
+/// everything written before the call.
+fn next_second() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is past the epoch");
+    let into = Duration::from_nanos(u64::from(now.subsec_nanos()));
+    std::thread::sleep(Duration::from_secs(1) - into + Duration::from_millis(5));
+}
+
 /// The corpus [`Repo::graphed`] seeds, with every identifier it wrote
 /// (TASK-643611645dea).
 ///
@@ -376,6 +388,12 @@ impl Repo {
     /// The closed task is closed after its dependent names it, so the edge
     /// is one `new` accepted rather than one `amend` added, and the blocker
     /// is finished the way a blocker is finished in a real corpus: later.
+    ///
+    /// The task under way is written on a later second than everything
+    /// before it (TASK-de02dbcf9965): the graph orders two blocks of one
+    /// size by the `created` of their newest task, and `created` is written
+    /// to the second, so ten tasks written inside one second would leave
+    /// the chain's block and the diamond's tied and the order the hash's.
     pub fn graphed() -> Graphed {
         let repo = Repo::bare("graphed");
         let chain_1 = repo.new_task("The first of a chain", &[]);
@@ -391,6 +409,7 @@ impl Repo {
         // Written with no blocker, claimed, and only then given its edge:
         // `claim` refuses a task whose blocker is not finished (exit 7), and
         // `amend` accepts an edge on a task already under way.
+        next_second();
         let under_way = repo.new_task("A task under way", &[]);
         repo.ank(&["claim", &under_way]);
         repo.ank(&["amend", &under_way, "--blocked-by", &chain_1]);

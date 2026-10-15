@@ -62,6 +62,10 @@ pub struct Row {
     pub kind: String,
     pub status: String,
     pub title: String,
+    /// When it was created, as `find` prints it: RFC 3339 in Zulu, so the
+    /// text orders as the instant does, and empty where the CLI said nothing
+    /// (TASK-de02dbcf9965: the graph orders its blocks by it).
+    pub created: String,
 }
 
 impl Row {
@@ -74,6 +78,7 @@ impl Row {
             kind: ank::text(value, "kind"),
             status: ank::text(value, "status"),
             title: ank::text(value, "title"),
+            created: ank::text(value, "created"),
         }
     }
 
@@ -456,6 +461,7 @@ fn waiting(value: &ank::Value) -> Row {
         id,
         status: "proposed".to_string(),
         title: ank::text(value, "title"),
+        created: ank::text(value, "created"),
     }
 }
 
