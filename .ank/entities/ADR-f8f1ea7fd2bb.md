@@ -18,13 +18,15 @@ constraint: |
   remains, with the single exception of historical anchors that rewriting would
   falsify: log entries already written, and proof references pointing at an
   external artifact.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#claiming_through_the_binary_takes_the_ref_and_moves_the_task
 supersedes: ADR-85e6bbb195b8
 ratified: bd1f6317b930
 verified:
   - by: claude-code/opus-5+ratify
     at: 2026-08-31T08:12:43Z
 schema: 4
-version: 2
+version: 3
 ---
 
 Three letters, typed on every call of the agent loop and present in every path of

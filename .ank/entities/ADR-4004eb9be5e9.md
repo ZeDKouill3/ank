@@ -11,12 +11,16 @@ scope:
   - crates/ank-cli/src/git.rs
 constraint: |
   check reports, as a signal and never a fault, each log entry the default branch holds that this checkout has changed, committed on its branch or edited in its working tree, naming the entry and the correction ADR-25f977377fa0 prescribes: restore it, and write a new entry naming it. It compares against the merge base with the default branch, uses only plumbing ADR-9307e5d214a7 admits, starts a fixed number of git processes whatever the corpus holds, and says in one line that it was skipped where no default branch can be determined. It is a signal because a format migration rewrites entries legitimately.
+enforced_by:
+  - crates/ank-cli/tests/log_rewritten.rs#an_entry_edited_in_the_working_tree_is_a_signal_naming_it_and_the_correction
+  - crates/ank-cli/tests/log_rewritten.rs#the_git_process_count_is_the_same_for_one_and_for_forty_entries_changed
+  - crates/ank-cli/tests/log_rewritten.rs#with_no_default_branch_the_comparison_is_skipped_in_one_line_without_a_fault
 ratified: c26e3237bc41
 verified:
   - by: haksolot@vmi3223161
     at: 2026-10-02T20:18:10Z
 schema: 4
-version: 2
+version: 3
 ---
 
 ADR-25f977377fa0 says a log entry is written once and never modified, and

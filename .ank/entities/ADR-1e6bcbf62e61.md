@@ -10,12 +10,15 @@ scope:
   - crates/ank-cli/**
 constraint: |
   check reads entity identifiers out of the prose it stores -- a log entry's message, a task's done_criteria, an entity's body -- and reports, once for the corpus and never once per mention, those that name an entity the corpus does not hold. A signal and never a fault: the prose is not wrong, it points at nothing. An identifier that resolves is silent whatever its status, superseded included, because prose is where history is written and because a frozen criterion cannot be repaired. Nothing is refused at write time and nothing in prose confers, orders or is followed: an identifier in prose is not a reference, which is the rule ADR-c88f99e1c16e states and this one does not touch.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#check_names_the_prose_identifiers_that_resolve_to_nothing_once_for_the_corpus
+  - crates/ank-cli/tests/cli.rs#a_check_that_reports_prose_identifiers_refuses_nothing_and_rewrites_nothing
 ratified: 583a92484162
 verified:
   - by: claude-code/opus-5
     at: 2026-08-22T20:55:54Z
 schema: 4
-version: 2
+version: 3
 ---
 
 Measured on this corpus on 2026-08-22, before deciding: 1087 distinct entity

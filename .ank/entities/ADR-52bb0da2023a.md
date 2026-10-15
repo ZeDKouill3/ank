@@ -10,13 +10,17 @@ scope:
   - crates/ank-cli/**
 constraint: |
   A verb that creates an entity of any kind but log writes a log entry recording the creation, the version it produced and the hash of the content it produced, on the terms the edit record already sets: the entry anchors nothing, no authority rests on it and no verb refuses on it. A verb that changes an entity's content outside a status transition keeps writing the edit record, with the fields it changed, the versions it moved between, the hash of the state it replaced and the hash of the content it produced. Content is every field a transition does not write: status, proof, ratified and verified belong to a transition and version belongs to the store, and the rest is content. check compares the newest produced hash an entity's entries carry against the entity as it stands and reports a signal naming both when they differ; an edit outside the CLI stays a signal, because a human with an editor keeps every power they had. An entity of any kind but log whose created instant is later than the ratification of this decision and whose entries carry no creation record is a fault, and the fault names ank edit <id> as the command that accounts for it, saying that the id and the verifiers are the reader's to check. An entity created before that instant, or carrying at least one entry with a produced hash, is silent, because the corpus is not migrated by a rule it predates. A log entry is the record and carries none. The version count is kept for the kinds whose transitions their own fields evidence, and is not attempted for a task. Nothing here refuses an edit: what the record buys is that an entity nobody's verb wrote is visible, and red in CI, on every harness alike.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#an_entity_born_after_the_rule_without_a_record_is_a_fault_until_edit_accounts_for_it
+  - crates/ank-cli/tests/cli.rs#new_leaves_a_creation_record_for_every_kind_it_creates
+  - crates/ank-cli/tests/cli.rs#content_edited_by_hand_is_reported_with_both_hashes
 supersedes: ADR-f7dc76886db2
 ratified: f98317bfee0a
 verified:
   - by: claude-code/fable-5.1+ratify
     at: 2026-09-13T10:19:43Z
 schema: 4
-version: 2
+version: 3
 ---
 
 ## Context

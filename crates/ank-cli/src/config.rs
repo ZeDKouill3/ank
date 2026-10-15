@@ -179,24 +179,9 @@ struct VerifierFile {
     /// input; an empty list is refused, because it would say nothing can.
     #[serde(default)]
     inputs: Option<Vec<String>>,
-    /// Where the verifier is meant to run. Parsed, validated and hashed, never
-    /// executed here: ank runs every verifier on the host, and running inside
-    /// this is an independent executor's job (ADR-d8a328e311b9, point 5).
-    #[serde(default)]
-    env: Option<EnvFile>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EnvFile {
-    #[serde(default)]
-    image: Option<String>,
-    #[serde(default)]
-    platform: Option<String>,
-    #[serde(default)]
-    vars: BTreeMap<String, String>,
-    #[serde(default)]
-    network: Option<String>,
+    // No `env`: ADR-7224dea611c1 withdrew it until an executor exists to
+    // honour it, and `deny_unknown_fields` refuses it by name like any key
+    // the parser does not know.
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -214,36 +199,6 @@ pub struct Verifier {
     pub timeout: Duration,
     /// As declared; `None` is the whole tree, never an empty list.
     pub inputs: Option<Vec<String>>,
-    pub env: Option<Env>,
-}
-
-/// A verifier's declared environment (ADR-d8a328e311b9), validated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Env {
-    /// Pinned by `sha256:` digest: a tag never reaches this field.
-    pub image: Option<String>,
-    /// `os/arch`, present whenever `image` is.
-    pub platform: Option<String>,
-    pub vars: BTreeMap<String, String>,
-    /// Resolved: `none` when an image is declared and the file says nothing.
-    /// `None` here is the host's network, which only a verifier with no image
-    /// has.
-    pub network: Option<Network>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Network {
-    None,
-    Open,
-}
-
-impl Network {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Network::None => "none",
-            Network::Open => "open",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,25 +405,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
                 }
             }
         }
-        // An `env` declaring nothing is no environment: hashing it would move
-        // the definition over a key that says nothing.
-        let env = v
-            .env
-            .map(|e| env_of(e, &name, path))
-            .transpose()?
-            .filter(|e| {
-                e.image.is_some()
-                    || e.platform.is_some()
-                    || e.network.is_some()
-                    || !e.vars.is_empty()
-            });
         verifiers.insert(
             name,
             Verifier {
                 run: v.run,
                 timeout,
                 inputs: v.inputs,
-                env,
             },
         );
     }
@@ -502,71 +444,6 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
         verifier_jobs: raw.verifier_jobs,
         reuse_max_age,
     })
-}
-
-/// An `env` block validated into what it declares (ADR-d8a328e311b9).
-fn env_of(e: EnvFile, name: &str, path: &Path) -> Result<Env> {
-    let refuse = |f: &str, why: String| {
-        CliError::new(
-            ExitCode::Generic,
-            format!("{}: verifiers.{name}.env.{f}: {why}", path.display()),
-        )
-    };
-    if let Some(image) = &e.image {
-        if !pinned_by_digest(image) {
-            return Err(refuse(
-                "image",
-                format!(
-                    "'{image}' is not pinned by digest: a tag names different environments \
-                     over time, and an image is <name>@sha256:<64 hex digits>"
-                ),
-            ));
-        }
-        if e.platform.is_none() {
-            return Err(
-                refuse("platform", "required with an image, as os/arch".to_string()).with_hint(
-                    format!("ank config verifiers.{name}.env.platform linux/amd64"),
-                ),
-            );
-        }
-    }
-    if let Some(platform) = &e.platform {
-        let parts: Vec<&str> = platform.split('/').collect();
-        if parts.len() != 2 || parts.iter().any(|p| p.trim().is_empty() || p.trim() != *p) {
-            return Err(refuse("platform", format!("'{platform}' is not os/arch")));
-        }
-    }
-    let network = match e.network.as_deref() {
-        Some("none") => Some(Network::None),
-        Some("open") => Some(Network::Open),
-        Some(other) => {
-            return Err(refuse(
-                "network",
-                format!("'{other}' is neither none nor open"),
-            ))
-        }
-        None if e.image.is_some() => Some(Network::None),
-        None => None,
-    };
-    Ok(Env {
-        image: e.image,
-        platform: e.platform,
-        vars: e.vars,
-        network,
-    })
-}
-
-/// `<name>@sha256:<64 lowercase hex digits>`, and nothing that a tag could be.
-fn pinned_by_digest(image: &str) -> bool {
-    let Some((name, digest)) = image.rsplit_once("@sha256:") else {
-        return false;
-    };
-    !name.is_empty()
-        && !name.contains('@')
-        && digest.len() == 64
-        && digest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub fn load(path: &Path) -> Result<Config> {
@@ -893,12 +770,6 @@ enum Key {
     /// back as one YAML flow sequence and stored with every glob double-quoted,
     /// because a glob opening on `*` written plain is a YAML alias.
     Inputs { verifier: String },
-    /// A scalar under `verifiers.<name>.env`, one mapping per segment of
-    /// `path`: `env.image`, `env.platform`, `env.network`, `env.vars.<VAR>`.
-    Nested { verifier: String, path: Vec<String> },
-    /// `verifiers.<name>.env` or `.env.vars`: a mapping, legal for `--unset`
-    /// alone, as a whole verifier is.
-    NestedBlock { verifier: String, path: Vec<String> },
     /// One scalar under one mapping, which is the shape of a declaration: a
     /// peer corpus under `peers` (§7), and a corpus declared for a repository
     /// identity under `corpora` (ADR-96174f1ac2b7). One level shallower than a
@@ -1111,37 +982,16 @@ fn resolve_key(path: &str) -> Result<Key> {
         ["verifiers", name, "inputs"] => Ok(Key::Inputs {
             verifier: (*name).to_string(),
         }),
-        ["verifiers", name, "env"] => Ok(Key::NestedBlock {
-            verifier: (*name).to_string(),
-            path: vec!["env".to_string()],
-        }),
-        ["verifiers", name, "env", "vars"] => Ok(Key::NestedBlock {
-            verifier: (*name).to_string(),
-            path: vec!["env".to_string(), "vars".to_string()],
-        }),
-        ["verifiers", name, "env", field @ ("image" | "platform" | "network")] => {
-            Ok(Key::Nested {
-                verifier: (*name).to_string(),
-                path: vec!["env".to_string(), (*field).to_string()],
-            })
-        }
-        ["verifiers", name, "env", "vars", var] => Ok(Key::Nested {
-            verifier: (*name).to_string(),
-            path: vec!["env".to_string(), "vars".to_string(), (*var).to_string()],
-        }),
-        ["verifiers", _, "env", ..] => Err(CliError::new(
-            ExitCode::Generic,
-            format!("unknown env key '{path}'"),
-        )
-        .with_hint(
-            "ank config verifiers.<name>.env.image   or   .platform   or   .network   or   .vars.<VAR>",
-        )),
+        // Withdrawn by ADR-7224dea611c1 and refused by name, ahead of the
+        // dotted-name arm below, which would blame the verifier's name for a
+        // key the parser simply does not know.
+        ["verifiers", _, "env", ..] => Err(unknown_key(path)),
         ["verifiers", _, other] => Err(CliError::new(
             ExitCode::Generic,
             format!("unknown verifier field '{other}'"),
         )
         .with_hint(
-            "ank config verifiers.<name>.run   or   .timeout   or   .default   or   .inputs   or   .env.<key>",
+            "ank config verifiers.<name>.run   or   .timeout   or   .default   or   .inputs",
         )),
         ["verifiers", _, _, _, ..] => Err(CliError::new(
             ExitCode::Generic,
@@ -1599,12 +1449,7 @@ fn scalar_at(line: &Line, name: &str) -> Result<Value> {
 fn read_key(lines: &[Line], key: &Key) -> Result<Value> {
     match key {
         Key::Block { verifier } => Err(whole_block(verifier)),
-        Key::NestedBlock { verifier, path } => Err(mapping(&dotted(verifier, path))),
         Key::Inputs { verifier } => read_inputs(lines, verifier),
-        Key::Nested { verifier, path } => match locate_nested(lines, verifier, path) {
-            Some(j) => scalar_at(&lines[j.0], &dotted(verifier, path)),
-            None => Ok(nested_default(lines, verifier, path)),
-        },
         Key::Top { name, default, .. } => match find_key(lines, 0..lines.len(), 0, name) {
             Some(i) => scalar_at(&lines[i], name),
             None => Ok(from_default(default)),
@@ -1651,10 +1496,6 @@ fn observe(lines: &[Line], key: &Key) -> Result<Value> {
             Some(_) => Value::Set("declared".to_string()),
             None => Value::Unset,
         }),
-        Key::NestedBlock { verifier, path } => Ok(match locate_nested(lines, verifier, path) {
-            Some(_) => Value::Set("declared".to_string()),
-            None => Value::Unset,
-        }),
         other => read_key(lines, other),
     }
 }
@@ -1662,9 +1503,7 @@ fn observe(lines: &[Line], key: &Key) -> Result<Value> {
 fn write_key(lines: &mut Vec<Line>, key: &Key, value: &str) -> Result<()> {
     match key {
         Key::Block { verifier } => Err(whole_block(verifier)),
-        Key::NestedBlock { verifier, path } => Err(mapping(&dotted(verifier, path))),
         Key::Inputs { verifier } => write_inputs(lines, verifier, value),
-        Key::Nested { verifier, path } => write_nested(lines, verifier, path, false, value),
         Key::Top { name, verbatim, .. } => match find_key(lines, 0..lines.len(), 0, name) {
             Some(i) => {
                 let (_, after) = key_of(&lines[i].text).expect("found by its key");
@@ -2006,7 +1845,7 @@ fn write_nested(
 }
 
 /// Removes the key at `path` with everything under it, then every mapping on
-/// the way up that is left with nothing in it: an `env:` holding no key is a
+/// the way up that is left with nothing in it: a mapping holding no key is a
 /// key nobody wrote.
 fn unset_nested(lines: &mut Vec<Line>, verifier: &str, path: &[String]) {
     let Some((j, indent)) = locate_nested(lines, verifier, path) else {
@@ -2078,25 +1917,6 @@ fn write_inputs(lines: &mut Vec<Line>, verifier: &str, value: &str) -> Result<()
     write_nested(lines, verifier, &path, true, &render_inputs(&globs))
 }
 
-/// `env.network` resolves to `none` under an image and to nothing without
-/// one, which is the host's network.
-fn nested_default(lines: &[Line], verifier: &str, path: &[String]) -> Value {
-    let image = ["env".to_string(), "image".to_string()];
-    if path == ["env", "network"] && locate_nested(lines, verifier, &image).is_some() {
-        Value::Default("none".to_string())
-    } else {
-        Value::Unset
-    }
-}
-
-fn mapping(name: &str) -> CliError {
-    CliError::new(
-        ExitCode::Generic,
-        format!("'{name}' is a mapping, not a value: --unset removes it"),
-    )
-    .with_hint(format!("ank config {name}.<key>"))
-}
-
 fn first_grandchild_indent(lines: &[Line], block: &Block, child: usize) -> Option<usize> {
     for i in block.range.clone() {
         if content_indent(&lines[i].text) == Some(child) && key_of(&lines[i].text).is_some() {
@@ -2110,10 +1930,6 @@ fn unset_key(lines: &mut Vec<Line>, key: &Key) -> Result<()> {
     match key {
         Key::Inputs { verifier } => {
             unset_nested(lines, verifier, &["inputs".to_string()]);
-            Ok(())
-        }
-        Key::Nested { verifier, path } | Key::NestedBlock { verifier, path } => {
-            unset_nested(lines, verifier, path);
             Ok(())
         }
         Key::Top { name, .. } => {
@@ -2973,24 +2789,18 @@ identities: {}
             .collect()
     }
 
-    /// The surgery reaches two levels under a verifier and moves nothing it
-    /// was not asked to (ADR-e64dfaafd578): a whole env written and removed
-    /// again gives the file back byte for byte.
+    /// The surgery moves nothing it was not asked to (ADR-e64dfaafd578):
+    /// `inputs` written and removed again gives the file back byte for byte.
     #[test]
-    fn env_and_inputs_are_written_and_removed_surgically() {
-        let mut text = FIXTURE.to_string();
-        for (key, value) in [
-            ("verifiers.cargo-test.env.vars.LANG", "C"),
-            ("verifiers.cargo-test.env.platform", "linux/amd64"),
-            ("verifiers.cargo-test.inputs", "[src/a.rs, '**/*.toml']"),
-        ] {
-            text = edit(&text, key, Some(value)).unwrap();
-        }
+    fn inputs_are_written_and_removed_surgically() {
+        let text = edit(
+            FIXTURE,
+            "verifiers.cargo-test.inputs",
+            Some("[src/a.rs, '**/*.toml']"),
+        )
+        .unwrap();
         assert!(
-            text.contains(
-                "    timeout: 30m\n    env:\n      vars:\n        LANG: C\n      \
-                 platform: linux/amd64\n    inputs: [\"src/a.rs\", \"**/*.toml\"]\n\nroles:"
-            ),
+            text.contains("    timeout: 30m\n    inputs: [\"src/a.rs\", \"**/*.toml\"]\n\nroles:"),
             "{text}"
         );
         assert!(parse(&text, p()).is_ok());
@@ -2999,18 +2809,9 @@ identities: {}
             Value::Set("[\"src/a.rs\", \"**/*.toml\"]".to_string())
         );
         assert_eq!(
-            read(&text, "verifiers.cargo-test.env.network").unwrap(),
-            Value::Unset,
-            "no image, so the host's network and no default to print"
+            edit(&text, "verifiers.cargo-test.inputs", None).unwrap(),
+            FIXTURE
         );
-        for key in [
-            "verifiers.cargo-test.env.vars.LANG",
-            "verifiers.cargo-test.env.platform",
-            "verifiers.cargo-test.inputs",
-        ] {
-            text = edit(&text, key, None).unwrap();
-        }
-        assert_eq!(text, FIXTURE);
 
         // A block sequence is read as the list it is, and replaced by the
         // flow form, its items with it.
@@ -3031,39 +2832,17 @@ identities: {}
             )
         );
 
-        // `env: {}` is promoted, any other flow mapping refused by name.
-        let empty = FIXTURE.replace("    timeout: 30m\n", "    timeout: 30m\n    env: {}\n");
-        assert_eq!(
-            edit(&empty, "verifiers.cargo-test.env.network", Some("open")).unwrap(),
-            FIXTURE.replace(
-                "    timeout: 30m\n",
-                "    timeout: 30m\n    env:\n      network: open\n"
-            )
-        );
-        let flow = FIXTURE.replace(
-            "    timeout: 30m\n",
-            "    timeout: 30m\n    env: {network: open}\n",
-        );
-        let err = edit(&flow, "verifiers.cargo-test.env.network", Some("none")).unwrap_err();
-        assert!(err.message.contains("flow mapping"), "{}", err.message);
-
-        // Nothing declares a verifier but `run`, and a mapping is not a value.
-        let err = edit(FIXTURE, "verifiers.nope.env.platform", Some("linux/amd64")).unwrap_err();
-        assert_eq!(err.code, ExitCode::Prerequisite);
+        // Nothing declares a verifier but `run`.
         let err = edit(FIXTURE, "verifiers.nope.inputs", Some("[x]")).unwrap_err();
         assert_eq!(err.code, ExitCode::Prerequisite);
-        assert!(read(FIXTURE, "verifiers.cargo-test.env").is_err());
-        assert!(edit(FIXTURE, "verifiers.cargo-test.env.vars", Some("x")).is_err());
-        assert!(edit(FIXTURE, "verifiers.cargo-test.env.hermetic", Some("true")).is_err());
         let err = edit(FIXTURE, "verifiers.cargo-test.inputs", Some("src/**")).unwrap_err();
         assert!(err.message.contains("flow sequence"), "{}", err.message);
     }
 
-    /// ADR-d8a328e311b9, refused where the file is parsed: every verb loads
+    /// ADR-7224dea611c1, refused where the file is parsed: every verb loads
     /// it through here, so a refusal here is one no verb can step around.
     #[test]
-    fn env_and_inputs_are_validated_when_the_file_is_parsed() {
-        const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    fn inputs_are_validated_and_env_is_unknown_when_the_file_is_parsed() {
         let verifier = |body: &str| format!("schema: 1\nverifiers:\n  t:\n    run: x\n{body}");
         let refused = |body: &str| {
             parse(&verifier(body), p())
@@ -3072,48 +2851,23 @@ identities: {}
                 .message
         };
 
-        let ok = parse(
-            &verifier(&format!(
-                "    inputs: [\"src/**\"]\n    env:\n      image: ghcr.io/a/b@sha256:{DIGEST}\n      \
-                 platform: linux/amd64\n      vars:\n        LANG: C\n"
-            )),
-            p(),
-        )
-        .unwrap();
+        let ok = parse(&verifier("    inputs: [\"src/**\"]\n"), p()).unwrap();
         let t = &ok.verifiers["t"];
         assert_eq!(t.inputs.as_deref(), Some(&["src/**".to_string()][..]));
-        let env = t.env.as_ref().unwrap();
-        assert_eq!(env.network, Some(Network::None), "none under an image");
-        assert_eq!(env.vars["LANG"], "C");
-        let host = parse(&verifier("    env:\n      vars:\n        LANG: C\n"), p()).unwrap();
-        assert_eq!(host.verifiers["t"].env.as_ref().unwrap().network, None);
 
-        // A tag, in each of the shapes one is written.
-        for image in [
-            "ghcr.io/a/b:1.80".to_string(),
-            "ghcr.io/a/b".to_string(),
-            "ghcr.io/a/b:latest@sha256:abc".to_string(),
-            format!("ghcr.io/a/b@sha256:{}", DIGEST.to_uppercase()),
-            format!("ghcr.io/a/b@sha512:{DIGEST}"),
+        // Every key the withdrawn block carried, and the block itself.
+        for body in [
+            "    env: {}\n",
+            "    env:\n      platform: linux/amd64\n",
+            "    env:\n      vars:\n        LANG: C\n",
+            "    env:\n      network: none\n",
         ] {
-            let m = refused(&format!(
-                "    env:\n      image: \"{image}\"\n      platform: linux/amd64\n"
-            ));
+            let m = refused(body);
             assert!(
-                m.contains("verifiers.t.env.image") && m.contains("tag"),
-                "{image}: {m}"
+                m.contains("verifiers.t") && m.contains("unknown field `env`"),
+                "{body}: {m}"
             );
         }
-        let m = refused(&format!(
-            "    env:\n      image: ghcr.io/a/b@sha256:{DIGEST}\n"
-        ));
-        assert!(m.contains("verifiers.t.env.platform"), "{m}");
-        let m = refused("    env:\n      platform: linux\n");
-        assert!(m.contains("os/arch"), "{m}");
-        let m = refused("    env:\n      network: host\n");
-        assert!(m.contains("neither none nor open"), "{m}");
-        let m = refused("    env:\n      hermetic: true\n");
-        assert!(m.contains("hermetic"), "derived, never declared: {m}");
         let m = refused("    inputs: []\n");
         assert!(m.contains("verifiers.t.inputs"), "{m}");
         let m = refused("    inputs: [\"src/[\"]\n");
@@ -3663,17 +3417,7 @@ mod reference_table {
                 }
                 "verifiers" => {
                     for f in fields_of::<VerifierFile>() {
-                        if f != "env" {
-                            accepted.insert(format!("verifiers.<name>.{f}"));
-                            continue;
-                        }
-                        for e in fields_of::<EnvFile>() {
-                            accepted.insert(if e == "vars" {
-                                "verifiers.<name>.env.vars.<var>".to_string()
-                            } else {
-                                format!("verifiers.<name>.env.{e}")
-                            });
-                        }
+                        accepted.insert(format!("verifiers.<name>.{f}"));
                     }
                 }
                 "roles" => accepted.extend(
@@ -3697,7 +3441,7 @@ mod reference_table {
             }
         }
         let table: BTreeSet<String> = KEYS.iter().map(|k| k.path.to_string()).collect();
-        assert_eq!(accepted.len(), 21, "{accepted:?}");
+        assert_eq!(accepted.len(), 17, "{accepted:?}");
         assert_eq!(table, accepted);
         // What `ank config` addresses is a subset of the table, never a key
         // of its own.
@@ -3743,17 +3487,8 @@ mod reference_table {
             cfg.verifiers["t"].timeout
         );
         assert_eq!(row("verifiers.<name>.default"), Absent::Text("false"));
-        for key in [
-            "inputs",
-            "env.image",
-            "env.platform",
-            "env.network",
-            "env.vars.<var>",
-        ] {
-            assert_eq!(row(&format!("verifiers.<name>.{key}")), Absent::None);
-        }
+        assert_eq!(row("verifiers.<name>.inputs"), Absent::None);
         assert_eq!(cfg.verifiers["t"].inputs, None);
-        assert_eq!(cfg.verifiers["t"].env, None);
         assert!(cfg.default_verifiers.is_empty());
         let roles = parse("schema: 1\nroles:\n  r: {}\n", p).unwrap().roles;
         assert_eq!(row("roles.<name>.can"), Absent::Text("[]"));
