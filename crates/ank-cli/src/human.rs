@@ -3533,7 +3533,7 @@ fn evidenced_writes(entity: &Entity) -> Option<u64> {
 ///
 /// **A signal and never a fault**, and the exit code is the whole argument: an
 /// entity whose arithmetic does not close was written outside the CLI, which is
-/// legal, is what a human with an editor does, and is what ADR-e45e1a29fe91
+/// legal, is what a human with an editor does, and is what ADR-3c8d94a0bbe0
 /// permits a human while asking it of no agent. What the signal says is that it
 /// happened, not that it was wrong.
 ///
@@ -5247,7 +5247,7 @@ pub fn review(
     // about the corpus's size, not about asking git the same question twice).
     let files = &report.files;
     // Who may ratify, read here because nowhere else serves it: `.ank/` is
-    // closed to a direct read (ADR-e45e1a29fe91) and `allowed_signers` is not
+    // closed to a direct read (ADR-3c8d94a0bbe0) and `allowed_signers` is not
     // an entity, so before this the one file the format asks a human to edit by
     // hand was the one file no verb could show (TASK-8a80b590b356). It belongs
     // on this verb rather than on a new one: §4 calls `review` the ratification

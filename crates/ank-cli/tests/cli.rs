@@ -11678,7 +11678,7 @@ fn json_number(text: &str, name: &str) -> u64 {
 }
 
 /// The identifiers of every superseded document in a corpus, asked of the
-/// binary (ADR-e45e1a29fe91: `.ank/` is reached only through the CLI).
+/// binary (ADR-3c8d94a0bbe0: `.ank/` is reached only through the CLI).
 ///
 /// **Derived and never transcribed.** A list in this file protects the cases
 /// somebody remembered and no fourth: superseding an entity does not add to it,
@@ -13810,9 +13810,9 @@ fn config_is_the_one_verb_a_config_that_does_not_parse_does_not_stop() {
 fn the_errors_that_named_the_file_now_name_the_command() {
     // Closing `.ank/` to agents stopped at the configuration, which left
     // these telling their caller to open a file the same tool forbids them to
-    // open (ADR-e64dfaafd578). ADR-e45e1a29fe91 is where the gap closes in the
-    // rule as well: it lists `config` among the writing routes, on the reading
-    // that the sentence governs `.ank/` and not only the entities in it.
+    // open (ADR-e64dfaafd578). ADR-3c8d94a0bbe0 is where the gap closes in the
+    // rule as well: `config` declares `writes: files` in the contract, on the
+    // reading that the rule governs `.ank/` and not only the entities in it.
     let r = Repo::new();
 
     // `new`, on a --verify that matches nothing. The criterion calls the two
@@ -17578,7 +17578,7 @@ review:
 
 /// **`review` names who may ratify, and nothing else can** (TASK-8a80b590b356).
 ///
-/// ADR-e45e1a29fe91 closes `.ank/` to a direct read by an agent, and
+/// ADR-3c8d94a0bbe0 closes `.ank/` to a direct read by an agent, and
 /// `allowed_signers` is not an entity, so `show`, `find` and `config` all pass
 /// over it: before this, the one file the format asks a human to edit by hand
 /// was the one file no command could show. `review` is where the answer belongs
@@ -21859,7 +21859,7 @@ fn an_entity_that_cannot_account_for_a_version_is_reported_with_both_counts() {
 
     let checked = r.ank("claude-code/1.0", &["check"]);
     // A signal and never a fault: an entity written outside the CLI is legal,
-    // and exiting 8 over it would redden a pipeline on an act ADR-e45e1a29fe91
+    // and exiting 8 over it would redden a pipeline on an act ADR-3c8d94a0bbe0
     // permits a human outright.
     assert_eq!(
         code(&checked),

@@ -17,6 +17,7 @@
 use crate::exit::ExitCode;
 use crate::renews::Renews;
 use crate::shape::{f, one, opt, when, Field, Shape, Type};
+use crate::writes::Writes;
 
 // ---------------------------------------------------------------------------
 // The documents the verbs return (ADR-6fd69efb629c)
@@ -403,6 +404,8 @@ const HELP_OUT: &[Field] = &[f(
         f("usage", Type::Str),
         f("summary", Type::Str),
         f("group", Type::Str),
+        // One of nothing, files, refs or both (ADR-3c8d94a0bbe0).
+        f("writes", Type::Str),
         f(
             "flags",
             Type::Array(&[
@@ -866,6 +869,16 @@ pub struct CommandSpec {
     /// list beside the dispatch would let a new one default to renewing nothing,
     /// which is the failure this ADR corrects wearing a different hat.
     pub renews: Renews,
+    /// Whether the verb leaves bytes in the corpus: files under `.ank/`, refs
+    /// under `refs/ank/`, both or neither (ADR-3c8d94a0bbe0).
+    ///
+    /// Declared here for the reason `coordinates` and `renews` are, and it is
+    /// the decision this field replaces that proved the reason: two lists of
+    /// verbs inside a constraint, which went stale once per new route, silently.
+    /// A field is asked of every verb by the compiler, `help --json` carries it,
+    /// and the workspace suite runs every verb declaring [`Writes::Nothing`] on
+    /// a scratch corpus and fails on what it leaves behind.
+    pub writes: Writes,
     /// The document the verb returns under `--json`, declared once and rendered
     /// by `help --json` (ADR-6fd69efb629c).
     ///
@@ -1022,6 +1035,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "context",
         group: "run the loop",
         renews: Renews::Held,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "what binds this perimeter and what is claimable; with a claim held, the criterion and the constraints in full",
         subcommands: &[],
@@ -1049,6 +1063,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "claim",
         group: "run the loop",
         renews: Renews::Never,
+        writes: Writes::Both,
         coordinates: true,
         summary: "takes the task and freezes its done_criteria by hash; refuses one held, blocked, or finished on another branch",
         subcommands: &[],
@@ -1082,6 +1097,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "show",
         group: "run the loop",
         renews: Renews::Named,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "the entity whole, frontmatter and body, byte for byte",
         subcommands: &[],
@@ -1106,6 +1122,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "log",
         group: "run the loop",
         renews: Renews::Never,
+        writes: Writes::Both,
         coordinates: true,
         // **The claim is a condition on the subject, not on the write** (§4,
         // ADR-25f977377fa0). A claim arbitrates work, and only an `open` or
@@ -1151,6 +1168,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "done",
         group: "run the loop",
         renews: Renews::Never,
+        writes: Writes::Both,
         coordinates: true,
         // "the declared verifiers" left out who declares them, and a reader
         // filled the blank with config.yml -- which defines verifiers but never
@@ -1188,6 +1206,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "release",
         group: "run the loop",
         renews: Renews::Never,
+        writes: Writes::Both,
         coordinates: true,
         summary: "hands the task back, with the reason recorded in its log",
         subcommands: &[],
@@ -1218,6 +1237,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "new",
         group: "shape the work",
         renews: Renews::Never,
+        writes: Writes::Files,
         coordinates: false,
         summary: "writes a task, an ADR or a spec that needs no hand finishing",
         subcommands: &["task", "adr", "spec"],
@@ -1259,6 +1279,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "find",
         group: "look around",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "searches titles, scopes and criteria; --type spec reaches the specification, --status open lists what remains",
         subcommands: &[],
@@ -1300,6 +1321,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "status",
         group: "look around",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "where am I: branch, claim, perimeter, queue, findings",
         subcommands: &[],
@@ -1331,6 +1353,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "review",
         group: "shape the work",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "the ratification queue and the health of the corpus: what is proposed, who may ratify it, and which scopes have gone dead",
         subcommands: &[],
@@ -1348,7 +1371,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         // kind. Found while pinning the goldens for TASK-2c12b027f805.
         notes: &[
             "exit 8 means findings, as it does for check; a signal alone leaves it 0",
-            "the signers are what .ank/allowed_signers declares; this is where they are read, since ADR-e45e1a29fe91 closes that file to a direct read",
+            "the signers are what .ank/allowed_signers declares; this is where they are read, since ADR-3c8d94a0bbe0 closes that file to a direct read",
         ],
         refuses_globals: &[],
         output: &[one(&[f("proposed", Type::Array(&[f("id", Type::Str), f("title", Type::Str)])), f("signers", Type::Array(&[f("principal", Type::Str), f("keytype", Type::Str)])), f("live", Type::Array(&[f("id", Type::Str), f("title", Type::Str), f("files", Type::Num)])), f("dead", Type::Num), f("faults", Type::Num), f("signals", Type::Num)])],
@@ -1358,6 +1381,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "accept",
         group: "shape the work",
         renews: Renews::Never,
+        writes: Writes::Files,
         coordinates: true,
         summary: "promotes proposed ADRs or specs to accepted, one signed ratification commit each; on the default branch only, and --pr carries them to a pull request",
         subcommands: &[],
@@ -1443,6 +1467,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         // The same answer `show` gives, and for the same reason: reading the
         // entity you hold is work on it, and working is what keeps the lock.
         renews: Renews::Named,
+        writes: Writes::Files,
         // Nothing here touches a ref, a branch or a remote. The reading is a
         // field on the entity and the write is the store's, so this verb answers
         // on the files alone (ADR-9307e5d214a7).
@@ -1473,6 +1498,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "close",
         group: "shape the work",
         renews: Renews::Never,
+        writes: Writes::Both,
         coordinates: true,
         summary: "closes a task that will never be done; --reason is mandatory",
         subcommands: &[],
@@ -1506,6 +1532,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "amend",
         group: "shape the work",
         renews: Renews::Named,
+        writes: Writes::Files,
         coordinates: false,
         summary: "changes blocked_by, references, amends, scope, and a done_criteria no live claim freezes",
         subcommands: &[],
@@ -1554,6 +1581,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "attest",
         group: "shape the work",
         renews: Renews::Named,
+        writes: Writes::Both,
         coordinates: true,
         summary: "appends a proof to a finished task: the one write allowed after done",
         subcommands: &[],
@@ -1602,6 +1630,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "edit",
         group: "keep the corpus honest",
         renews: Renews::Named,
+        writes: Writes::Files,
         coordinates: false,
         summary: "changes the content field named, or opens the entity in $EDITOR",
         subcommands: &[],
@@ -1634,6 +1663,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "graph",
         group: "look around",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "the blocked_by DAG in readable text, indented under what blocks it",
         subcommands: &[],
@@ -1651,6 +1681,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "scope",
         group: "look around",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "what covers a path: the constraints that bind it, the specifications that govern it, and the tasks that touch it",
         subcommands: &[],
@@ -1676,6 +1707,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "tui",
         group: "look around",
         renews: Renews::Never,
+        writes: Writes::Both,
         // It runs the CLI, and the CLI checks git per verb (ADR-9307e5d214a7).
         // Requiring it here would refuse a reader over a corpus that four
         // read-only verbs answer about perfectly well.
@@ -1745,6 +1777,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         // child, which is the one place the rule is applied (ADR-0bb7ea8991bc);
         // a client that left a session open all night has done no work.
         renews: Renews::Never,
+        writes: Writes::Both,
         // It runs this binary per call, and the CLI checks git per verb
         // (ADR-9307e5d214a7). Requiring it here would refuse the server before
         // a client had asked anything, over a corpus the read-only half of the
@@ -1797,6 +1830,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         // process does not work on a task -- it warms an index
         // (ADR-0bb7ea8991bc).
         renews: Renews::Never,
+        writes: Writes::Refs,
         // **False, and this is the one verb where that is not about cost.**
         // `coordinates` makes the foundation check git in *the checkout's*
         // corpus, and this verb has no such corpus: what it watches is what the
@@ -1872,6 +1906,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "check",
         group: "keep the corpus honest",
         renews: Renews::Never,
+        writes: Writes::Refs,
         coordinates: false,
         // A verb called `check` reads as read-only, and this one writes: it is
         // the only command that prunes (§7). An agent ran it in a loop on that
@@ -1902,6 +1937,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "migrate",
         group: "keep the corpus honest",
         renews: Renews::Never,
+        writes: Writes::Files,
         coordinates: false,
         summary: "rewrites the previous log directory as entries, one entity per entry, and removes what it read",
         subcommands: &[],
@@ -1928,6 +1964,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "archive",
         group: "keep the corpus honest",
         renews: Renews::Never,
+        writes: Writes::Files,
         coordinates: false,
         summary: "moves what is cold into .ank/archive/entities/: superseded documents, and every entry whose subject is cold",
         subcommands: &[],
@@ -1956,6 +1993,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "config",
         group: "set up a repository",
         renews: Renews::Never,
+        writes: Writes::Files,
         coordinates: false,
         summary: "reads and writes .ank/config.yml: the key alone reads, a value writes, --unset removes",
         subcommands: &[],
@@ -1986,6 +2024,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "init",
         group: "set up a repository",
         renews: Renews::Never,
+        writes: Writes::Files,
         coordinates: true,
         summary: "creates .ank/ here or at <path>, writes config.yml, adds the refs/ank/* refspec once origin exists; refuses --repo",
         subcommands: &[],
@@ -2022,6 +2061,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "skills",
         group: "set up a repository",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         // It reads no corpus and asks git nothing: the skills were read into
         // the binary at build time, and the installers run this verb straight
         // after unpacking, wherever the person happens to be.
@@ -2073,6 +2113,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "update",
         group: "set up a repository",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         // It reads no corpus and coordinates nothing: the one git it runs asks
         // a repository somewhere else which releases exist, and that needs no
         // repository here, let alone a signing-capable git.
@@ -2128,6 +2169,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "help",
         group: "set up a repository",
         renews: Renews::Never,
+        writes: Writes::Nothing,
         coordinates: false,
         summary: "every verb grouped by the moment it is used, or one verb in full",
         subcommands: &[],

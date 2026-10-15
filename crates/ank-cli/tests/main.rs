@@ -52,3 +52,4 @@ mod verifier_env;
 mod verifier_reuse;
 mod warm_readers;
 mod watch;
+mod writes;
