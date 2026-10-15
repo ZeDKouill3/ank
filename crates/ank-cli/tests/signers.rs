@@ -478,3 +478,351 @@ fn review_lists_the_principals_signers_declares() {
         "{json}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `ank signers add`, `retire` and `remove` (TASK-68313ec97cd6)
+// ---------------------------------------------------------------------------
+
+impl Corpus {
+    fn ok(&self, args: &[&str]) {
+        let out = self.ank(args);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{args:?}: {}{}",
+            text(&out.stdout),
+            text(&out.stderr)
+        );
+    }
+
+    /// A refused call, its code, and the proof that it wrote nothing.
+    fn refused(&self, args: &[&str], code: i32) -> String {
+        let before = self.config();
+        let out = self.ank(args);
+        assert_eq!(
+            out.status.code(),
+            Some(code),
+            "{args:?}: {}{}",
+            text(&out.stdout),
+            text(&out.stderr)
+        );
+        assert_eq!(self.config(), before, "{args:?}: a refusal writes nothing");
+        text(&out.stderr)
+    }
+
+    fn commit_config(&self) {
+        git(&self.repo, &["commit", "-qam", "signers"]);
+    }
+}
+
+/// Today's date in UTC, as `retire` writes it when no `--date` is given.
+fn today() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `add` with no flag declares the key `user.signingkey` names under the
+/// principal `user.email` names, appending the block below every byte that
+/// was there; a second `add` of that key is refused at 6 and writes nothing.
+#[test]
+fn add_declares_the_signing_key_under_user_email_and_refuses_it_twice() {
+    let c = Corpus::new("signers-add-ssh");
+    let (key, declared) = c.ssh_key("laptop");
+    c.sign_with_ssh(&key);
+    git(&c.repo, &["config", "user.email", "marie@laptop"]);
+    let before = c.config();
+
+    c.ok(&["signers", "add"]);
+    assert_eq!(
+        c.config(),
+        format!("{before}signers:\n  marie@laptop:\n    keys:\n      - key: {declared}\n"),
+    );
+
+    let after = c.config();
+    let said = c.refused(&["signers", "add", "--note", "again"], 6);
+    assert!(said.contains("already declared"), "{said}");
+    assert_eq!(c.config(), after);
+}
+
+/// Under OpenPGP, `user.signingkey` is the fingerprint, declared as `gpg`.
+#[test]
+fn add_declares_a_gpg_signing_key_by_its_fingerprint() {
+    let c = Corpus::new("signers-add-gpg");
+    c.sign_with_gpg();
+    git(&c.repo, &["config", "user.email", "marie@laptop"]);
+    let before = c.config();
+    c.ok(&["signers", "add", "--note", "release key"]);
+    assert_eq!(
+        c.config(),
+        format!(
+            "{before}signers:\n  marie@laptop:\n    keys:\n      - key: gpg {FPR}\n        note: release key\n"
+        ),
+    );
+}
+
+/// `--key`, `--principal` and `--note` override what git names, and a key is
+/// written beside its siblings in the indentation they already use: under its
+/// principal after the last key there, or as a new principal after the last
+/// one. Comments and order elsewhere are what they were, byte for byte.
+#[test]
+fn add_writes_only_its_lines_into_a_block_written_by_hand() {
+    let c = Corpus::new("signers-add-surgical");
+    let (_, laptop) = c.ssh_key("laptop");
+    let (vps, vps_pub) = c.ssh_key("vps");
+    let (_, desk_pub) = c.ssh_key("desk");
+    let hand = format!(
+        "schema: 1\n\
+         # Who may ratify, reviewed like code.\n\
+         signers:\n\
+         \x20 # The maintainer.\n\
+         \x20 \"marie@laptop\":\n\
+         \x20   keys:\n\
+         \x20   - key: gpg {FPR}   # release\n\
+         \x20     note: 'release key'\n\
+         \x20   # The laptop below the comment.\n\
+         \x20   - key: {laptop}\n\
+         \n\
+         # What follows the block introduces the next key.\n\
+         default_branch: main\n"
+    );
+    fs::write(c.repo.join(".ank/config.yml"), &hand).unwrap();
+    c.commit_config();
+
+    // A new key of a principal that exists: after its last key, at its
+    // siblings' indentation, above the blank line and the comment.
+    c.ok(&[
+        "signers",
+        "add",
+        "--key",
+        vps.with_extension("pub").to_str().unwrap(),
+        "--principal",
+        "marie@laptop",
+        "--note",
+        "VPS: the one in Paris",
+    ]);
+    let with_vps = hand.replace(
+        &format!("    - key: {laptop}\n"),
+        &format!(
+            "    - key: {laptop}\n    - key: {vps_pub}\n      note: \"VPS: the one in Paris\"\n"
+        ),
+    );
+    assert_eq!(c.config(), with_vps);
+
+    // A principal that does not exist: after the last one, at its indentation.
+    c.ok(&[
+        "signers",
+        "add",
+        "--key",
+        &desk_pub,
+        "--principal",
+        "bob@desk",
+    ]);
+    let with_bob = with_vps.replace(
+        "\n\n# What follows",
+        &format!("\n  bob@desk:\n    keys:\n      - key: {desk_pub}\n\n# What follows"),
+    );
+    assert_eq!(c.config(), with_bob);
+
+    // Declared under another principal is still declared.
+    let said = c.refused(
+        &[
+            "signers",
+            "add",
+            "--key",
+            &desk_pub,
+            "--principal",
+            "marie@laptop",
+        ],
+        6,
+    );
+    assert!(said.contains("bob@desk"), "names who declares it: {said}");
+}
+
+/// What `add` cannot resolve is refused at 7, naming the flag that supplies it.
+#[test]
+fn add_without_a_key_or_a_principal_names_the_flag_and_writes_nothing() {
+    let c = Corpus::new("signers-add-missing");
+    git(&c.repo, &["config", "user.email", "marie@laptop"]);
+    let said = c.refused(&["signers", "add"], 7);
+    assert!(said.contains("--key"), "{said}");
+
+    let (_, declared) = c.ssh_key("laptop");
+    git(&c.repo, &["config", "--unset", "user.email"]);
+    let out = spawn(ANK)
+        .args(["signers", "add", "--key", &declared])
+        .env("ANK_AGENT", HUMAN)
+        .env("GIT_CONFIG_GLOBAL", c.repo.join("keys/none"))
+        .env("GIT_CONFIG_SYSTEM", c.repo.join("keys/none"))
+        .current_dir(&c.repo)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(7), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("--principal"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert!(!c.config().contains("signers:"));
+}
+
+/// `retire` sets `valid_before`: what the key signed before the date stays
+/// clean in `check`, what it signed after is a fault. Without `--date` it is
+/// today; a second `retire` moves the date in place rather than adding a line.
+#[test]
+fn retire_sets_valid_before_and_check_judges_by_it() {
+    let c = Corpus::new("signers-retire");
+    let (key, declared) = c.ssh_key("laptop");
+    c.sign_with_ssh(&key);
+    c.ok(&[
+        "signers",
+        "add",
+        "--principal",
+        "marie@laptop",
+        "--note",
+        "laptop",
+    ]);
+    let added = c.config();
+    c.commit_config();
+    c.ratify_at(A, BEFORE);
+
+    c.ok(&["signers", "retire", &declared, "--date", "2026-10-01"]);
+    assert_eq!(
+        c.config(),
+        format!("{added}        valid_before: 2026-10-01\n"),
+        "one line added under the key, nothing else moved"
+    );
+    c.commit_config();
+    c.ratify_at(B, AFTER);
+
+    let (code, report) = c.check();
+    assert_eq!(code, Some(8), "{report}");
+    assert!(
+        faults_about(&report, A).is_empty(),
+        "signed before: {report}"
+    );
+    assert!(
+        faults_about(&report, B)
+            .iter()
+            .any(|l| l.contains("valid_before") && l.contains("2026-10-01")),
+        "signed after: {report}"
+    );
+
+    // The key alone names it as well as `<keytype> <key>` does.
+    let bare = declared.split_whitespace().nth(1).unwrap();
+    c.ok(&["signers", "retire", bare]);
+    assert_eq!(
+        c.config(),
+        format!("{added}        valid_before: {}\n", today()),
+        "the date moved in place"
+    );
+
+    c.refused(&["signers", "retire", bare, "--date", "2026-13-01"], 1);
+    let said = c.refused(&["signers", "retire", "ssh-ed25519 AAAAnotdeclared"], 1);
+    assert!(said.contains("declares no key"), "{said}");
+    c.refused(&["signers", "retire"], 7);
+}
+
+/// `remove` deletes the key, and every ratification it signed becomes a
+/// fault. The last key of a principal takes the principal with it, and the
+/// last principal the block: what is left is the file as it was before.
+///
+/// Another principal stays declared throughout, because a corpus declaring no
+/// key at all is advisory (§8) and faults nothing.
+#[test]
+fn remove_deletes_the_key_and_what_it_ratified_becomes_a_fault() {
+    let c = Corpus::new("signers-remove");
+    let (key, declared) = c.ssh_key("laptop");
+    let (_, other) = c.ssh_key("vps");
+    c.sign_with_ssh(&key);
+    let empty = c.config();
+    let gpg = format!("gpg {FPR}");
+    c.ok(&["signers", "add", "--principal", "bob@desk", "--key", &gpg]);
+    let bob = c.config();
+    c.ok(&["signers", "add", "--principal", "marie@laptop"]);
+    let one = c.config();
+    c.ok(&[
+        "signers",
+        "add",
+        "--principal",
+        "marie@laptop",
+        "--key",
+        &other,
+        "--note",
+        "vps",
+    ]);
+    c.commit_config();
+    c.ratify_at(A, BEFORE);
+    c.ratify_at(B, AFTER);
+    let (_, report) = c.check();
+    assert!(faults_about(&report, A).is_empty(), "{report}");
+    assert!(faults_about(&report, B).is_empty(), "{report}");
+
+    c.ok(&["signers", "remove", &other]);
+    assert_eq!(
+        c.config(),
+        one,
+        "the vps key and its note, and nothing else"
+    );
+
+    c.ok(&["signers", "remove", &declared]);
+    assert_eq!(c.config(), bob, "the last key takes its principal with it");
+    c.commit_config();
+
+    let (code, report) = c.check();
+    assert_eq!(code, Some(8), "{report}");
+    assert!(!faults_about(&report, A).is_empty(), "{report}");
+    assert!(!faults_about(&report, B).is_empty(), "{report}");
+
+    c.refused(&["signers", "remove", &declared], 1);
+    c.ok(&["signers", "remove", FPR]);
+    assert_eq!(
+        c.config(),
+        empty,
+        "the last principal takes the block with it"
+    );
+}
+
+/// `ank help signers` and the contract declare the three subcommands, their
+/// flags and their refusals.
+#[test]
+fn help_declares_add_retire_and_remove_and_their_refusals() {
+    let c = Corpus::new("signers-help");
+    let out = c.ank(&["help", "signers"]);
+    let page = text(&out.stdout);
+    for word in [
+        "add",
+        "retire",
+        "remove",
+        "migrate",
+        "--key",
+        "--principal",
+        "--note",
+        "--date",
+        "already declared",
+        "(6)",
+    ] {
+        assert!(page.contains(word), "{word}: {page}");
+    }
+    let out = c.ank(&["help", "--json"]);
+    let json = text(&out.stdout);
+    let at = json.find(r#"{"name":"signers","usage""#).expect(&json);
+    let verb = &json[at..];
+    let verb = &verb[..verb.find(r#"{"name":"init","usage""#).unwrap_or(verb.len())];
+    assert!(
+        verb.contains(r#""usage":"ank signers <add|retire|remove|migrate> [<key>]""#),
+        "{verb}"
+    );
+    assert!(verb.contains(r#""code":6"#), "{verb}");
+}

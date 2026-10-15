@@ -763,6 +763,9 @@ fn verb_json(spec: &CommandSpec, kind: Option<&Kind>) -> String {
         .finish()
 }
 
+/// The widest usage the listing lines its summaries up after (§9).
+const USAGE_COLUMN: usize = 30;
+
 /// `ank help` and `ank help <verb>` (§9).
 ///
 /// The listing is derived from [`COMMANDS`] on every call, so a verb cannot be
@@ -907,7 +910,17 @@ pub fn help(inv: &Invocation, out: &mut dyn Write) -> Result<ExitCode> {
     // (ADR-e4a5a8873fe3). Five widths would stop the columns lining up between
     // sections, and the listing would read as five tables rather than one thing
     // with five parts — which is the opposite of what the grouping is for.
-    let width = COMMANDS.iter().map(|c| usage(c).len()).max().unwrap_or(0);
+    //
+    // **One long usage does not narrow every summary.** A usage wider than
+    // [`USAGE_COLUMN`] -- `signers` names four subcommands -- is printed alone
+    // and its summary starts on the next line, so the column stays the width
+    // of the verbs that fit it.
+    let width = COMMANDS
+        .iter()
+        .map(|c| usage(c).len())
+        .filter(|&n| n <= USAGE_COLUMN)
+        .max()
+        .unwrap_or(USAGE_COLUMN);
     let indent = width + 2;
     for (n, group) in GROUPS.iter().enumerate() {
         // A blank line between groups, and none before the first: the heading
@@ -926,7 +939,10 @@ pub fn help(inv: &Invocation, out: &mut dyn Write) -> Result<ExitCode> {
                 .into_iter()
                 .enumerate()
             {
-                if i == 0 {
+                if i == 0 && usage(spec).len() > width {
+                    let _ = writeln!(out, "{}", usage(spec));
+                    let _ = writeln!(out, "{:indent$}{}", "", line.trim_start());
+                } else if i == 0 {
                     let _ = writeln!(out, "{:width$}  {line}", usage(spec));
                 } else {
                     let _ = writeln!(out, "{line}");
