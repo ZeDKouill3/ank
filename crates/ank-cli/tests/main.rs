@@ -21,6 +21,7 @@ mod amends_json;
 mod archive_checkout;
 mod archive_digest;
 mod attest_ids;
+mod check_fold;
 mod cli;
 mod context_since;
 mod corpora_schema;
