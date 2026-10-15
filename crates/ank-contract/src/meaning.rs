@@ -19,7 +19,7 @@
 //! different names and answer the same question, and one `find` listing prints
 //! rows of several kinds side by side: a reader should not have to know which
 //! family a row belongs to before knowing what its rendering means. That is the
-//! argument SPEC-89070ce7f3b8 already makes for reading a task's statuses and an
+//! argument SPEC-558c07ebae8e already makes for reading a task's statuses and an
 //! ADR's out of one table, applied one level up.
 //!
 //! **Nothing here renders.** A surface reads a [`Role`] and paints it its own
@@ -137,7 +137,7 @@ pub const EXPIRED: &str = "expired";
 ///
 /// **`blocked` is absent, and its absence is the same decision.** It is derived
 /// from `blocked_by` at read time and no entity is ever stored carrying it
-/// (SPEC-89070ce7f3b8), so nothing prints it and there is nothing for a surface
+/// (SPEC-558c07ebae8e), so nothing prints it and there is nothing for a surface
 /// to look up. A row here would have invented a status the model does not have.
 pub const MEANINGS: &[Meaning] = &[
     // Statuses, and every one the model can hold is here: a task is `open`,
@@ -323,7 +323,7 @@ mod tests {
         }
     }
 
-    /// The statuses of SPEC-89070ce7f3b8, enumerated rather than sampled.
+    /// The statuses of SPEC-558c07ebae8e, enumerated rather than sampled.
     ///
     /// Written out here rather than derived from `MEANINGS`, which would agree
     /// with any table including one nobody meant. `ank-core` is not a dependency
@@ -384,7 +384,7 @@ mod tests {
     }
 
     /// What is not a name of the family gets no role, and `blocked` is the case
-    /// that matters: SPEC-89070ce7f3b8 struck it because it is derived at read
+    /// that matters: SPEC-558c07ebae8e struck it because it is derived at read
     /// time and no entity is stored carrying it.
     #[test]
     fn a_string_that_is_not_a_status_has_no_role() {
@@ -421,7 +421,7 @@ mod tests {
     fn an_identifier_reads_as_the_kind_it_names() {
         assert_eq!(role_of_id("TASK-4974"), Some(Role::Work));
         assert_eq!(role_of_id("ADR-1f70ce2c3eac"), Some(Role::Decision));
-        assert_eq!(role_of_id("SPEC-8907@peer"), Some(Role::Reference));
+        assert_eq!(role_of_id("SPEC-558c@peer"), Some(Role::Reference));
         assert_eq!(role_of_id("LOG-dde5"), Some(Role::Record));
         assert_eq!(role_of_id("[ADR-1f70"), Some(Role::Decision));
         assert_eq!(role_of_id("NOTE-1234"), None);

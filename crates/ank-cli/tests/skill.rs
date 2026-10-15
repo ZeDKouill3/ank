@@ -263,15 +263,15 @@ fn help_order() -> Vec<String> {
 /// was edited, in the same commit.
 ///
 /// `skills` was declared here ahead of the ratification of the §4 document
-/// that lists it, now SPEC-219033e25653, and left in the commit of
+/// that lists it, now SPEC-14cd3e35e927, and left in the commit of
 /// TASK-544ec9655570 that ships it.
 ///
-/// `update` was declared here ahead of the ratification of SPEC-219033e25653,
-/// which lists it (ADR-64f32c74a0f9), and left in the commit of
+/// `update` was declared here ahead of the ratification of the §4 document
+/// that lists it (ADR-64f32c74a0f9), and left in the commit of
 /// TASK-161c402c27fb that ships it.
 ///
-/// `archive` was declared here ahead of the ratification of SPEC-219033e25653,
-/// which lists it (ADR-467ce7e9cda1, TASK-2ffdb4cd7806), and left in the commit
+/// `archive` was declared here ahead of the ratification of the §4 document
+/// that lists it (ADR-467ce7e9cda1, TASK-2ffdb4cd7806), and left in the commit
 /// of TASK-97fd1992567a that ships it.
 ///
 /// `signers` is declared here ahead of the ratification of SPEC-14cd3e35e927,

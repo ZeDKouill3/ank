@@ -512,7 +512,7 @@ mod tests {
         let painted: Vec<Style> = [
             ("TASK-6cd41d23b7d1", Role::Work),
             ("ADR-1f70ce2c3eac", Role::Decision),
-            ("SPEC-89070ce7f3b8", Role::Reference),
+            ("SPEC-558c07ebae8e", Role::Reference),
             ("LOG-ed57116ba141", Role::Record),
         ]
         .into_iter()
