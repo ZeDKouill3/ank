@@ -754,6 +754,7 @@ fn verb_json(spec: &CommandSpec, kind: Option<&Kind>) -> String {
         .str("usage", &usage)
         .str("summary", spec.summary)
         .str("group", spec.group)
+        .str("writes", spec.writes.as_str())
         .array("flags", flags)
         .strings("notes", notes)
         .array("refuses", refusals)

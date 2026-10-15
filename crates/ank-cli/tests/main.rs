@@ -51,3 +51,4 @@ mod update;
 mod verifier_env;
 mod warm_readers;
 mod watch;
+mod writes;
