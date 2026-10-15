@@ -6,9 +6,9 @@
 
 /// Where a verb leaves bytes, as far as the corpus is concerned.
 ///
-/// ADR-e45e1a29fe91 enumerated the reading verbs and the writing verbs inside
-/// its constraint, and the enumeration went stale once per new route: `archive`
-/// and `migrate` wrote `.ank/` and sat on neither list. **A field is how the
+/// The rule ADR-3c8d94a0bbe0 carries was once stated with two enumerations,
+/// the reading verbs and the writing verbs, and they went stale once per new
+/// route: `archive` and `migrate` wrote `.ank/` and sat on neither list. **A field is how the
 /// compiler asks the question of every verb that is ever added**, and the
 /// workspace suite confronts each verb declaring [`Writes::Nothing`] with what
 /// it leaves on a scratch corpus, so the declaration cannot go stale silently

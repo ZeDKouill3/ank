@@ -7,12 +7,11 @@
 //! is gone and each `CommandSpec` declares `writes` instead, which
 //! `help --json` carries. A declaration nobody confronts is a list by another
 //! name, so this suite runs every verb declaring `nothing` on a scratch corpus
-//! and counts what it leaves behind, the measurement ADR-e45e1a29fe91 made by
-//! hand: the paths `git status --porcelain` reports under `.ank/`, with
-//! `index.db` ignored, and the refs under `refs/ank/` with what each points at.
-//! Counting paths rather than hashing files is deliberate, and is that
-//! decision's own reason: a measurement of the rule should not be the thing the
-//! rule forbids.
+//! and counts what it leaves behind, the measurement once made by hand: the
+//! paths `git status --porcelain` reports under `.ank/`, with `index.db`
+//! ignored, and the refs under `refs/ank/` with what each points at. Counting
+//! paths rather than hashing files is deliberate: a measurement of the rule
+//! should not be the thing the rule forbids.
 //!
 //! **What `writes` declares is the verb's own act, and a lease renewal is not
 //! one.** `show` on the task the caller holds moves its claim ref, and `renews`
