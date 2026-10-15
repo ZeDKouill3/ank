@@ -5,14 +5,18 @@ slug: presentation-structure-for-every-reader-colour-f
 title: "Presentation: structure for every reader, colour for a terminal, and an identifier by its kind"
 created: 2026-10-14T10:04:53Z
 author: clausse@macbook-air-de-clausse
-status: proposed
+status: accepted
 scope:
   - crates/ank-cli/src/paint.rs
   - crates/ank-cli/src/style.rs
 references: [SPEC-ac4aad6d1edb, SPEC-15a56aeedcfd]
 supersedes: SPEC-89070ce7f3b8
+ratified: 64d2bd5fdb49
+verified:
+  - by: haksolot@vmi3223161
+    at: 2026-10-15T12:11:18Z
 schema: 4
-version: 1
+version: 2
 ---
 
 One of the ten documents that carry the Ank specification (ADR-5a690829388d).
