@@ -10278,14 +10278,17 @@ fn done_never_falls_back_on_the_configured_default() {
     );
 }
 
-/// **This repository marks `cargo-test` and `fmt-check`, and nothing else.**
+/// **This repository marks `fmt-check` and one test verifier per crate.**
 ///
 /// The dogfooding half of ADR-443590981e41: the mechanism above is reachable
 /// everywhere and in effect nowhere until a `config.yml` marks something. Read
 /// through the binary and off this repository's own file, because the claim is
-/// about the corpus and not about a fixture.
+/// about the corpus and not about a fixture. Which crates, and what each
+/// verifier reads, is `verifiers_per_crate.rs`'s to hold against cargo
+/// (TASK-e9f5c4e8922a); `cargo-test` stays declared for the tasks that name it,
+/// and no longer seeds a new one, which would run the whole workspace again.
 #[test]
-fn this_repository_marks_the_two_verifiers_a_task_here_is_born_with() {
+fn this_repository_marks_the_verifiers_a_task_here_is_born_with() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |key: &str| {
         let out = ank_command()
@@ -10298,8 +10301,9 @@ fn this_repository_marks_the_two_verifiers_a_task_here_is_born_with() {
         assert_eq!(code(&out), 0, "{key}: {}", stderr(&out));
         stdout(&out).trim().to_string()
     };
-    assert_eq!(read("verifiers.cargo-test.default"), "true");
+    assert_eq!(read("verifiers.cargo-test.default"), "false");
     assert_eq!(read("verifiers.fmt-check.default"), "true");
+    assert_eq!(read("verifiers.test-ank-cli.default"), "true");
     // `check-repo` runs this binary against this corpus, so seeding it into
     // every task would make each `done` here build ank to check ank.
     assert_eq!(read("verifiers.check-repo.default"), "false (default)");
