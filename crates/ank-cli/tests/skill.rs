@@ -277,7 +277,11 @@ fn help_order() -> Vec<String> {
 /// `signers` is declared here because SPEC-fe809eb257c0, the §4 document that
 /// lists it, declares it ahead of its dispatch (ADR-5c6db7a161b8), and it leaves
 /// in the commit of TASK-3a7a73ccf2b7 that ships it.
-const NOT_YET_DISPATCHED: [&str; 1] = ["signers"];
+///
+/// `verify` is declared here because SPEC-fe809eb257c0 lists it ahead of its
+/// dispatch (ADR-c621cb9c6739), and it leaves in the commit of
+/// TASK-15b59a393a38 that ships it.
+const NOT_YET_DISPATCHED: [&str; 2] = ["signers", "verify"];
 
 /// A verb the binary answers to and §4 never mentions. `attest`, `init` and
 /// `help` were exactly that until TASK-5c868c20472f, and a reader comparing the
