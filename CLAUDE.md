@@ -32,16 +32,17 @@ defect; it bites only a project dogfooding ank on itself.
 ## Proof
 
 A task declares its verifiers when it is written, and a plain `ank new task`
-already carries them: `.ank/config.yml` marks `cargo-test` and `fmt-check`
-default, so a task created with no flag at all lands with
-`verify: [cargo-test, fmt-check]`. `ank new task --verify cargo-test --verify
+already carries them: `.ank/config.yml` marks one test verifier per
+workspace crate (`test-ank-cli`, `test-ank-core`, ...) and `fmt-check` default,
+so a task created with no flag at all lands with all of them, each declaring
+the `inputs` it reads. `ank new task --verify cargo-test --verify
 fmt-check` names a list of its own instead, replacing those defaults rather
 than adding to them. `ank done` then runs every verifier in that list, records
 what ran, and refuses `--proof` outright at exit 5: the close becomes Ank's
 statement about the tree instead of the agent's. `--verify` takes a name
-`.ank/config.yml` declares -- `cargo-test`, `fmt-check`, `check-repo` -- and
-refuses at exit 7 anything else, so a name you misremember fails when you write
-the task rather than at the close.
+`.ank/config.yml` declares -- a `test-<crate>`, `cargo-test` for the whole
+workspace, `fmt-check`, `check-repo` -- and refuses at exit 7 anything else, so
+a name you misremember fails when you write the task rather than at the close.
 
 Declare them. A task closing on a proof nothing ran is the failure this
 paragraph exists to stop: TASK-54c95c5f2d18 closed green while `cargo test
