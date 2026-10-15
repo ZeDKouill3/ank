@@ -62,6 +62,7 @@ pub mod meaning;
 pub mod renews;
 pub mod shape;
 pub mod verbs;
+pub mod writes;
 
 pub use exit::ExitCode;
 pub use meaning::{Meaning, Role, Subject, MEANINGS};
@@ -70,3 +71,4 @@ pub use verbs::{
     find_flag, known_flags, long_of, short_of, spec_of, usage, CommandSpec, FlagSpec, Refusal,
     COMMANDS, GLOBAL_FLAGS, GROUPS, SHORT_FORMS,
 };
+pub use writes::Writes;

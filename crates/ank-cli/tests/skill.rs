@@ -56,7 +56,7 @@ fn push_once(verbs: &mut Vec<String>, verb: String) {
 /// **Read through the binary, and that is the point rather than a detour.** The
 /// specification is no longer a file in `docs/` — it is ten entities of kind
 /// `spec` in `.ank/` (ADR-c88f99e1c16e) — and `.ank/` is reached through the CLI
-/// and never by opening the files (ADR-e45e1a29fe91). A test that walked the
+/// and never by opening the files (ADR-3c8d94a0bbe0). A test that walked the
 /// directory would be the one reader in the repository exempt from the rule the
 /// repository enforces on every agent.
 ///
@@ -703,7 +703,7 @@ fn declared_revision(front: &str) -> Option<String> {
 /// the SKILL.md installed at `~/.claude/skills/ank` was byte-identical to the
 /// blob at a004ac7, two commits and nine hours behind a tree that had just
 /// withdrawn the invitation to read `.ank/` by hand -- the rule
-/// ADR-e45e1a29fe91 states today. It was not merely old, it instructed against
+/// ADR-3c8d94a0bbe0 states today. It was not merely old, it instructed against
 /// a ratified decision -- and it carried nothing by which its reader or its
 /// owner could have noticed.
 ///
