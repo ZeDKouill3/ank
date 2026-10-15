@@ -263,7 +263,7 @@ fn help_order() -> Vec<String> {
 /// was edited, in the same commit.
 ///
 /// `skills` was declared here ahead of the ratification of the §4 document
-/// that lists it, now SPEC-14cd3e35e927, and left in the commit of
+/// that lists it, now SPEC-fe809eb257c0, and left in the commit of
 /// TASK-544ec9655570 that ships it.
 ///
 /// `update` was declared here ahead of the ratification of the §4 document
@@ -274,9 +274,9 @@ fn help_order() -> Vec<String> {
 /// that lists it (ADR-467ce7e9cda1, TASK-2ffdb4cd7806), and left in the commit
 /// of TASK-97fd1992567a that ships it.
 ///
-/// `signers` is declared here ahead of the ratification of SPEC-14cd3e35e927,
-/// the §4 document that lists it (ADR-5c6db7a161b8), and leaves in the commit
-/// of TASK-3a7a73ccf2b7 that ships it.
+/// `signers` is declared here because SPEC-fe809eb257c0, the §4 document that
+/// lists it, declares it ahead of its dispatch (ADR-5c6db7a161b8), and it leaves
+/// in the commit of TASK-3a7a73ccf2b7 that ships it.
 const NOT_YET_DISPATCHED: [&str; 1] = ["signers"];
 
 /// A verb the binary answers to and §4 never mentions. `attest`, `init` and

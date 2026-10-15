@@ -21,8 +21,11 @@ people: a human with an editor keeps every power they had, and `ank check`
 remains what notices.
 
 A task here declares its verifiers when it is written, and a plain `ank new
-task` already carries `cargo-test` and `fmt-check`, which `.ank/config.yml`
-marks default ([Proof and verifiers](proof.md#the-default-list)).
+task` already carries one test verifier per workspace crate, `test-ank-cli`,
+`test-ank-core` and the rest, with `fmt-check`, which `.ank/config.yml` marks
+default ([Proof and verifiers](proof.md#the-default-list)). Each declares the
+files it reads, so `done` reruns the crates a change reaches and reuses the
+others.
 
 ## Changing the format
 
