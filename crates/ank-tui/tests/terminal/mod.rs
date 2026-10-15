@@ -298,16 +298,22 @@ pub struct Graphed {
     pub dependent: String,
     /// A task with no edge at all.
     pub lone: String,
+    /// A task under way (TASK-9ea4dc65755b): claimed through the CLI, so
+    /// `graph --json` lists it as `in_progress`, and blocked by the first of
+    /// the chain, which gives that root two dependents.
+    pub under_way: String,
 }
 
 impl Graphed {
-    /// Every task the fixture wrote that is still open: the rows the graph
-    /// shows by default, less the closed blocker it shows beside them.
+    /// Every task the fixture wrote that is not finished, the one under way
+    /// among them: the rows the graph shows by default, less the closed
+    /// blocker it shows beside them.
     pub fn open(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self.chain.iter().map(String::as_str).collect();
         out.extend(self.diamond.iter().map(String::as_str));
         out.push(&self.dependent);
         out.push(&self.lone);
+        out.push(&self.under_way);
         out
     }
 }
@@ -363,8 +369,9 @@ impl Repo {
 
     /// The corpus the graph is measured on (TASK-643611645dea): a chain of
     /// three, a diamond, one task closed with a dependent still open, and one
-    /// task with no edge -- ten tasks, nine of them open, every one of them
-    /// written through the CLI.
+    /// task with no edge, and (TASK-9ea4dc65755b) one under way, blocked by the
+    /// chain's first -- eleven tasks, nine of them open, one in progress and
+    /// one closed, every one of them written through the CLI.
     ///
     /// The closed task is closed after its dependent names it, so the edge
     /// is one `new` accepted rather than one `amend` added, and the blocker
@@ -381,6 +388,12 @@ impl Repo {
         let closed = repo.new_task("A blocker that was closed", &[]);
         let dependent = repo.new_task("A dependent of the closed one", &[&closed]);
         let lone = repo.new_task("A task with no edge", &[]);
+        // Written with no blocker, claimed, and only then given its edge:
+        // `claim` refuses a task whose blocker is not finished (exit 7), and
+        // `amend` accepts an edge on a task already under way.
+        let under_way = repo.new_task("A task under way", &[]);
+        repo.ank(&["claim", &under_way]);
+        repo.ank(&["amend", &under_way, "--blocked-by", &chain_1]);
         repo.ank(&[
             "close",
             &closed,
@@ -394,6 +407,7 @@ impl Repo {
             closed,
             dependent,
             lone,
+            under_way,
         }
     }
 
