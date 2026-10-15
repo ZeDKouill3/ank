@@ -830,3 +830,69 @@ fn another_skill_revision_names_skills_install_and_never_runs_it() {
         run.record
     );
 }
+
+// ---------------------------------------------------------------------------
+// A route that exits 0 and leaves nothing that runs (TASK-0766190c03bf)
+// ---------------------------------------------------------------------------
+
+/// **npm exiting 0 with no binary left at the running executable's path is a
+/// failure**, at 9, naming the path and the npm command that repairs it. The
+/// stub is handed a file that does not exist to install, so it removes the
+/// binary and writes nothing, which is what npm did on 2026-10-13 when it
+/// resolved the platform package from a stale packument and skipped it.
+#[test]
+fn a_route_that_leaves_no_binary_exits_non_zero_naming_the_repair() {
+    let bare = release_repository("update-vanished", NEWER_TAGS);
+    let exe = npm_placed("update-vanished-bin");
+    let nothing = scratch::path("update-vanished-nothing");
+    let run = install(
+        &exe,
+        &bare,
+        &[],
+        &[
+            ("ANK_STUB_INSTALLED", os(&nothing)),
+            ("ANK_STUB_TARGET", os(&exe)),
+        ],
+    );
+    assert!(!exe.exists(), "the stub left a binary at {}", exe.display());
+    assert_eq!(
+        run.code(),
+        Some(9),
+        "a route leaving no binary is not an update that landed:\n{}{}",
+        run.stdout(),
+        run.stderr()
+    );
+    let stderr = run.stderr();
+    assert!(
+        stderr.contains(&*exe.to_string_lossy()),
+        "the refusal does not name the path that did not answer:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("npm install -g @haksolot/ank@9000.10.0 --prefer-online"),
+        "the refusal does not name the npm command that repairs it:\n{stderr}"
+    );
+}
+
+/// **A binary that is there and does not answer `--version` fails the same
+/// way**, and on the installer route the repair is the installer run again.
+/// The installed file is a script exiting 1, which is why this one is POSIX
+/// only; the case above runs on every platform.
+#[cfg(unix)]
+#[test]
+fn an_installed_binary_that_does_not_answer_exits_non_zero_naming_the_repair() {
+    let bare = release_repository("update-mute", NEWER_TAGS);
+    let exe = placed("update-mute-bin", "bin");
+    let mute = scratch::dir("update-mute-build").join("ank");
+    fs::write(&mute, "#!/bin/sh\nexit 1\n").unwrap();
+    make_executable(&mute);
+    let run = install(&exe, &bare, &[], &[("ANK_STUB_INSTALLED", os(&mute))]);
+    assert_eq!(run.code(), Some(9), "{}{}", run.stdout(), run.stderr());
+    let stderr = run.stderr();
+    assert!(stderr.contains(&*exe.to_string_lossy()), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "curl -fsSL {INSTALL_SH} | sh -s -- --version v9000.10.0"
+        )),
+        "the refusal does not name the installer that repairs it:\n{stderr}"
+    );
+}
