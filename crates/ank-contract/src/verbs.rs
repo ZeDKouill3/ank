@@ -2138,6 +2138,10 @@ pub const COMMANDS: &[CommandSpec] = &[
                 "the running binary is under a cargo target directory, which no route placed: cargo build replaces it",
             ),
             refuses(
+                ExitCode::Environment,
+                "the route exited 0 and the binary at the running executable's path is missing or does not answer --version: it is named, with the command that installs it again",
+            ),
+            refuses(
                 ExitCode::Generic,
                 "--version with --check, which reports the latest release and installs none",
             ),
@@ -2159,7 +2163,7 @@ pub const COMMANDS: &[CommandSpec] = &[
             "a binary inside a node_modules/@haksolot/ank tree runs npm install -g @haksolot/ank@<version>; any other runs install.sh piped from its raw URL, or install.ps1 on Windows, with --version, the directory of the running executable and --no-welcome",
             "it never downloads or unpacks an archive itself, and exits with the route's own code when the route fails",
             "on Windows the running executable is renamed aside before the route writes, and put back if the route fails having written none",
-            "after the route exits 0 it runs the installed binary with --version, and names ank skills --install in one line when the skill revision changed; it never runs it",
+            "after the route exits 0 it runs the installed binary with --version, exits 9 when it is missing or does not answer, and names ank skills --install in one line when the skill revision changed; it never runs it",
         ],
         refuses_globals: &[],
         output: &[one(UPDATE_CHECK_OUT)],
