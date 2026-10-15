@@ -522,35 +522,19 @@ fn run_verifiers(
     // failure can no longer change that answer, so it is not started, and
     // killed if it already was; one declared before it still can, so it is
     // waited for.
-    let outcomes = run_concurrently(repo, cfg, &to_run, id, cfg.verifier_jobs());
+    let outcomes = run_concurrently(repo, cfg, &to_run, &id.to_string(), cfg.verifier_jobs());
 
     // Recorded before the verdict, every run that finished, the failure
     // included: exit 9 never reaches here, since it is an error and not an
     // outcome, and a verifier killed because another failed has no answer.
     if let (Some(dir), Some(keys)) = (&registry, &keys) {
-        let at = claim::now_secs();
-        let ran = declared
+        let ran: Vec<&verify::RunKey> = declared
             .iter()
             .zip(keys)
-            .filter(|(n, _)| to_run.contains(n));
-        for ((_, key), outcome) in ran.zip(&outcomes) {
-            let Ok(Some(o)) = outcome else { continue };
-            let run = verify::Run {
-                key: key.clone(),
-                ok: o.ok,
-                code: if o.timed_out { None } else { o.code },
-                by: reuse.identity.to_string(),
-                at,
-                reference: o.reference(&head, false),
-            };
-            if let Err(e) = verify::record(dir, &run) {
-                eprintln!(
-                    "{} the run of {} was not recorded for reuse: {e}",
-                    style.on_stderr().yellow("warning:"),
-                    o.name
-                );
-            }
-        }
+            .filter(|(n, _)| to_run.contains(n))
+            .map(|(_, k)| k)
+            .collect();
+        verify::record_outcomes(dir, &ran, &outcomes, reuse.identity, &head, style);
     }
 
     let mut outcomes = outcomes.into_iter();
@@ -629,11 +613,15 @@ fn run_verifiers(
 /// Runs `declared` on at most `jobs` threads and hands back one result per
 /// verifier, in declared order. `Ok(None)` is a verifier that was not started,
 /// or was killed, because one declared before it had already failed.
-fn run_concurrently(
+///
+/// `owner` names who declared the list, in the refusal for a name the
+/// configuration does not hold: a task for `done`, never anything for `verify`,
+/// whose list is read off the configuration itself.
+pub(crate) fn run_concurrently(
     repo: &Repo,
     cfg: &Config,
     declared: &[String],
-    id: &EntityId,
+    owner: &str,
     jobs: usize,
 ) -> Vec<Result<Option<verify::Outcome>>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -658,7 +646,7 @@ fn run_concurrently(
             // the configuration does not declare.
             Err(CliError::new(
                 ExitCode::Environment,
-                format!("{id} declares verifier '{name}', absent from config.yml"),
+                format!("{owner} declares verifier '{name}', absent from config.yml"),
             )
             .with_hint(format!("ank config verifiers.{name}.run \"<command>\"")))
         };

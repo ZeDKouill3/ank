@@ -17,7 +17,9 @@
 //! command to run. Code 5 stays reserved for a verifier that ran and said no —
 //! confusing the two sends an agent to fix code that was never wrong.
 //!
-//! Dispatch routes to no verifier: `done` calls this module.
+//! Dispatch routes no verifier by name: `done` calls this module for the
+//! task's list, and `verify` for the verifiers a change touches
+//! (ADR-c621cb9c6739).
 
 use crate::cli::CliError;
 use crate::config::Verifier;
@@ -303,6 +305,310 @@ pub fn reusable(dir: &Path, key: &RunKey, now: i64, max_age: Duration) -> Option
     let run = lookup(dir, key)?;
     let age = now.saturating_sub(run.at);
     (run.ok && run.code == Some(0) && age >= 0 && (age as u64) <= max_age.as_secs()).then_some(run)
+}
+
+/// Records one entry per verifier in `ran` that finished, pass or fail, at the
+/// instant this is called. `ran` and `outcomes` are aligned: the keys of the
+/// verifiers started, in the order they were handed to the runner.
+///
+/// Shared by `done` and `verify`, so that a run either verb started is recorded
+/// on one rule: a failure is recorded as surely as a pass, since the latest
+/// answer for a key is the one that counts, and a verifier killed because
+/// another failed has no answer and leaves the key as it was.
+pub fn record_outcomes(
+    dir: &Path,
+    ran: &[&RunKey],
+    outcomes: &[Result<Option<Outcome>>],
+    identity: &str,
+    head: &str,
+    style: crate::style::Style,
+) {
+    let at = crate::claim::now_secs();
+    for (key, outcome) in ran.iter().zip(outcomes) {
+        let Ok(Some(o)) = outcome else { continue };
+        let run = Run {
+            key: (*key).clone(),
+            ok: o.ok,
+            code: if o.timed_out { None } else { o.code },
+            by: identity.to_string(),
+            at,
+            reference: o.reference(head, false),
+        };
+        if let Err(e) = record(dir, &run) {
+            eprintln!(
+                "{} the run of {} was not recorded for reuse: {e}",
+                style.on_stderr().yellow("warning:"),
+                o.name
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The verify verb (ADR-c621cb9c6739)
+// ---------------------------------------------------------------------------
+//
+// **What it selects.** Every verifier `config.yml` declares whose `inputs`
+// match a changed file, and every verifier that declares no inputs, since a
+// verifier reading the whole tree is touched by any change. A file is changed
+// when it was committed on the branch since the merge-base with the default
+// branch, when it is tracked and its working copy differs from HEAD (deleted
+// included), or when it is untracked and not ignored.
+//
+// **What it writes.** Nothing a reader of the corpus can see: no proof, no
+// ref, no entity, and no claim is asked for. The one thing it leaves is the
+// run registry, under the git common directory and outside `.ank/`, keyed on
+// exactly what `done` computes, so that the `done` which follows finds the run
+// and reuses it on the terms ADR-a2faf59f6ce0 sets. The selection itself is
+// printed and never recorded: it is how this verb chose, never what a proof
+// may rest on.
+//
+// **It reuses nothing.** The selection is the economy; a verifier it selects is
+// one the caller is asking to see run.
+
+/// The files changed in `worktree`, and the base they were measured from: the
+/// merge-base with `default`, or `None` when no base could be established.
+///
+/// Five git processes whatever the tree holds (ADR-cc65f1388a71): two for the
+/// listing, one `cat-file --batch-check` for what HEAD records, one
+/// `hash-object --stdin-paths` for what the working copy would record, and,
+/// when a default branch is named, one `merge-base` and one `diff-tree`.
+/// `None` for the list where git cannot answer at all.
+pub fn changed_files(
+    worktree: &Path,
+    default: Option<&str>,
+) -> Option<(Vec<String>, Option<String>)> {
+    let files = crate::git::worktree_files(worktree)?;
+    let mut changed: std::collections::BTreeSet<String> = files.deleted.iter().cloned().collect();
+
+    // What HEAD records for every listed path: a path it does not carry is
+    // untracked, and changed by being there.
+    let mut input = String::new();
+    for p in &files.counted {
+        input.push_str("HEAD:");
+        input.push_str(p);
+        input.push('\n');
+    }
+    let mut tracked: Vec<(&String, String)> = Vec::new();
+    if !files.counted.is_empty() {
+        let out = crate::git::output_with_stdin(
+            worktree,
+            &["cat-file", "--batch-check"],
+            input.as_bytes(),
+        )
+        .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let answers: Vec<&str> = text.lines().collect();
+        if answers.len() != files.counted.len() {
+            return None;
+        }
+        for (p, line) in files.counted.iter().zip(answers) {
+            let mut parts = line.split(' ');
+            match (parts.next(), parts.next()) {
+                (Some(oid), Some("blob")) => tracked.push((p, oid.to_string())),
+                _ => {
+                    changed.insert(p.clone());
+                }
+            }
+        }
+    }
+    if !tracked.is_empty() {
+        let mut input = String::new();
+        for (p, _) in &tracked {
+            input.push_str(p);
+            input.push('\n');
+        }
+        let args = ["hash-object", "--stdin-paths"];
+        let out = crate::git::output_with_stdin(worktree, &args, input.as_bytes()).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let now: Vec<&str> = text.lines().collect();
+        if now.len() != tracked.len() {
+            return None;
+        }
+        for ((p, head), now) in tracked.iter().zip(now) {
+            if head != now {
+                changed.insert((*p).clone());
+            }
+        }
+    }
+
+    // Committed on the branch since it left the default one. The local branch
+    // first, then the remote-tracking one: a clone that never checked the
+    // default branch out still has a base to measure from.
+    let base = default.and_then(|d| {
+        [d.to_string(), format!("refs/remotes/origin/{d}")]
+            .iter()
+            .find_map(|rev| crate::git::merge_base(worktree, rev, "HEAD").ok().flatten())
+    });
+    if let Some(base) = &base {
+        let args = [
+            "diff-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            base.as_str(),
+            "HEAD",
+        ];
+        let out = crate::git::output(worktree, &args).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        for p in out.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()) {
+            changed.insert(String::from_utf8_lossy(p).into_owned());
+        }
+    }
+    Some((changed.into_iter().collect(), base))
+}
+
+/// Whether verifier `v` is touched by `changed`: always without inputs, and
+/// otherwise when one of its globs matches one of the files. `None` when the
+/// globs do not parse, which the configuration parser already refuses.
+pub fn selects(v: &Verifier, changed: &[String]) -> Option<bool> {
+    match &v.inputs {
+        None => Some(true),
+        Some(globs) => {
+            let set = ank_core::ScopeSet::new(globs).ok()?;
+            Some(changed.iter().any(|p| set.matches(p)))
+        }
+    }
+}
+
+pub fn run_verb(
+    inv: &crate::cli::Invocation,
+    repo: &crate::repo::Repo,
+    cfg: &crate::config::Config,
+    identity: &str,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
+    crate::git::ensure_worktree_usable(repo)?;
+    let style = inv.style();
+
+    // An indeterminable default branch degrades rather than refuses
+    // (ADR-9307e5d214a7): the tree's own changes are still a selection, and
+    // the line below says what it could not measure.
+    let default = crate::git::resolve_default_branch(
+        cfg.default_branch.as_deref(),
+        crate::git::origin_head(&repo.worktree)?.as_deref(),
+    )
+    .ok();
+    let Some((changed, base)) = changed_files(&repo.worktree, default.as_deref()) else {
+        return Err(CliError::new(
+            ExitCode::Environment,
+            "git could not list the work tree, so no change can be selected from",
+        )
+        .with_hint("git ls-files --cached --others --exclude-standard"));
+    };
+    if base.is_none() && !inv.quiet() {
+        // Selecting less than a change touches is the one direction this verb
+        // must not err in, so the gap is said out loud.
+        eprintln!(
+            "{} no merge-base with the default branch: only the work tree's changes are selected from",
+            style.on_stderr().yellow("warning:"),
+        );
+    }
+
+    let mut selected: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for (name, v) in &cfg.verifiers {
+        if selects(v, &changed).unwrap_or(true) {
+            selected.push(name.clone());
+        } else {
+            skipped.push(name.clone());
+        }
+    }
+
+    let defs: Vec<(&str, &Verifier)> = selected
+        .iter()
+        .map(|n| (n.as_str(), &cfg.verifiers[n]))
+        .collect();
+    // Taken before anything runs, as `done` takes them: what a run is recorded
+    // against is the content it was started on.
+    let registry = registry(&repo.worktree);
+    let keys = registry.as_ref().and_then(|_| {
+        if defs.is_empty() {
+            Some(Vec::new())
+        } else {
+            keys(&repo.worktree, &defs)
+        }
+    });
+    let head = crate::git::run(&repo.worktree, &["rev-parse", "HEAD"]).unwrap_or_default();
+
+    let outcomes =
+        crate::done::run_concurrently(repo, cfg, &selected, "config.yml", cfg.verifier_jobs());
+    match (&registry, &keys) {
+        (Some(dir), Some(keys)) => {
+            let ran: Vec<&RunKey> = keys.iter().collect();
+            record_outcomes(dir, &ran, &outcomes, identity, &head, style);
+        }
+        _ if !selected.is_empty() => eprintln!(
+            "{} no content key could be established: these runs are not recorded for reuse",
+            style.on_stderr().yellow("warning:"),
+        ),
+        _ => {}
+    }
+
+    // Reported in configuration order once all have finished, and the first
+    // failure in that order is the answer, as `done` reports it.
+    let mut rows: Vec<(String, Outcome)> = Vec::new();
+    for (name, outcome) in selected.iter().zip(outcomes) {
+        let Some(outcome) = outcome? else { break };
+        let err = style.on_stderr();
+        eprintln!(
+            "running: {name} ... {} ({:.1}s)",
+            if outcome.ok {
+                err.green("ok")
+            } else {
+                err.red("FAILED")
+            },
+            outcome.elapsed.as_secs_f64()
+        );
+        if !outcome.ok {
+            return Err(failure(&outcome, &cfg.verifiers[name].run));
+        }
+        rows.push((name.clone(), outcome));
+    }
+
+    if inv.json() {
+        let ran = rows.iter().map(|(name, o)| {
+            crate::json::Obj::new()
+                .str("name", name)
+                .str("verifier", &definition_ref(name, &cfg.verifiers[name]))
+                .bool("ok", o.ok)
+                .finish()
+        });
+        let doc = crate::json::Obj::document()
+            .opt_str("base", base.as_deref())
+            .num("changed", changed.len())
+            .array("ran", ran)
+            .strings("skipped", &skipped)
+            .finish();
+        let _ = writeln!(out, "{doc}");
+    } else if !inv.quiet() {
+        let from = match &base {
+            Some(b) => format!("since {}", &b[..b.len().min(7)]),
+            None => "in the work tree".to_string(),
+        };
+        let _ = writeln!(
+            out,
+            "{} file(s) changed {from}; ran {} of {} verifier(s), recorded for reuse",
+            changed.len(),
+            rows.len(),
+            cfg.verifiers.len()
+        );
+        for (name, _) in &rows {
+            let _ = writeln!(out, "  {name}  {}", style.green("ok"));
+        }
+        for name in &skipped {
+            let _ = writeln!(out, "  {name}  skipped, no input changed");
+        }
+    }
+    Ok(ExitCode::Ok)
 }
 
 /// Locates a POSIX shell.
