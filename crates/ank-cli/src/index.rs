@@ -2244,6 +2244,7 @@ mod tests {
             scope: vec!["crates/**".into()],
             constraint: "A binding rule.\n".into(),
             see: None,
+            enforced_by: Vec::new(),
             amends: Vec::new(),
             supersedes: None,
             ratified: None,

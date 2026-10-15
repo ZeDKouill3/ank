@@ -631,6 +631,10 @@ pub fn inspect_with(
     // the day the spec was archived. So each archived file is also offered at
     // the address it had hot, and a glob matching that address is alive. What
     // exists in neither root is matched by nothing and stays dead.
+    // The same listing as a set, for the one question asked of it by path
+    // rather than by glob: whether an ADR's `enforced_by` names a file the
+    // tree counts (ADR-25584c56c1a7).
+    let tracked: HashSet<&str> = files.iter().map(String::as_str).collect();
     let mut scope_files = files.clone();
     let ank_rel = ank_relative(repo);
     scope_files.extend(
@@ -838,6 +842,7 @@ pub fn inspect_with(
             Entity::Adr(a) => check_adr(
                 a,
                 repo,
+                &tracked,
                 &adr_ids,
                 &entities,
                 &unread,
@@ -2623,9 +2628,19 @@ fn check_task(
     // refusing, and the reader who wants it on a healthy scope has `ank
     // context`.
     if matches!(t.status, TaskStatus::Open | TaskStatus::InProgress) {
-        if let Ok(applicable) =
+        if let Ok(mut applicable) =
             claim::constraints_among(adrs.iter().copied(), repo, t).map(|b| b.applicable)
         {
+            // A rule something declares to hold it is served by its title and
+            // not by its text (ADR-25584c56c1a7), so its text is no longer what
+            // the perimeter charges. It still binds: the claim record hashes it
+            // as before, and only what this signal prices changes.
+            let enforced: HashSet<String> = adrs
+                .iter()
+                .filter(|a| !a.enforced_by.is_empty())
+                .map(|a| a.id.to_string())
+                .collect();
+            applicable.retain(|(id, _)| !enforced.contains(id));
             let weight: usize = applicable.iter().map(|(_, c)| c.chars().count()).sum();
             let limit = cfg.context_budget / 2;
             if weight > limit {
@@ -2875,11 +2890,13 @@ fn relief(store: &Store, t: &Task, heaviest: Option<&Charge>) -> Vec<String> {
             |loaded| matches!(loaded.entity, Entity::Adr(a) if a.status == AdrStatus::Accepted),
         );
     note.push(match accepted {
+        // `enforced_by` is outside the anchor, so this is the one amend that
+        // reaches an accepted rule's charge (ADR-25584c56c1a7).
         true => format!(
             "{} costs the most, and is accepted: its constraint is anchored in the \
-             ratification commit, so no amend reaches it — what lowers its charge is \
-             mechanising it out of injected context",
-            top.id
+             ratification commit, and what lowers its charge is naming what holds it: \
+             ank amend {} --enforced-by \"<path>#<symbol>\"",
+            top.id, top.id
         ),
         false => format!(
             "{} costs the most: ank amend {} --drop-scope \"<glob>\" narrows what it binds",
@@ -2892,6 +2909,7 @@ fn relief(store: &Store, t: &Task, heaviest: Option<&Charge>) -> Vec<String> {
 fn check_adr(
     a: &Adr,
     repo: &Repo,
+    tracked: &HashSet<&str>,
     adr_ids: &HashSet<EntityId>,
     entities: &[(PathBuf, Entity)],
     unread: &BTreeSet<String>,
@@ -2911,11 +2929,68 @@ fn check_adr(
         report,
     );
     check_anchor(&view, repo, "its constraint is no longer injected", report);
+    check_enforced_by(a, &repo.worktree, tracked, report);
     if a.constraint.trim().is_empty() {
         report
             .findings
             .push(Finding::fault(&a.id, "no constraint: it binds nothing"));
     }
+}
+
+/// An ADR's `enforced_by`, confronted with the tree (ADR-25584c56c1a7): the
+/// path against the files the tree counts, the way a scope is, and the symbol
+/// against what that file holds.
+///
+/// **A signal and never a fault**, one per entry and naming it: a renamed test
+/// is not a broken rule, and the rule binds whether or not something enforces
+/// it. A superseded ADR is asked nothing, since it is history and nothing
+/// serves it.
+///
+/// The symbol is matched as a whole word, so `logs_every` is not found inside
+/// `logs_every_module`: an entry naming a prefix of the test would otherwise
+/// survive the rename of the very test it meant.
+fn check_enforced_by(a: &Adr, root: &Path, tracked: &HashSet<&str>, report: &mut Report) {
+    if a.status == AdrStatus::Superseded {
+        return;
+    }
+    for entry in &a.enforced_by {
+        let repair = format!("ank amend {} --drop-enforced-by \"{entry}\"", a.id);
+        let Some((path, symbol)) = ank_core::split_enforcement(entry) else {
+            report.findings.push(Finding::signal(
+                &a.id,
+                format!("enforced_by '{entry}' is not <path>#<symbol> ({repair})"),
+            ));
+            continue;
+        };
+        if !tracked.contains(path) {
+            report.findings.push(Finding::signal(
+                &a.id,
+                format!(
+                    "enforced_by '{entry}': no tracked file is {path}, so nothing there \
+                     holds the rule ({repair})"
+                ),
+            ));
+            continue;
+        }
+        let text = std::fs::read_to_string(root.join(path)).unwrap_or_default();
+        if !contains_word(&text, symbol) {
+            report.findings.push(Finding::signal(
+                &a.id,
+                format!("enforced_by '{entry}': {path} does not contain {symbol} ({repair})"),
+            ));
+        }
+    }
+}
+
+/// Whether `word` occurs in `text` with no identifier character on either
+/// side of it.
+fn contains_word(text: &str, word: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(ident) && !after.is_some_and(ident)
+    })
 }
 
 /// What a spec owes beyond what every kind owes (§3).
@@ -7496,6 +7571,16 @@ pub fn amend(
     // the one `check` reports as naming nothing.
     let add_amends = crate::commands::amends_of(inv, &store)?;
     let drop_amends = parse_all(inv.values("--drop-amends"), "--drop-amends", &id)?;
+    // What holds an ADR (ADR-25584c56c1a7): one added is refused on its shape,
+    // in the words `new` uses, and the tree is not asked; one dropped is
+    // matched against what the ADR stores, since the entry worth dropping is
+    // the one `check` reports as naming nothing.
+    let add_enforced = crate::commands::enforced_by_of(inv)?;
+    let drop_enforced: Vec<String> = inv
+        .values("--drop-enforced-by")
+        .iter()
+        .map(|e| e.trim().to_string())
+        .collect();
 
     if add_scope.is_empty()
         && drop_scope.is_empty()
@@ -7507,6 +7592,8 @@ pub fn amend(
         && drop_refs.is_empty()
         && add_amends.is_empty()
         && drop_amends.is_empty()
+        && add_enforced.is_empty()
+        && drop_enforced.is_empty()
         && criteria.is_none()
         && method.is_none()
     {
@@ -7516,7 +7603,8 @@ pub fn amend(
                     "ank amend {id} --blocked-by <id> | --drop-blocked-by <id> | \
                  --scope <glob> | --drop-scope <glob> | --criteria \"<c>\" | \
                  --method <name> | --reference <id> | --drop-reference <id> | \
-                 --amends <id> | --drop-amends <id>"
+                 --amends <id> | --drop-amends <id> | \
+                 --enforced-by <path>#<symbol> | --drop-enforced-by <path>#<symbol>"
                 ),
             ),
         );
@@ -7546,6 +7634,18 @@ pub fn amend(
         return Err(CliError::new(
             ExitCode::Generic,
             format!("amends applies to an ADR: a {kind} is not a decision, and amends none"),
+        )
+        .with_hint(format!("ank show {id}")));
+    }
+    if !matches!(loaded.entity, Entity::Adr(_))
+        && !(add_enforced.is_empty() && drop_enforced.is_empty())
+    {
+        let kind = ank_core::Fields::kind_spec(&loaded.entity).name;
+        return Err(CliError::new(
+            ExitCode::Generic,
+            format!(
+                "enforced_by applies to an ADR: a {kind} is not a rule, and nothing enforces it"
+            ),
         )
         .with_hint(format!("ank show {id}")));
     }
@@ -7780,7 +7880,9 @@ pub fn amend(
             // on a spec: `amends` is neither the constraint nor the scope, so
             // the anchor does not cover it, and the repair `check` names for
             // an amends gone wrong fires on accepted amendments above all
-            // (TASK-0e8f4ed12897).
+            // (TASK-0e8f4ed12897). `enforced_by` is outside it on the same
+            // terms, and that is what lets a settled rule declare what already
+            // holds it without a supersession (ADR-25584c56c1a7).
             let touches_anchor = !add_scope.is_empty() || !drop_scope.is_empty();
             if touches_anchor && adr.status != AdrStatus::Proposed {
                 return Err(CliError::new(
@@ -7800,6 +7902,13 @@ pub fn amend(
                 &mut adr.amends,
                 &add_amends,
                 &drop_amends,
+                &id,
+                &mut changes,
+            )?;
+            amend_enforced_by(
+                &mut adr.enforced_by,
+                &add_enforced,
+                &drop_enforced,
                 &id,
                 &mut changes,
             )?;
@@ -8024,6 +8133,38 @@ fn amend_amends(
     }
     for a in drop {
         changes.push(format!("-amends {a}"));
+    }
+    Ok(())
+}
+
+/// The `enforced_by` half, on the terms [`amend_amends`] states: add and
+/// remove, an absent entry refused rather than ignored, and an empty list an
+/// ordinary ADR nothing is declared to hold.
+fn amend_enforced_by(
+    enforced_by: &mut Vec<String>,
+    add: &[String],
+    drop: &[String],
+    id: &EntityId,
+    changes: &mut Vec<String>,
+) -> Result<()> {
+    for e in drop {
+        if !enforced_by.contains(e) {
+            return Err(CliError::new(
+                ExitCode::Prerequisite,
+                format!("{id} is not enforced by {e}"),
+            )
+            .with_hint(format!("ank show {id}")));
+        }
+    }
+    enforced_by.retain(|e| !drop.contains(e));
+    for e in add {
+        if !enforced_by.contains(e) {
+            changes.push(format!("+enforced_by {e}"));
+            enforced_by.push(e.clone());
+        }
+    }
+    for e in drop {
+        changes.push(format!("-enforced_by {e}"));
     }
     Ok(())
 }
@@ -9135,6 +9276,7 @@ mod tests {
             scope: scope.iter().map(|s| s.to_string()).collect(),
             constraint: "A binding rule.\n".into(),
             see: None,
+            enforced_by: Vec::new(),
             amends: Vec::new(),
             supersedes: None,
             ratified: None,

@@ -47,12 +47,13 @@ This build writes schema **4**, and reads schema **1** through **4**. A file dec
 | 8 | `scope` | block sequence | always emitted |  | globs, never empty |
 | 9 | `constraint` | literal block | always emitted |  | binding on every scope it covers once accepted |
 | 10 | `see` | scalar | omitted when absent |  | reference code the constraint points at |
-| 11 | `amends` | flow list | omitted when absent |  | ADR ids this one changes in part |
-| 12 | `supersedes` | bare | omitted when absent |  | an entity id |
-| 13 | `ratified` | scalar | omitted when absent |  | the signed commit `accept` wrote |
-| 14 | `verified` | block sequence of maps | omitted when absent |  | readings: `by`, then `at`, both required in an entry |
-| 15 | `schema` | integer | always emitted |  |  |
-| 16 | `version` | integer | always emitted |  |  |
+| 11 | `enforced_by` | block sequence | omitted when absent |  | `<path>#<symbol>` entries naming what holds the rule mechanically |
+| 12 | `amends` | flow list | omitted when absent |  | ADR ids this one changes in part |
+| 13 | `supersedes` | bare | omitted when absent |  | an entity id |
+| 14 | `ratified` | scalar | omitted when absent |  | the signed commit `accept` wrote |
+| 15 | `verified` | block sequence of maps | omitted when absent |  | readings: `by`, then `at`, both required in an entry |
+| 16 | `schema` | integer | always emitted |  |  |
+| 17 | `version` | integer | always emitted |  |  |
 
 ## Spec
 

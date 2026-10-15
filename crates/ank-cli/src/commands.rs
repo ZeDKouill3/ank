@@ -144,6 +144,17 @@ pub fn new(
                     "ank new adr --title \"<t>\" --scope \"<glob>\" --constraint \"<rule>\" --amends \"<adr>\"",
                 ));
             }
+            // Only a rule is enforced, and a task is the work done under one
+            // (ADR-25584c56c1a7).
+            if !inv.values("--enforced-by").is_empty() {
+                return Err(CliError::new(
+                    ExitCode::Generic,
+                    "--enforced-by applies to an ADR: a task is work, and only a rule is enforced",
+                )
+                .with_hint(
+                    "ank new adr --title \"<t>\" --scope \"<glob>\" --constraint \"<rule>\" --enforced-by \"<path>#<symbol>\"",
+                ));
+            }
             // A task has no `constraint` either: the rule is what an ADR is
             // for, and a task is the work done under it.
             if inv.value("--constraint").is_some() {
@@ -270,6 +281,7 @@ pub fn new(
                 scope,
                 constraint: ensure_newline(&constraint),
                 see: None,
+                enforced_by: enforced_by_of(inv)?,
                 ratified: None,
                 // A reading is recorded by whoever reads, never by `new` (§3).
                 verified: Vec::new(),
@@ -402,6 +414,13 @@ fn reject_foreign_flags(inv: &Invocation, kind: EntityKind) -> Result<()> {
         return Err(CliError::new(
             ExitCode::Generic,
             "--amends applies to an ADR: a spec describes, and only a decision amends a decision",
+        )
+        .with_hint(hint));
+    }
+    if !inv.values("--enforced-by").is_empty() {
+        return Err(CliError::new(
+            ExitCode::Generic,
+            "--enforced-by applies to an ADR: a spec describes, and only a rule is enforced",
         )
         .with_hint(hint));
     }
@@ -551,6 +570,7 @@ fn skeleton(
                 .map(ensure_newline)
                 .unwrap_or_default(),
             see: None,
+            enforced_by: Vec::new(),
             supersedes: None,
             ratified: None,
             // A reading is recorded by whoever reads, never by `new` (§3).
@@ -1165,6 +1185,38 @@ pub(crate) fn amends_of(inv: &Invocation, store: &Store) -> Result<Vec<EntityId>
         }
     }
     Ok(out)
+}
+
+/// `--enforced-by`, in the order typed and without repeats.
+///
+/// The shape is refused here, where it was typed, and the tree is not asked:
+/// a test written after the rule that names it is ordinary, and whether the
+/// path is tracked and holds the symbol is what `check` reports about the
+/// corpus as it stands (ADR-25584c56c1a7).
+pub(crate) fn enforced_by_of(inv: &Invocation) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in inv.values("--enforced-by") {
+        let entry = enforcement_entry(raw)?;
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
+    }
+    Ok(out)
+}
+
+/// One `<path>#<symbol>` entry, trimmed, or the refusal naming the shape.
+pub(crate) fn enforcement_entry(raw: &str) -> Result<String> {
+    let entry = raw.trim();
+    match ank_core::split_enforcement(entry) {
+        Some(_) => Ok(entry.to_string()),
+        None => Err(CliError::new(
+            ExitCode::Generic,
+            format!(
+                "--enforced-by '{entry}' is not <path>#<symbol>: a tracked file and a symbol it contains"
+            ),
+        )
+        .with_hint("--enforced-by \"crates/x/tests/a.rs#test_name\"")),
+    }
 }
 
 /// Why that entity cannot be amended, in one sentence, for `new` and `check`.

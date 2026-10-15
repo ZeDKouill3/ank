@@ -167,6 +167,20 @@ reference, following the succession to its end; an entry naming an absent
 entity, a kind other than `adr`, or an ADR that is not accepted is a finding
 there rather than a parse error here.
 
+`enforced_by` names what holds the rule mechanically, between `see` and
+`amends` (ADR-25584c56c1a7). It is a block sequence of `<path>#<symbol>`
+entries, each a file the tree counts and a symbol that file contains -- a test
+function, a verifier name in a workflow, a check rule -- and it is **omitted
+when empty**, so an ADR nothing is declared to hold is byte-identical to one
+written before the field existed. It sits outside the ratification anchor,
+which hashes `constraint` and `scope` alone, so it is written on an accepted
+ADR as on a proposed one, by `ank new adr --enforced-by` and by `ank amend
+--enforced-by` and `--drop-enforced-by`. A reader takes each entry as a string:
+a path no tracked file matches, or a symbol the file does not contain, is a
+signal naming the entry rather than a parse error here. `context` serves an
+ADR carrying the field by its title, with its entries, in both modes, and the
+field confers nothing: the rule binds whether or not something enforces it.
+
 ### Spec
 
 An ADR without its `constraint`, and the absence is what makes it a kind of its

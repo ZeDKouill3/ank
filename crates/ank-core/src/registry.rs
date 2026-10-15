@@ -203,6 +203,11 @@ static ADR_FIELDS: &[FieldSpec] = &[
         "binding on every scope it covers once accepted",
     ),
     opt("see", Scalar, "reference code the constraint points at"),
+    opt(
+        "enforced_by",
+        Seq,
+        "`<path>#<symbol>` entries naming what holds the rule mechanically",
+    ),
     opt("amends", Flow, "ADR ids this one changes in part"),
     opt("supersedes", Bare, "an entity id"),
     opt("ratified", Scalar, "the signed commit `accept` wrote"),
@@ -464,6 +469,14 @@ impl Fields for Adr {
             "scope" => Seq(&self.scope),
             "constraint" => Block(&self.constraint),
             "see" => Scalar(self.see.as_deref()?),
+            // Omitted when empty, as `amends` below: an ADR nothing is declared
+            // to hold stays byte-identical to what it was before the field.
+            "enforced_by" => {
+                if self.enforced_by.is_empty() {
+                    return None;
+                }
+                Seq(&self.enforced_by)
+            }
             // Omitted when empty, never written `[]`: every ADR written before
             // the field existed stays canonical, as a spec's `references` does.
             "amends" => {

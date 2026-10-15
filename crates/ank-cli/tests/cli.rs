@@ -7193,11 +7193,15 @@ fn the_over_constrained_signal_charges_each_constraint_and_names_an_act() {
         said.contains(&format!("ank amend {ID} --drop-scope \"<glob>\"")),
         "the finding names no act the reader can perform:\n{said}"
     );
-    // And never on the one that is not. `amend` exits 6 on an accepted ADR, so
-    // naming it would teach the reader the tool is wrong rather than that the
-    // decision is settled.
+    // And never on the one that is not. `amend` exits 6 on an accepted ADR's
+    // scope, so naming it would teach the reader the tool is wrong rather than
+    // that the decision is settled. What it does name is the one amend an
+    // accepted ADR takes, `--enforced-by`, which sits outside the anchor
+    // (ADR-25584c56c1a7).
     assert!(
-        !said.contains("ank amend ADR-"),
+        said.lines()
+            .filter(|l| l.contains("ank amend ADR-"))
+            .all(|l| l.contains("ank amend ADR-0000000000ef --enforced-by \"<path>#<symbol>\"")),
         "the finding names a command that would refuse:\n{said}"
     );
     assert!(
@@ -12905,6 +12909,9 @@ fn valid_value(flag: &str) -> &'static str {
         // Whole, for the same reason: `--drop-amends` matches what the ADR
         // stores, so an amends naming a lost ADR can still be dropped.
         "--amends" | "--drop-amends" => "ADR-000000000001",
+        // `<path>#<symbol>`, the shape `new` and `amend` refuse anything else
+        // on (ADR-25584c56c1a7).
+        "--enforced-by" | "--drop-enforced-by" => "src/main.rs#main",
         "--verify" => "cargo-test",
         // A sibling this binary carries: any other name is the verb correctly
         // refusing the value, which is not a refusal of the flag.
