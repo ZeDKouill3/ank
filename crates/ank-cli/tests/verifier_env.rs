@@ -1,10 +1,11 @@
-//! A verifier declares `inputs` and `env`, and its definition hash covers both
-//! (ADR-d8a328e311b9, TASK-dc04757dfecb).
+//! A verifier declares `run`, `timeout` and `inputs`, and nothing else: `env`
+//! left the verifier block (ADR-7224dea611c1, TASK-91cefb36af81), after
+//! TASK-dc04757dfecb had parsed, validated and hashed it.
 //!
 //! **Through the binary**, because every clause of the criterion is about it:
-//! the keys are written and read back by `ank config`, the image tag is refused
-//! by the parser every verb loads the file through, the hash is the one `done`
-//! records in a proof, and the change is the one `check` reports against it.
+//! the file is refused by the parser every verb loads it through, the keys are
+//! refused by `ank config`, and the hash is the one `check` compares with the
+//! proof that anchored it.
 
 use crate::scratch;
 
@@ -15,16 +16,14 @@ use std::sync::OnceLock;
 
 const ANK: &str = env!("CARGO_BIN_EXE_ank");
 
-/// A digest of the right shape. Nothing pulls it: ank parses, validates and
-/// hashes an image, and never runs one (ADR-d8a328e311b9, point 5).
-const IMAGE: &str =
-    "ghcr.io/example/rust@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+/// The `cargo-test` verifier of this repository as TASK-dc04757dfecb ran it
+/// at 6f7ceac, read back from that tree with `ank config`.
+const CARGO_TEST_RUN: &str = "command -v cargo-nextest >/dev/null 2>&1 || { echo \"cargo-nextest is not installed: cargo install cargo-nextest --locked\" >&2; exit 127; }; cargo nextest run --workspace";
 
-/// The hash of `run: "true"` at the default timeout, as `done` recorded it
-/// before `inputs` and `env` existed: `sha256("true\0600")`, first twelve
-/// hex digits. A verifier declaring neither must keep it, or every proof in
-/// every corpus would read as a changed verifier the day this lands.
-const HASH_OF_TRUE: &str = "727d92e1ed4b";
+/// The hash TASK-dc04757dfecb recorded for that definition, `cargo-test@`
+/// in its proof: the parser that hashed it still knew `env`, and a verifier
+/// that never declared one has to come out of this one unmoved.
+const DC04_CARGO_TEST_HASH: &str = "fcf98015afba";
 
 fn isolated_git_config() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -89,110 +88,76 @@ fn config_yml(dir: &Path) -> String {
     fs::read_to_string(dir.join(".ank/config.yml")).unwrap()
 }
 
+/// Written by hand, as ADR-d8a328e311b9 had it: no verb writes it any more,
+/// and every verb refuses to load it, naming the key it does not know.
 #[test]
-fn inputs_and_every_env_key_are_written_to_config_yml_and_read_back() {
-    let dir = corpus("verifier-env-roundtrip");
-
-    let writes = [
-        ("verifiers.t.inputs", r#"["crates/auth/**", "Cargo.toml"]"#),
-        ("verifiers.t.env.platform", "linux/amd64"),
-        ("verifiers.t.env.image", IMAGE),
-        ("verifiers.t.env.vars.RUSTFLAGS", "-D warnings"),
-        ("verifiers.t.env.network", "open"),
-    ];
-    for (key, value) in writes {
-        // `--` because a value may open on a dash, as `-D warnings` does.
-        run(ANK, &dir, &["config", "--", key, value]);
-    }
-    for (key, value) in writes {
-        assert_eq!(run(ANK, &dir, &["config", key]), value, "reading {key}");
-    }
-
-    let text = config_yml(&dir);
-    let block = format!(
-        "  t:\n    run: \"true\"\n    inputs: [\"crates/auth/**\", \"Cargo.toml\"]\n    env:\n      \
-         platform: linux/amd64\n      image: {IMAGE}\n      vars:\n        RUSTFLAGS: \"-D warnings\"\n      \
-         network: open\n"
-    );
-    assert!(text.contains(&block), "config.yml:\n{text}");
-
-    // The file every other verb loads still loads.
-    run(ANK, &dir, &["check"]);
-
-    // `network` absent under an image is `none`, and the reader is told it is
-    // the tool's value and not the file's.
-    run(ANK, &dir, &["config", "--unset", "verifiers.t.env.network"]);
-    assert_eq!(
-        run(ANK, &dir, &["config", "verifiers.t.env.network"]),
-        "none (default)"
-    );
-
-    // The last variable removed takes `vars:` with it, and the last env key
-    // takes `env:`: an empty mapping left behind is a key nobody wrote.
-    run(
-        ANK,
-        &dir,
-        &["config", "--unset", "verifiers.t.env.vars.RUSTFLAGS"],
-    );
-    assert!(!config_yml(&dir).contains("vars:"), "{}", config_yml(&dir));
-    run(ANK, &dir, &["config", "--unset", "verifiers.t.env"]);
-    run(ANK, &dir, &["config", "--unset", "verifiers.t.inputs"]);
-    let text = config_yml(&dir);
-    assert!(text.contains("  t:\n    run: \"true\"\n"), "{text}");
-    assert!(
-        !text.contains("env:") && !text.contains("inputs:"),
-        "{text}"
-    );
-}
-
-#[test]
-fn an_image_named_by_tag_is_refused_when_the_file_is_parsed() {
-    let dir = corpus("verifier-env-tag");
-    run(
-        ANK,
-        &dir,
-        &["config", "verifiers.t.env.platform", "linux/amd64"],
-    );
+fn a_config_yml_carrying_an_env_block_fails_to_load_and_names_env() {
+    let dir = corpus("verifier-env-refused");
     let before = config_yml(&dir);
-
-    // Through the writer: the write would leave the file unreadable, so it is
-    // refused and nothing moves.
-    let out = spawn(
-        ANK,
-        &dir,
-        &[
-            "config",
-            "verifiers.t.env.image",
-            "ghcr.io/example/rust:1.80",
-        ],
-    );
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "a tag was written: {err}");
-    assert!(err.contains("sha256"), "{err}");
-    assert_eq!(config_yml(&dir), before);
-
-    // By hand: any verb that loads the file refuses it, and says why.
     fs::write(
         dir.join(".ank/config.yml"),
         before.replace(
-            "      platform: linux/amd64\n",
-            "      platform: linux/amd64\n      image: ghcr.io/example/rust:1.80\n",
+            "    run: \"true\"\n",
+            "    run: \"true\"\n    env:\n      platform: linux/amd64\n",
         ),
     )
     .unwrap();
-    let out = spawn(ANK, &dir, &["check"]);
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "check loaded a tagged image");
-    assert!(
-        err.contains("verifiers.t.env.image") && err.contains("tag"),
-        "{err}"
-    );
+    assert_ne!(config_yml(&dir), before, "the fixture wrote no env block");
+
+    // `ank config` reads the text and not the parse, so that it still answers
+    // on a file that does not load: the verbs that load it are the ones asked.
+    for verb in [&["check"][..], &["status"], &["context"]] {
+        let out = spawn(ANK, &dir, verb);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{verb:?} loaded an env block: {err}");
+        assert!(
+            err.contains("verifiers.t") && err.contains("unknown field `env`"),
+            "{verb:?} must name env as the key it does not know:\n{err}"
+        );
+    }
 }
 
-/// `done` records `t@<hash>`, and `check` compares it with the definition in
-/// force: changing `inputs` or `env` is a verifier change like any other.
 #[test]
-fn the_definition_hash_covers_inputs_and_env_and_check_reports_their_change() {
+fn ank_config_refuses_every_env_key_by_name_and_lists_none() {
+    let dir = corpus("verifier-env-keys");
+    let before = config_yml(&dir);
+    for (key, value) in [
+        ("verifiers.t.env.image", "r@sha256:0123"),
+        ("verifiers.t.env.platform", "linux/amd64"),
+        ("verifiers.t.env.network", "none"),
+        ("verifiers.t.env.vars.LANG", "C"),
+    ] {
+        for args in [
+            &["config", key, value][..],
+            &["config", key],
+            &["config", "--unset", key],
+        ] {
+            let out = spawn(ANK, &dir, args);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!out.status.success(), "{args:?} was accepted: {err}");
+            assert!(
+                err.contains(&format!("unknown key '{key}'")),
+                "{args:?} must refuse {key} by name:\n{err}"
+            );
+        }
+        assert_eq!(config_yml(&dir), before, "{key} moved config.yml");
+    }
+
+    // The help of `ank config` is `ank help config`: `--help` is no flag of
+    // the verb, and its refusal lists flags, never keys.
+    let help = run(ANK, &dir, &["help", "config"]);
+    assert!(help.contains("verifiers.<name>.inputs"), "{help}");
+    assert!(!help.contains("env"), "ank help config names env:\n{help}");
+    let out = spawn(ANK, &dir, &["config", "--help"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("env"), "ank config --help names env:\n{err}");
+}
+
+/// What `check` compares a proof's `name@hash` with is the definition in
+/// force: a verifier declaring `run` and `timeout` keeps the hash the env
+/// parser recorded for it, and `inputs` still moves it.
+#[test]
+fn the_definition_hash_covers_run_timeout_and_inputs_and_matches_dc04() {
     let dir = corpus("verifier-env-hash");
     let new = run(
         ANK,
@@ -217,27 +182,80 @@ fn the_definition_hash_covers_inputs_and_env_and_check_reports_their_change() {
     run("git", &dir, &["commit", "-q", "-m", "new"]);
     run(ANK, &dir, &["claim", &id]);
     run(ANK, &dir, &["done"]);
+
+    // The proof `done` wrote anchors `t@<hash of true>`. Rewritten to the
+    // reference TASK-dc04757dfecb holds, so the definition compared with it is
+    // that task's own: running cargo nextest inside a test is not the point.
+    let task = dir.join(format!(".ank/entities/{id}.md"));
+    let text = fs::read_to_string(&task).unwrap();
+    let at = text.find("verifier: t@").expect("done anchored t");
+    let anchored = &text[at..at + "verifier: t@".len() + 12];
+    fs::write(
+        &task,
+        text.replace(
+            anchored,
+            &format!("verifier: cargo-test@{DC04_CARGO_TEST_HASH}"),
+        ),
+    )
+    .unwrap();
+    run(
+        ANK,
+        &dir,
+        &["config", "--", "verifiers.cargo-test.run", CARGO_TEST_RUN],
+    );
+    run(
+        ANK,
+        &dir,
+        &["config", "verifiers.cargo-test.timeout", "20m"],
+    );
     run("git", &dir, &["add", "-A"]);
     run("git", &dir, &["commit", "-q", "-m", "done"]);
 
-    let shown = run(ANK, &dir, &["show", &id]);
+    let changed =
+        format!("verifier 'cargo-test' changed since the proof ({DC04_CARGO_TEST_HASH} -> ");
+    let report = String::from_utf8_lossy(&spawn(ANK, &dir, &["check"]).stdout).to_string();
     assert!(
-        shown.contains(&format!("t@{HASH_OF_TRUE}")),
-        "a verifier declaring neither keeps its hash:\n{shown}"
+        !report.contains(&changed),
+        "run and timeout alone must keep the hash TASK-dc04757dfecb recorded:\n{report}"
     );
-    let changed = format!("verifier 't' changed since the proof ({HASH_OF_TRUE} -> ");
-    assert!(!run(ANK, &dir, &["check"]).contains(&changed));
 
-    for (key, value) in [
-        ("verifiers.t.inputs", r#"["f"]"#),
-        ("verifiers.t.env.vars.LANG", "C"),
-        ("verifiers.t.env.platform", "linux/amd64"),
-    ] {
-        run(ANK, &dir, &["config", key, value]);
-        let report = run(ANK, &dir, &["check"]);
-        assert!(report.contains(&changed), "after {key}:\n{report}");
-        run(ANK, &dir, &["config", "--unset", key]);
-        let report = run(ANK, &dir, &["check"]);
-        assert!(!report.contains(&changed), "after --unset {key}:\n{report}");
-    }
+    run(
+        ANK,
+        &dir,
+        &["config", "verifiers.cargo-test.inputs", r#"["f"]"#],
+    );
+    let report = String::from_utf8_lossy(&spawn(ANK, &dir, &["check"]).stdout).to_string();
+    assert!(
+        report.contains(&changed),
+        "inputs no longer moves the hash:\n{report}"
+    );
+    run(
+        ANK,
+        &dir,
+        &["config", "--unset", "verifiers.cargo-test.inputs"],
+    );
+    let report = String::from_utf8_lossy(&spawn(ANK, &dir, &["check"]).stdout).to_string();
+    assert!(
+        !report.contains(&changed),
+        "after --unset inputs:\n{report}"
+    );
+}
+
+/// The page a reader is handed names no env key and no image: it is generated
+/// from the table `ank config` reads (ADR-2b6235b7ff81), and the CI recipe
+/// beside it promises no environment the binary never declares.
+#[test]
+fn the_docs_name_no_env_key_and_no_image() {
+    let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+    let keys = fs::read_to_string(docs.join("config-keys.md")).unwrap();
+    assert!(keys.contains("`verifiers.<name>.inputs`"), "{keys}");
+    assert!(
+        !keys.contains(".env"),
+        "docs/config-keys.md carries an env row"
+    );
+    let ci = fs::read_to_string(docs.join("ci.md")).unwrap();
+    assert!(
+        !ci.to_lowercase().contains("image"),
+        "docs/ci.md names an image"
+    );
 }
