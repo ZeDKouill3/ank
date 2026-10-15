@@ -13220,12 +13220,29 @@ fn a_refusal_is_plain_in_a_pipe_too() {
 /// This is what catches a wiring inversion. `NO_COLOR` implemented backwards,
 /// or a Windows allowlist consulted instead of the terminal check, would leave
 /// every assertion above green and change the bytes here.
+///
+/// The rule is decided once, in `main`, before any verb is dispatched, so it is
+/// proved on two verbs and not on the whole styled surface: `context` under a
+/// live claim, the richest painter that reads a corpus, and `help`, which reads
+/// none. Every verb re-proving the same function was 92 spawns of the binary;
+/// this is 13, the claim included (TASK-8ad3edcbd0fb).
 #[test]
 fn no_environment_makes_a_pipe_colored() {
     let r = color_fixture();
+    // Every variable the rule reads removed, the whole Windows allowlist
+    // included: one inherited from the shell running the suite would otherwise
+    // decide what the reference proves.
+    let clean: &[(&str, Option<&str>)] = &[
+        ("NO_COLOR", None),
+        ("TERM", None),
+        ("TERM_PROGRAM", None),
+        ("ConEmuANSI", None),
+        ("WT_SESSION", None),
+        ("ANSICON", None),
+    ];
 
-    let environments: [&[(&str, Option<&str>)]; 6] = [
-        &[("NO_COLOR", None), ("TERM", None), ("WT_SESSION", None)],
+    // Each one laid over `clean`, so it is the only variable the run sees.
+    let environments: [&[(&str, Option<&str>)]; 5] = [
         &[("NO_COLOR", Some("1"))],
         &[("NO_COLOR", Some(""))],
         &[("TERM", Some("dumb"))],
@@ -13235,14 +13252,14 @@ fn no_environment_makes_a_pipe_colored() {
         &[("WT_SESSION", Some("1")), ("ANSICON", Some("1"))],
     ];
 
-    for base in styled_surface() {
-        let reference = r.ank_env(
-            "claude-code@ank",
-            &base,
-            &[("NO_COLOR", None), ("TERM", None), ("WT_SESSION", None)],
+    for base in [&["context"][..], &["help"][..]] {
+        let reference = r.ank_env("claude-code@ank", base, clean);
+        assert!(
+            !reference.stdout.contains(&0x1b),
+            "{base:?} coloured a pipe with no variable set"
         );
         for env in environments {
-            let out = r.ank_env("claude-code@ank", &base, env);
+            let out = r.ank_env("claude-code@ank", base, &[clean, env].concat());
             assert!(
                 !out.stdout.contains(&0x1b),
                 "{base:?} under {env:?} coloured a pipe"
