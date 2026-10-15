@@ -5,7 +5,7 @@ slug: a-finding-carries-a-kind-and-check-folds-a-kind
 title: A finding carries a kind, and check folds a kind past the threshold into one corpus signal
 created: 2026-10-14T10:17:24Z
 author: claude-code/fable-5.1+plan
-status: in_progress
+status: done
 scope:
   - crates/ank-cli/src/human.rs
   - crates/ank-contract/src/verbs.rs
@@ -16,8 +16,23 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/85f4cfc69503@f5cf728
+    tree: scope/db0b19683671
+    criteria: 1ca362562a12
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@480d55d
+    tree: scope/db0b19683671
+    criteria: 1ca362562a12
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
+    reused: local
+    by: claude-code/opus-5.5+9e7a
 schema: 4
-version: 2
+version: 3
 ---
 
 Measured on 2026-10-14 (c859d01f): 715 signals, of which 348 read-by-no-human, 160 verifier-changed and 113 dead-scope lines, each one per entity. The three hand-written corpus folds in human.rs (prose identifiers, pre-convention authors, cold entities) are the shape to generalise; Finding gains kind, and one fold applies to every kind.
