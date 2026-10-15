@@ -5,7 +5,7 @@ slug: count-the-processes-each-test-of-cli-rs-and-stat
 title: Count the processes each test of cli.rs and status.rs starts
 created: 2026-10-13T10:11:07Z
 author: claude-code/2.x
-status: open
+status: in_progress
 scope:
   - crates/ank-cli/tests/cli.rs
   - crates/ank-cli/tests/status.rs
@@ -15,7 +15,7 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 schema: 4
-version: 1
+version: 2
 ---
 
 On Windows, cli.rs takes 407.6s against 36s on Linux, and status.rs 89.3s
