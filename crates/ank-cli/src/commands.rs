@@ -281,7 +281,7 @@ pub fn new(
                 scope,
                 constraint: ensure_newline(&constraint),
                 see: None,
-                enforced_by: enforced_by_of(inv)?,
+                enforced_by: enforced_by_of(inv, repo, "ank new adr --enforced-by")?,
                 ratified: None,
                 // A reading is recorded by whoever reads, never by `new` (§3).
                 verified: Vec::new(),
@@ -1192,11 +1192,13 @@ pub(crate) fn amends_of(inv: &Invocation, store: &Store) -> Result<Vec<EntityId>
 /// The shape is refused here, where it was typed, and the tree is not asked:
 /// a test written after the rule that names it is ordinary, and whether the
 /// path is tracked and holds the symbol is what `check` reports about the
-/// corpus as it stands (ADR-25584c56c1a7).
-pub(crate) fn enforced_by_of(inv: &Invocation) -> Result<Vec<String>> {
+/// corpus as it stands (ADR-25584c56c1a7). The path half is normalised as a
+/// scope is (TASK-8dd89053fa33): `./src\\a.rs` would otherwise be stored
+/// verbatim and match no tracked file on any platform.
+pub(crate) fn enforced_by_of(inv: &Invocation, repo: &Repo, usage: &str) -> Result<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for raw in inv.values("--enforced-by") {
-        let entry = enforcement_entry(raw)?;
+        let entry = enforcement_entry(raw, repo, usage)?;
         if !out.contains(&entry) {
             out.push(entry);
         }
@@ -1204,11 +1206,15 @@ pub(crate) fn enforced_by_of(inv: &Invocation) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// One `<path>#<symbol>` entry, trimmed, or the refusal naming the shape.
-pub(crate) fn enforcement_entry(raw: &str) -> Result<String> {
+/// One `<path>#<symbol>` entry, trimmed and its path normalised, or the
+/// refusal naming the shape.
+pub(crate) fn enforcement_entry(raw: &str, repo: &Repo, usage: &str) -> Result<String> {
     let entry = raw.trim();
     match ank_core::split_enforcement(entry) {
-        Some(_) => Ok(entry.to_string()),
+        Some((path, symbol)) => Ok(format!(
+            "{}#{symbol}",
+            crate::context::normalised(path, repo, usage)?
+        )),
         None => Err(CliError::new(
             ExitCode::Generic,
             format!(

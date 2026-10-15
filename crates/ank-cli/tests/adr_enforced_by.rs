@@ -273,6 +273,27 @@ fn new_adr_writes_enforced_by_and_show_prints_it() {
 }
 
 #[test]
+fn the_path_of_an_entry_is_normalised_as_a_scope_is() {
+    let r = Repo::new("enforced-by-normalised");
+    // The forms a shell completes, each stored as the one path `check` and
+    // every other platform read back.
+    let a = r.adr(
+        "Every module logs",
+        "Every module logs.",
+        &["--enforced-by", "./src/tests.rs#logs_every_module"],
+    );
+    assert_eq!(enforced_by(&r.show(&a)), Some(vec![HELD.to_string()]));
+    r.ok(&["amend", &a, "--enforced-by", "src\\main.rs#main"]);
+    assert_eq!(
+        enforced_by(&r.show(&a)),
+        Some(vec![HELD.to_string(), "src/main.rs#main".to_string()])
+    );
+    // And dropped by the same form it may have been typed in.
+    r.ok(&["amend", &a, "--drop-enforced-by", "./src/main.rs#main"]);
+    assert_eq!(enforced_by(&r.show(&a)), Some(vec![HELD.to_string()]));
+}
+
+#[test]
 fn amend_writes_enforced_by_on_a_proposed_adr() {
     let r = Repo::new("enforced-by-amend-proposed");
     let a = r.adr("Every module logs", "Every module logs.", &[]);

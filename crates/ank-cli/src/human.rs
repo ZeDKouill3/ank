@@ -7574,13 +7574,25 @@ pub fn amend(
     // What holds an ADR (ADR-25584c56c1a7): one added is refused on its shape,
     // in the words `new` uses, and the tree is not asked; one dropped is
     // matched against what the ADR stores, since the entry worth dropping is
-    // the one `check` reports as naming nothing.
-    let add_enforced = crate::commands::enforced_by_of(inv)?;
-    let drop_enforced: Vec<String> = inv
-        .values("--drop-enforced-by")
-        .iter()
-        .map(|e| e.trim().to_string())
-        .collect();
+    // the one `check` reports as naming nothing. Both have their path
+    // normalised, as `--scope` and `--drop-scope` do, so a dropped entry typed
+    // the way the shell completed it still matches what was stored; one that
+    // is not `<path>#<symbol>` is matched as typed, so a malformed entry
+    // written by hand can still be dropped.
+    let add_enforced =
+        crate::commands::enforced_by_of(inv, repo, &format!("ank amend {prefix} --enforced-by"))?;
+    let mut drop_enforced: Vec<String> = Vec::new();
+    for raw in inv.values("--drop-enforced-by") {
+        let raw = raw.trim();
+        drop_enforced.push(match ank_core::split_enforcement(raw) {
+            Some(_) => crate::commands::enforcement_entry(
+                raw,
+                repo,
+                &format!("ank amend {prefix} --drop-enforced-by"),
+            )?,
+            None => raw.to_string(),
+        });
+    }
 
     if add_scope.is_empty()
         && drop_scope.is_empty()

@@ -13959,7 +13959,14 @@ const PATH_POSITIONALS: [&str; 5] = ["context", "review", "graph", "scope", "che
 const MACHINE_POSITIONALS: [&str; 1] = ["init"];
 
 /// Flag values matched against scopes, or stored as one.
-const PATH_FLAGS: [(&str, &str); 1] = [("find", "--scope")];
+const PATH_FLAGS: [(&str, &str); 4] = [
+    ("find", "--scope"),
+    // The path half of `<path>#<symbol>`, normalised before it is stored or
+    // matched against what is stored (ADR-25584c56c1a7).
+    ("new", "--enforced-by"),
+    ("amend", "--enforced-by"),
+    ("amend", "--drop-enforced-by"),
+];
 
 /// The flags naming a path that must **not** be normalised against this
 /// repository, because being outside it is the whole of what they mean.
