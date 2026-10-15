@@ -5,7 +5,7 @@ slug: env-leaves-the-verifier-block-config-yml-refuses
 title: "env leaves the verifier block: config.yml refuses the key, the definition hash covers run, timeout and inputs, and the docs name no env"
 created: 2026-10-14T12:43:27Z
 author: claude-code/fable-5.1+plan
-status: in_progress
+status: done
 scope:
   - crates/ank-cli/src/config.rs
   - crates/ank-core/src/config.rs
@@ -19,8 +19,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/93e8320e3b01@9df6cf3
+    tree: scope/1f8b1251d24f
+    criteria: 9742d5885028
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@9df6cf3
+    tree: scope/1f8b1251d24f
+    criteria: 9742d5885028
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
 schema: 4
-version: 2
+version: 3
 ---
 
 TASK-dc04757dfecb finished on 2026-10-14 (46fa39c7) with the env keys of ADR-d8a328e311b9 parsed, validated and hashed, before ADR-7224dea611c1 withdrew them. This task takes them out again, and runs only once that ADR is accepted: until then ADR-d8a3 still binds, and removing what it asks for is a fault, not work. Measured on 46fa39c7: EnvFile and Env in crates/ank-cli/src/config.rs, four env rows in the key table of crates/ank-core/src/config.rs and docs/config-keys.md, the env arm of definition_hash in verify.rs with its test, and the env paragraph of SPEC-fe67. inputs stays whole, with its hash coverage and its ank config route.
