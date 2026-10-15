@@ -3,36 +3,37 @@
 //!
 //! **Pure arithmetic, and nothing else.** This module names no terminal, no
 //! corpus and no screen: its input is a list of [`Node`]s the caller built,
-//! its output a [`Layout`] of plain strings. What is shown, in which order the
+//! its output a [`JunctionLayout`] of plain strings. What is shown, in which order the
 //! ties break, and what colour any of it is painted belong to the view
 //! (ADR-559eebf5c6f5); a module that only emits characters cannot make the
 //! frame with paint and without it differ.
 //!
 //! # The walk
 //!
-//! The reference is `git log --graph`. The rows come in topological order, a
-//! node above every node it is blocked by the way a commit sits above its
-//! parents, and wherever the edges leave two nodes free of each other the
-//! caller's order is kept. One pass over those rows then keeps a vector of
-//! lanes, each lane waiting for the id it will reach:
+//! The reference is `git log --graph`, and the shape is the one GRAPH option
+//! B chose (TASK-080f158e317e, TASK-de02dbcf9965). The task rows come in
+//! topological order, a node above every node it is blocked by the way a
+//! commit sits above its parents, and wherever the edges leave two nodes free
+//! of each other the caller's order is kept. One pass over those rows then
+//! keeps a vector of lanes, each lane waiting for the id it will reach:
 //!
-//! - a node takes the lane waiting for it, or else the first free lane;
+//! - a node takes the leftmost lane waiting for it, or else the first free
+//!   lane; when two or more lanes wait for it they merge into that one on a
+//!   row of their own immediately above its task row (`├─┘`, `┴`), a row
+//!   that is nobody's: a [`Line::Junction`];
 //! - its first blocker continues that lane;
-//! - each further blocker takes the first free lane, and the edge *leaves* the
-//!   node sideways toward it;
-//! - but a blocker some lane already waits for is not given a second one: the
-//!   edge *joins* that lane, which is the merge. This holds for the first
-//!   blocker too, so no two lanes ever wait for one id and a node never has to
-//!   gather lanes arriving from above;
+//! - each further blocker opens the first free lane to the right of the node
+//!   (`─┐`, `┬`), never to the left and never into a lane already waiting,
+//!   even one waiting for the same blocker: that merge is the blocker's own
+//!   junction row, below;
+//! - a horizontal passing over a lane that runs crosses it (`┼`);
 //! - a lane freed is reused, and trailing free lanes are dropped, so the width
 //!   is what the rows need.
 //!
-//! **One row per node**, so a connector is drawn on the row of the node it
-//! leaves: the node's cell, a horizontal across to the lane it reaches, and
-//! there either a corner turning down into a new lane or a tee into a lane
-//! that already runs. Lane `i` is drawn in column `2 * i`, the columns between
-//! lanes carry the horizontals, and every prefix of a layout is
-//! `2 * lanes - 1` columns wide.
+//! Lane `i` is drawn in column `2 * i`, the columns between lanes carry the
+//! horizontals, and every prefix of a layout is `2 * lanes - 1` columns wide.
+//! A cell says open, finished or in progress ([`Mark::cell`]), readiness
+//! being a word for the view to write and not a cell.
 //!
 //! An edge to an id that is no node draws nothing and is counted on its row
 //! ([`Row::unknown`]). A cycle is broken where it is met -- at the earliest
@@ -40,20 +41,11 @@
 //! on -- so the walk terminates, every node is still a row, and the edge back
 //! up to a node already drawn draws nothing.
 //!
-//! # The junction layout
-//!
-//! [`junction_layout`] is the second shape, the one GRAPH option B chose
-//! (TASK-080f158e317e), standing beside [`layout`] until the view moves onto
-//! it and the first one is removed. The rows come in the same order; what
-//! changes is where an edge meets its lane. A node's further blockers open
-//! new lanes to its right (`─┐`, `┬`), and lanes waiting for one node merge
-//! on a row of their own immediately above it (`├─┘`, `┴`), a row that is
-//! nobody's: a [`Line::Junction`]. A horizontal passing over a lane crosses
-//! it (`┼`). Its cells say open, finished or in progress ([`Mark::cell`]),
-//! readiness being a word for the view to write and not a cell.
-//!
 //! [`groups`] answers which nodes are linked at all: the weakly connected
 //! components over the drawn edges, for the view to give each its block.
+//! The first layout, which drew every connector on the row of the node it
+//! left, stood here until the view moved onto this one (TASK-de02dbcf9965)
+//! and was removed with its glyphs, so that the table is one table again.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -66,9 +58,8 @@ pub enum Mark {
     Waiting,
     /// Done, or otherwise closed.
     Finished,
-    /// Claimed and under way. The junction layout draws it as one phase of a
-    /// pulse the caller chooses ([`Mark::cell`]); the first layout, which
-    /// has no phase, draws the first.
+    /// Claimed and under way, drawn as one phase of a pulse the caller
+    /// chooses ([`Mark::cell`]).
     InProgress,
 }
 
@@ -95,27 +86,10 @@ pub struct Row {
     /// `2 * lane`.
     pub lane: usize,
     /// What is drawn left of the title, the layout's width in columns
-    /// ([`Layout::width`], [`JunctionLayout::width`]), one `char` per column.
+    /// ([`JunctionLayout::width`]), one `char` per column.
     pub prefix: String,
     /// How many of its `blocked_by` name an id that is no node.
     pub unknown: usize,
-}
-
-/// The rows, one per node, top first.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Layout {
-    /// One per node of the input.
-    pub rows: Vec<Row>,
-    /// The number of lanes the layout used: the most any one row needed.
-    pub lanes: usize,
-}
-
-impl Layout {
-    /// The columns every prefix takes: `2 * lanes - 1`, and 0 when there is
-    /// no row.
-    pub fn width(&self) -> usize {
-        (2 * self.lanes).saturating_sub(1)
-    }
 }
 
 /// The two alphabets a layout is drawn in (ADR-559eebf5c6f5): box-drawing
@@ -130,31 +104,6 @@ pub enum Alphabet {
 /// both alphabets and is not a glyph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Glyph {
-    /// The cell of a node marked [`Mark::Ready`].
-    Ready,
-    /// The cell of a node marked [`Mark::Waiting`].
-    Waiting,
-    /// The cell of a node marked [`Mark::Finished`].
-    Finished,
-    /// A lane passing through the row, crossed or not.
-    Pass,
-    /// The horizontal of an edge on its way to another lane.
-    Across,
-    /// An edge leaves the node rightwards and turns down into a new lane.
-    LeaveRight,
-    /// An edge leaves the node leftwards and turns down into a new lane.
-    LeaveLeft,
-    /// A new lane opens down while the horizontal runs on past it.
-    LeaveThrough,
-    /// An edge from the left joins a lane already waiting for its blocker.
-    JoinRight,
-    /// An edge from the right joins a lane already waiting for its blocker.
-    JoinLeft,
-    /// A lane is joined while the horizontal runs on past it.
-    JoinThrough,
-    // The junction layout's own rows. Pass, Across, LeaveRight and
-    // LeaveThrough above mean the same there and are shared; the rest are
-    // appended so the first layout's rows stand as they were.
     /// The cell of a node not finished and not under way, ready or waiting
     /// alike: readiness is the word on the row, not the cell.
     Open,
@@ -168,6 +117,15 @@ pub enum Glyph {
     InProgress2,
     /// The fourth phase of the pulse.
     InProgress3,
+    /// A lane passing through the row.
+    Pass,
+    /// The horizontal of an edge on its way to another lane.
+    Across,
+    /// An edge leaves the node rightwards and turns down into a new lane,
+    /// the farthest one it opens.
+    LeaveRight,
+    /// A new lane opens down while the horizontal runs on past it.
+    LeaveThrough,
     /// On a junction row, the lane the node takes, which the others merge
     /// into.
     JoinKeep,
@@ -175,34 +133,27 @@ pub enum Glyph {
     JoinFar,
     /// On a junction row, a lane merging while the horizontal runs on past
     /// it.
-    JoinMiddle,
+    JoinThrough,
     /// A lane passing where a horizontal crosses it.
     Cross,
 }
 
 /// **The one table**: each glyph, then its box-drawing and its ASCII
 /// character, in [`Glyph`]'s order. Every character is one column wide.
-pub const TABLE: [(Glyph, char, char); 21] = [
-    (Glyph::Ready, '●', '*'),
-    (Glyph::Waiting, '○', 'o'),
-    (Glyph::Finished, '·', '.'),
-    (Glyph::Pass, '│', '|'),
-    (Glyph::Across, '─', '-'),
-    (Glyph::LeaveRight, '┐', '+'),
-    (Glyph::LeaveLeft, '┌', '+'),
-    (Glyph::LeaveThrough, '┬', '+'),
-    (Glyph::JoinRight, '┤', '+'),
-    (Glyph::JoinLeft, '├', '+'),
-    (Glyph::JoinThrough, '┼', '+'),
+pub const TABLE: [(Glyph, char, char); 14] = [
     (Glyph::Open, '○', 'o'),
     (Glyph::Settled, '●', '@'),
     (Glyph::InProgress0, '·', '.'),
     (Glyph::InProgress1, '•', 'o'),
     (Glyph::InProgress2, '●', 'O'),
     (Glyph::InProgress3, '•', 'o'),
+    (Glyph::Pass, '│', '|'),
+    (Glyph::Across, '─', '-'),
+    (Glyph::LeaveRight, '┐', '+'),
+    (Glyph::LeaveThrough, '┬', '+'),
     (Glyph::JoinKeep, '├', '|'),
     (Glyph::JoinFar, '┘', '\''),
-    (Glyph::JoinMiddle, '┴', '+'),
+    (Glyph::JoinThrough, '┴', '+'),
     (Glyph::Cross, '┼', '+'),
 ];
 
@@ -218,19 +169,9 @@ impl Alphabet {
 }
 
 impl Mark {
-    /// The cell the first layout draws.
-    fn glyph(self) -> Glyph {
-        match self {
-            Mark::Ready => Glyph::Ready,
-            Mark::Waiting => Glyph::Waiting,
-            Mark::Finished => Glyph::Finished,
-            Mark::InProgress => Glyph::InProgress0,
-        }
-    }
-
-    /// The cell the junction layout draws: open for ready and waiting alike,
-    /// settled when finished, and for a node under way the pulse at `phase`,
-    /// taken modulo four. Which phase, and when it moves, are the caller's.
+    /// The cell the layout draws: open for ready and waiting alike, settled
+    /// when finished, and for a node under way the pulse at `phase`, taken
+    /// modulo four. Which phase, and when it moves, are the caller's.
     pub fn cell(self, phase: usize) -> Glyph {
         const PULSE: [Glyph; 4] = [
             Glyph::InProgress0,
@@ -244,74 +185,6 @@ impl Mark {
             Mark::InProgress => PULSE[phase % 4],
         }
     }
-}
-
-/// How an edge reaches the lane of its blocker on the node's row.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Reach {
-    Leave,
-    Join,
-}
-
-/// Lays `nodes` out, top first, drawn in `alphabet`.
-pub fn layout(nodes: &[Node], alphabet: Alphabet) -> Layout {
-    let (blockers, unknown) = edges(nodes);
-
-    let mut lanes: Vec<Option<usize>> = Vec::new();
-    let mut drawn = vec![false; nodes.len()];
-    let mut placed: Vec<(usize, usize, Vec<Option<Glyph>>)> = Vec::with_capacity(nodes.len());
-    let mut most = 0;
-    for x in order(&blockers) {
-        drawn[x] = true;
-        let lane = match lanes.iter().position(|w| *w == Some(x)) {
-            Some(l) => l,
-            None => free(&mut lanes, 0),
-        };
-        lanes[lane] = None;
-        let through = lanes.clone();
-        let mut reached: Vec<(usize, Reach)> = Vec::new();
-        for &b in &blockers[x] {
-            if drawn[b] {
-                // Back up a cycle, to a row already drawn: nothing to draw.
-                continue;
-            }
-            if let Some(t) = lanes.iter().position(|w| *w == Some(b)) {
-                reached.push((t, Reach::Join));
-            } else if lanes[lane].is_none() {
-                lanes[lane] = Some(b);
-            } else {
-                let t = free(&mut lanes, 0);
-                lanes[t] = Some(b);
-                reached.push((t, Reach::Leave));
-            }
-        }
-        let cells = row(lane, nodes[x].mark, &through, &reached, lanes.len());
-        most = most.max(cells.len().div_ceil(2));
-        while lanes.last() == Some(&None) {
-            lanes.pop();
-        }
-        placed.push((x, lane, cells));
-    }
-
-    let width = (2 * most).saturating_sub(1);
-    let rows = placed
-        .into_iter()
-        .map(|(x, lane, cells)| {
-            let mut prefix: String = cells
-                .iter()
-                .map(|c| c.map_or(' ', |g| alphabet.glyph(g)))
-                .collect();
-            prefix.extend(std::iter::repeat_n(' ', width - cells.len()));
-            Row {
-                id: nodes[x].id.clone(),
-                mark: nodes[x].mark,
-                lane,
-                prefix,
-                unknown: unknown[x],
-            }
-        })
-        .collect();
-    Layout { rows, lanes: most }
 }
 
 /// One line of a [`JunctionLayout`].
@@ -353,22 +226,11 @@ impl JunctionLayout {
 }
 
 /// Lays `nodes` out the way `git log --graph` does, top first, drawn in
-/// `alphabet`, a node under way drawn at pulse `phase`.
-///
-/// The rows come in the order [`layout`] draws them. One pass keeps a vector
-/// of lanes, each waiting for the id it will reach:
-///
-/// - a node takes the leftmost lane waiting for it, or else the first free
-///   lane; when two or more lanes wait for it they merge into that one on a
-///   junction row standing immediately above its task row;
-/// - its first blocker whose edge is drawn continues that lane;
-/// - each further blocker opens the first free lane right of the node, never
-///   left of it and never into a lane already waiting, even one waiting for
-///   the same blocker: that merge is the blocker's junction row, below;
-/// - trailing free lanes are dropped after every row.
+/// `alphabet`, a node under way drawn at pulse `phase`: the walk the module
+/// header describes, over the rows [`order`] computes.
 ///
 /// An edge to an id that is no node, and an edge back up a cycle to a row
-/// already drawn, draw nothing, as in [`layout`].
+/// already drawn, draw nothing.
 pub fn junction_layout(nodes: &[Node], alphabet: Alphabet, phase: usize) -> JunctionLayout {
     let (blockers, unknown) = edges(nodes);
     let mut lanes: Vec<Option<usize>> = Vec::new();
@@ -494,7 +356,7 @@ fn merge(mine: &[usize], lanes: &[Option<usize>]) -> Vec<Option<Glyph>> {
         } else if c == far {
             Some(Glyph::JoinFar)
         } else if mine.contains(&c) {
-            Some(Glyph::JoinMiddle)
+            Some(Glyph::JoinThrough)
         } else if keep < c && c < far {
             Some(if runs { Glyph::Cross } else { Glyph::Across })
         } else {
@@ -582,54 +444,6 @@ fn free(lanes: &mut Vec<Option<usize>>, from: usize) -> usize {
             lanes.len() - 1
         }
     }
-}
-
-/// The cells of one node's row: `lane` is the node's, `through` the lanes
-/// running past it, `reached` the lanes its edges leave for or join, and
-/// `after` how many lanes exist below it.
-fn row(
-    lane: usize,
-    mark: Mark,
-    through: &[Option<usize>],
-    reached: &[(usize, Reach)],
-    after: usize,
-) -> Vec<Option<Glyph>> {
-    let count = after.max(through.len()).max(lane + 1);
-    let left = reached.iter().map(|&(t, _)| t).filter(|&t| t < lane).min();
-    let right = reached.iter().map(|&(t, _)| t).filter(|&t| t > lane).max();
-    let spanned = |c: usize| {
-        left.is_some_and(|l| l <= c && c < lane) || right.is_some_and(|r| lane < c && c <= r)
-    };
-    let runs = |c: usize| through.get(c).is_some_and(Option::is_some);
-    let mut cells = Vec::with_capacity(2 * count - 1);
-    for c in 0..count {
-        if c > 0 {
-            let across = left.is_some_and(|l| l < c && c <= lane)
-                || right.is_some_and(|r| lane < c && c <= r);
-            cells.push(across.then_some(Glyph::Across));
-        }
-        let glyph = if c == lane {
-            Some(mark.glyph())
-        } else if let Some(&(_, how)) = reached.iter().find(|&&(t, _)| t == c) {
-            let far = Some(c) == left || Some(c) == right;
-            Some(match (how, far, c > lane) {
-                (Reach::Leave, true, true) => Glyph::LeaveRight,
-                (Reach::Leave, true, false) => Glyph::LeaveLeft,
-                (Reach::Leave, false, _) => Glyph::LeaveThrough,
-                (Reach::Join, true, true) => Glyph::JoinRight,
-                (Reach::Join, true, false) => Glyph::JoinLeft,
-                (Reach::Join, false, _) => Glyph::JoinThrough,
-            })
-        } else if runs(c) {
-            Some(Glyph::Pass)
-        } else if spanned(c) {
-            Some(Glyph::Across)
-        } else {
-            None
-        };
-        cells.push(glyph);
-    }
-    cells
 }
 
 /// The rows' order: every node above the nodes it is blocked by, and the
@@ -789,157 +603,35 @@ mod tests {
         node(id, Mark::Ready, blocked_by)
     }
 
-    /// The rows as (id, lane, prefix), the shape every literal below is
-    /// written in.
-    fn shape(layout: &Layout) -> Vec<(&str, usize, &str)> {
-        layout
-            .rows
+    /// The lines as (id, prefix), a junction row's id written "", the shape
+    /// every literal below is written in.
+    fn lines(laid: &JunctionLayout) -> Vec<(&str, &str)> {
+        laid.lines
             .iter()
-            .map(|r| (r.id.as_str(), r.lane, r.prefix.as_str()))
+            .map(|l| match l {
+                Line::Task(row) => (row.id.as_str(), row.prefix.as_str()),
+                Line::Junction(prefix) => ("", prefix.as_str()),
+            })
             .collect()
     }
 
-    #[test]
-    fn a_chain_of_three_is_one_lane_with_each_dependent_above_its_blocker() {
-        // Handed in bottom first, to show the order is the edges' and not the
-        // input's where the edges decide it.
-        let nodes = [ready("C", &[]), ready("B", &["C"]), ready("A", &["B"])];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(shape(&laid), [("A", 0, "●"), ("B", 0, "●"), ("C", 0, "●")]);
-        assert_eq!(laid.lanes, 1);
+    fn junctions(nodes: &[Node]) -> JunctionLayout {
+        junction_layout(nodes, Alphabet::Boxes, 0)
     }
 
-    fn diamond() -> [Node; 4] {
-        [
-            ready("D", &[]),
-            ready("C", &["D"]),
-            ready("A", &["B", "C"]),
-            ready("B", &["D"]),
-        ]
+    fn task_rows(laid: &JunctionLayout) -> Vec<&Row> {
+        laid.lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Task(row) => Some(row),
+                Line::Junction(_) => None,
+            })
+            .collect()
     }
 
-    #[test]
-    fn a_diamond_leaves_toward_a_second_lane_and_joins_the_lane_waiting_for_the_same_blocker() {
-        // A is the only node nothing waits on, so it is first; B and C are
-        // free of each other and keep the input's order, C before B. A's first
-        // blocker B continues lane 0 and C leaves for lane 1. C's edge to D
-        // continues lane 1; B's edge to D finds lane 1 already waiting for D
-        // and joins it, so D is reached by one lane, and it is lane 1.
-        let laid = layout(&diamond(), Alphabet::Boxes);
-        assert_eq!(
-            shape(&laid),
-            [
-                ("A", 0, "●─┐"),
-                ("C", 1, "│ ●"),
-                ("B", 0, "●─┤"),
-                ("D", 1, "  ●")
-            ]
-        );
-        assert_eq!(laid.lanes, 2);
-    }
-
-    #[test]
-    fn a_node_cell_is_its_mark_in_either_alphabet() {
-        let nodes = [
-            node("R", Mark::Ready, &[]),
-            node("W", Mark::Waiting, &[]),
-            node("F", Mark::Finished, &[]),
-        ];
-        let boxes: Vec<String> = layout(&nodes, Alphabet::Boxes)
-            .rows
-            .into_iter()
-            .map(|r| r.prefix)
-            .collect();
-        assert_eq!(boxes, ["●", "○", "·"]);
-        let ascii: Vec<String> = layout(&nodes, Alphabet::Ascii)
-            .rows
-            .into_iter()
-            .map(|r| r.prefix)
-            .collect();
-        assert_eq!(ascii, ["*", "o", "."]);
-    }
-
-    #[test]
-    fn the_diamond_in_ascii_is_the_same_layout_in_other_glyphs() {
-        let laid = layout(&diamond(), Alphabet::Ascii);
-        assert_eq!(
-            shape(&laid),
-            [
-                ("A", 0, "*-+"),
-                ("C", 1, "| *"),
-                ("B", 0, "*-+"),
-                ("D", 1, "  *")
-            ]
-        );
-        assert_eq!(laid.lanes, 2);
-    }
-
-    #[test]
-    fn two_independent_roots_keep_the_input_order_on_one_lane() {
-        let nodes = [ready("Y", &[]), ready("X", &[])];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(shape(&laid), [("Y", 0, "●"), ("X", 0, "●")]);
-        assert_eq!(laid.lanes, 1);
-    }
-
-    #[test]
-    fn two_independent_chains_interleave_in_input_order_on_two_lanes() {
-        let nodes = [
-            ready("A1", &["A2"]),
-            ready("B1", &["B2"]),
-            ready("A2", &[]),
-            ready("B2", &[]),
-        ];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(
-            shape(&laid),
-            [
-                ("A1", 0, "●  "),
-                ("B1", 1, "│ ●"),
-                ("A2", 0, "● │"),
-                ("B2", 1, "  ●"),
-            ]
-        );
-        assert_eq!(laid.lanes, 2);
-    }
-
-    #[test]
-    fn a_node_blocked_by_seven_opens_six_lanes_beside_its_own() {
-        let nodes = [
-            ready("X", &["B1", "B2", "B3", "B4", "B5", "B6", "B7"]),
-            ready("B1", &[]),
-            ready("B2", &[]),
-            ready("B3", &[]),
-            ready("B4", &[]),
-            ready("B5", &[]),
-            ready("B6", &[]),
-            ready("B7", &[]),
-        ];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(
-            shape(&laid),
-            [
-                ("X", 0, "●─┬─┬─┬─┬─┬─┐"),
-                ("B1", 0, "● │ │ │ │ │ │"),
-                ("B2", 1, "  ● │ │ │ │ │"),
-                ("B3", 2, "    ● │ │ │ │"),
-                ("B4", 3, "      ● │ │ │"),
-                ("B5", 4, "        ● │ │"),
-                ("B6", 5, "          ● │"),
-                ("B7", 6, "            ●"),
-            ]
-        );
-        assert_eq!(laid.lanes, 7);
-    }
-
-    #[test]
-    fn a_cycle_of_two_terminates_with_both_nodes_as_rows() {
-        // Neither is free of the other; the earlier in the input goes first,
-        // and B's edge back up to A draws nothing.
-        let nodes = [ready("A", &["B"]), ready("B", &["A"])];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(shape(&laid), [("A", 0, "●"), ("B", 0, "●")]);
-        assert_eq!(laid.lanes, 1);
+    /// The ids of the task rows, top first.
+    fn ids(laid: &JunctionLayout) -> Vec<&str> {
+        task_rows(laid).iter().map(|r| r.id.as_str()).collect()
     }
 
     /// Two cycles, the second blocked by the first through one edge: 2 waits
@@ -955,80 +647,7 @@ mod tests {
             ready("N2", &["N3", "N0"]),
             ready("N3", &["N2"]),
         ];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        let ids: Vec<&str> = laid.rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["N2", "N3", "N0", "N1"]);
-    }
-
-    #[test]
-    fn an_edge_to_an_id_outside_the_set_draws_no_lane_and_is_counted() {
-        let nodes = [ready("A", &["GONE", "B", "LOST"]), ready("B", &[])];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(shape(&laid), [("A", 0, "●"), ("B", 0, "●")]);
-        assert_eq!(laid.lanes, 1);
-        let unknown: Vec<usize> = laid.rows.iter().map(|r| r.unknown).collect();
-        assert_eq!(unknown, [2, 0]);
-    }
-
-    #[test]
-    fn an_edge_leaves_leftward_into_a_lane_freed_above() {
-        // Q frees lane 0; U, on lane 1, keeps its lane for V and sends W
-        // left into the free one.
-        let nodes = [
-            ready("P", &["Q"]),
-            ready("R", &["U"]),
-            ready("Q", &[]),
-            ready("U", &["V", "W"]),
-            ready("V", &[]),
-            ready("W", &[]),
-        ];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        assert_eq!(
-            shape(&laid),
-            [
-                ("P", 0, "●  "),
-                ("R", 1, "│ ●"),
-                ("Q", 0, "● │"),
-                ("U", 1, "┌─●"),
-                ("V", 1, "│ ●"),
-                ("W", 0, "●  "),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_join_crosses_a_running_lane_and_a_middle_join_is_a_cross() {
-        // E, on lane 2, joins lane 0 for B across lane 1, which keeps its
-        // vertical.
-        let crossing = [
-            ready("A", &["B"]),
-            ready("C", &["D"]),
-            ready("E", &["B"]),
-            ready("B", &[]),
-            ready("D", &[]),
-        ];
-        let laid = layout(&crossing, Alphabet::Boxes);
-        assert_eq!(
-            shape(&laid),
-            [
-                ("A", 0, "●    "),
-                ("C", 1, "│ ●  "),
-                ("E", 2, "├─│─●"),
-                ("B", 0, "● │  "),
-                ("D", 1, "  ●  "),
-            ]
-        );
-        // The same E blocked by D as well joins lane 1 on the way.
-        let through = [
-            ready("A", &["B"]),
-            ready("C", &["D"]),
-            ready("E", &["D", "B"]),
-            ready("B", &[]),
-            ready("D", &[]),
-        ];
-        let laid = layout(&through, Alphabet::Boxes);
-        assert_eq!(laid.rows[2].prefix, "├─┼─●");
-        assert_eq!(layout(&through, Alphabet::Ascii).rows[2].prefix, "+-+-*");
+        assert_eq!(ids(&junctions(&nodes)), ["N2", "N3", "N0", "N1"]);
     }
 
     /// A deterministic spread of graphs: forward edges, edges back up (so
@@ -1067,15 +686,16 @@ mod tests {
     }
 
     #[test]
-    fn every_node_is_exactly_one_row_and_sits_above_all_it_reaches_outside_its_cycle() {
+    fn every_node_is_exactly_one_task_row_and_sits_above_all_it_reaches_outside_its_cycle() {
         for nodes in spread() {
-            let laid = layout(&nodes, Alphabet::Boxes);
-            let mut ids: Vec<&str> = laid.rows.iter().map(|r| r.id.as_str()).collect();
-            ids.sort_unstable();
+            let laid = junctions(&nodes);
+            let mut rows = ids(&laid);
+            rows.sort_unstable();
             let mut want: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
             want.sort_unstable();
-            assert_eq!(ids, want, "{nodes:?}");
-            let at = |id: &str| laid.rows.iter().position(|r| r.id == id);
+            assert_eq!(rows, want, "{nodes:?}");
+            let rows = ids(&laid);
+            let at = |id: &str| rows.iter().position(|r| *r == id);
             // Over transitive dependence and not direct edges only: a node
             // that reaches another through the blocked_by edges, by any
             // path and across any number of cycles, stands above it unless
@@ -1129,61 +749,7 @@ mod tests {
             ready("B", &[]),
             ready("E", &[]),
         ];
-        let laid = layout(&nodes, Alphabet::Boxes);
-        let ids: Vec<&str> = laid.rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["C", "A", "D", "B", "E"]);
-    }
-
-    #[test]
-    fn every_lane_between_a_node_and_its_blocker_is_continuous() {
-        let vertical = [
-            Alphabet::Boxes.glyph(Glyph::Pass),
-            Alphabet::Boxes.glyph(Glyph::JoinLeft),
-            Alphabet::Boxes.glyph(Glyph::JoinRight),
-            Alphabet::Boxes.glyph(Glyph::JoinThrough),
-        ];
-        for nodes in spread() {
-            let laid = layout(&nodes, Alphabet::Boxes);
-            let at = |id: &str| laid.rows.iter().position(|r| r.id == id);
-            for n in &nodes {
-                let top = at(&n.id).unwrap();
-                for b in &n.blocked_by {
-                    let Some(bottom) = at(b) else { continue };
-                    if bottom <= top {
-                        continue;
-                    }
-                    let column = 2 * laid.rows[bottom].lane;
-                    let cell = |r: usize| laid.rows[r].prefix.chars().nth(column).unwrap();
-                    assert_ne!(cell(top), ' ', "{nodes:?}");
-                    for r in top + 1..bottom {
-                        assert!(
-                            vertical.contains(&cell(r)),
-                            "row {r} column {column} is {:?}: {nodes:?}",
-                            cell(r)
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn both_alphabets_draw_one_layout_at_one_width_differing_only_in_glyphs() {
-        for nodes in spread() {
-            let boxes = layout(&nodes, Alphabet::Boxes);
-            let ascii = layout(&nodes, Alphabet::Ascii);
-            assert_eq!(boxes.lanes, ascii.lanes);
-            for (b, a) in boxes.rows.iter().zip(&ascii.rows) {
-                assert_eq!((&b.id, b.lane, b.unknown), (&a.id, a.lane, a.unknown));
-                assert_eq!(b.prefix.chars().count(), boxes.width());
-                assert_eq!(a.prefix.chars().count(), boxes.width());
-                for (x, y) in b.prefix.chars().zip(a.prefix.chars()) {
-                    let paired = (x == ' ' && y == ' ')
-                        || TABLE.iter().any(|&(_, bx, ax)| (bx, ax) == (x, y));
-                    assert!(paired, "{x:?} against {y:?} in {nodes:?}");
-                }
-            }
-        }
+        assert_eq!(ids(&junctions(&nodes)), ["C", "A", "D", "B", "E"]);
     }
 
     #[test]
@@ -1199,13 +765,14 @@ mod tests {
                 "{boxes:?}"
             );
         }
-        assert_eq!(Alphabet::Boxes.glyph(Glyph::Ready), '\u{25CF}');
-        assert_eq!(Alphabet::Boxes.glyph(Glyph::Waiting), '\u{25CB}');
-        assert_eq!(Alphabet::Boxes.glyph(Glyph::Finished), '\u{00B7}');
+        assert_eq!(TABLE.len(), 14);
+        assert_eq!(Alphabet::Boxes.glyph(Glyph::Open), '\u{25CB}');
+        assert_eq!(Alphabet::Boxes.glyph(Glyph::Settled), '\u{25CF}');
+        assert_eq!(Alphabet::Boxes.glyph(Glyph::InProgress0), '\u{00B7}');
     }
 
     #[test]
-    fn the_junction_layouts_glyphs_in_both_alphabets() {
+    fn the_glyphs_in_both_alphabets() {
         let both = |g: Glyph| (Alphabet::Boxes.glyph(g), Alphabet::Ascii.glyph(g));
         assert_eq!(both(Glyph::Open), ('○', 'o'));
         assert_eq!(both(Glyph::Settled), ('●', '@'));
@@ -1219,7 +786,7 @@ mod tests {
         assert_eq!(both(Glyph::LeaveThrough), ('┬', '+'));
         assert_eq!(both(Glyph::JoinKeep), ('├', '|'));
         assert_eq!(both(Glyph::JoinFar), ('┘', '\''));
-        assert_eq!(both(Glyph::JoinMiddle), ('┴', '+'));
+        assert_eq!(both(Glyph::JoinThrough), ('┴', '+'));
         assert_eq!(both(Glyph::Cross), ('┼', '+'));
     }
 
@@ -1237,22 +804,7 @@ mod tests {
         assert_eq!(cell(Mark::InProgress, 9), Glyph::InProgress1);
     }
 
-    // The junction layout (TASK-080f158e317e).
-
-    /// The lines as (id, prefix), a junction row's id written "".
-    fn lines(laid: &JunctionLayout) -> Vec<(&str, &str)> {
-        laid.lines
-            .iter()
-            .map(|l| match l {
-                Line::Task(row) => (row.id.as_str(), row.prefix.as_str()),
-                Line::Junction(prefix) => ("", prefix.as_str()),
-            })
-            .collect()
-    }
-
-    fn junctions(nodes: &[Node]) -> JunctionLayout {
-        junction_layout(nodes, Alphabet::Boxes, 0)
-    }
+    // The shapes (TASK-080f158e317e).
 
     #[test]
     fn a_chain_of_three_is_three_task_rows_on_one_lane_and_no_junction() {
@@ -1486,30 +1038,6 @@ mod tests {
         assert_eq!(lines(&laid), [("R", "o"), ("W", "o")]);
     }
 
-    fn task_rows(laid: &JunctionLayout) -> Vec<&Row> {
-        laid.lines
-            .iter()
-            .filter_map(|l| match l {
-                Line::Task(row) => Some(row),
-                Line::Junction(_) => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_junction_layout_draws_every_node_once_in_the_order_the_module_computes() {
-        for nodes in spread() {
-            let first: Vec<String> = layout(&nodes, Alphabet::Boxes)
-                .rows
-                .into_iter()
-                .map(|r| r.id)
-                .collect();
-            let laid = junctions(&nodes);
-            let rows: Vec<String> = task_rows(&laid).iter().map(|r| r.id.clone()).collect();
-            assert_eq!(rows, first, "{nodes:?}");
-        }
-    }
-
     #[test]
     fn every_junction_prefix_is_the_layouts_width_and_no_trailing_lane_is_free() {
         for nodes in spread() {
@@ -1586,7 +1114,7 @@ mod tests {
             Glyph::Cross,
             Glyph::JoinKeep,
             Glyph::JoinFar,
-            Glyph::JoinMiddle,
+            Glyph::JoinThrough,
         ]
         .map(glyph);
         let leaves = [Glyph::LeaveRight, Glyph::LeaveThrough].map(glyph);

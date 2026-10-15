@@ -6,8 +6,12 @@
 //! `Tab` walks claims, entities, graph and queue, and the document is what a
 //! row opens into, titled `BODY` with no digit in front. Then the graph was
 //! drawn into the panel: one row per task shown, placed by the layout module
-//! above everything it is blocked by, with the node's character saying what
-//! the status word cannot and a row of it opening that task's document.
+//! above everything it is blocked by, with the cell saying finished, open or
+//! under way, the word beside the identifier saying readiness, and a row of
+//! it opening that task's document. Then the rows were gathered into blocks
+//! (TASK-de02dbcf9965): one per group of linked tasks on the junction lanes,
+//! a blank between two, the tasks linked to nothing last under a heading,
+//! and the cursor walking task rows only.
 //! `src/view.rs` asserts each of those of the render and of the key table on
 //! every platform; this asserts them of `ank tui` on a pseudo-terminal, at
 //! the two windows the criterion names -- eighty by twenty-four, which is
@@ -211,51 +215,131 @@ fn row_of<'a>(rows: &'a [GraphRow], id: &str) -> &'a GraphRow {
         .unwrap_or_else(|| panic!("{id} is not a row of the graph: {rows:?}"))
 }
 
+/// Every line inside the graph panel, top first, as (line of the frame,
+/// text): the task rows, the junction rows, the blanks between blocks and
+/// the heading over the unlinked block, borders taken off and ends trimmed
+/// (TASK-de02dbcf9965).
+///
+/// Found as [`graph_rows`] finds a row -- a vertical at the panel's left
+/// border -- without asking that a task be named on it; the rows the panel
+/// has not filled come back as blanks too, and the blocks are read off the
+/// run from the first line that says something to the last.
+fn panel_lines(frame: &str, columns: u16) -> Vec<(usize, String)> {
+    let left = match wide(columns) {
+        true => column_of(frame, "3 GRAPH").expect("the graph's title") - 3,
+        false => 0,
+    };
+    let right = usize::from(columns) - 1;
+    let vertical = |c: char| c == '\u{2503}' || c == '\u{2502}' || c == '|';
+    frame
+        .lines()
+        .enumerate()
+        .filter_map(|(line, l)| {
+            let cells: Vec<char> = l.chars().collect();
+            if !cells.get(left).is_some_and(|c| vertical(*c)) {
+                return None;
+            }
+            let inside: String = cells[left + 1..right.min(cells.len())].iter().collect();
+            Some((line, inside.trim_end().to_string()))
+        })
+        .collect()
+}
+
+/// The blocks of the graph panel: the runs of lines that say something,
+/// between the blanks, from the first such line to the last. Each block is
+/// its lines' texts, junction rows and heading included.
+fn blocks(frame: &str, columns: u16) -> Vec<Vec<String>> {
+    let lines = panel_lines(frame, columns);
+    let said: Vec<&str> = lines.iter().map(|(_, text)| text.as_str()).collect();
+    let Some(first) = said.iter().position(|t| !t.is_empty()) else {
+        return Vec::new();
+    };
+    let last = said
+        .iter()
+        .rposition(|t| !t.is_empty())
+        .expect("a first is a last");
+    let mut out: Vec<Vec<String>> = vec![Vec::new()];
+    for text in &said[first..=last] {
+        match text.is_empty() {
+            true => out.push(Vec::new()),
+            false => out.last_mut().expect("a block").push(text.to_string()),
+        }
+    }
+    out
+}
+
+/// The short identifiers a block carries, in order.
+fn block_shorts(block: &[String]) -> Vec<String> {
+    block
+        .iter()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .find(|w| w.starts_with("TASK-"))
+                .map(|w| w.to_string())
+        })
+        .collect()
+}
+
 /// A dashboard frame, a hundred and twenty columns in the box-drawing
 /// alphabet: the header, the rule, the entities in a left column forty-eight
 /// wide, and the graph's panel beside them to the window's edge, focused,
-/// with lanes passing through most of its rows.
+/// drawn in blocks with lanes passing through most of its rows.
 const DRAWN_WIDE: &str = "\
-ank  10 tasks   TASK-c3a3 is held
+ank  11 tasks   TASK-b0a1 is held
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-╭ 2 ENTITIES ──────────────────────────────────╮┏▶ 3 GRAPH all 10   (10 tasks in the corpus) ━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-│  TASK-a10e   open   A task with no edge      │┃> ●      TASK-a10e   ready         A task with no edge                ┃
-│  TASK-de9e   open   A dependent of the c     │┃  ●      TASK-de9e   ready         A dependent of the closed one      ┃
-│  TASK-b077   open   The bottom of a diam     │┃  │ ○─┐  TASK-b077   waits 2       The bottom of a diamond            ┃
-│                                              │┃  │ │ ○  TASK-4167   waits 1       The right of a diamond             ┃
-│                                              │┃  │ ○─┤  TASK-1ef7   waits 1       The left of a diamond              ┃
-│                                              │┃  │   ●  TASK-7090   ready         The top of a diamond               ┃
-│                                              │┃  │ ○    TASK-c3a3   waits 1       The third of a chain               ┃
-│                                              │┃  │ ○    TASK-c2a2   waits 1       The second of a chain              ┃
-│                                              │┃  │ ●    TASK-c1a1   ready         The first of a chain               ┃
-│                                              │┃  ·      TASK-c105   closed        A blocker that was closed          ┃
+╭ 2 ENTITIES ──────────────────────────────────╮┏▶ 3 GRAPH all 11   (11 tasks in the corpus) ━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+│  TASK-b0a1   in_progress   A task under way  │┃> ·    TASK-b0a1   in progress   A task under way  [held]             ┃
+│  TASK-a10e   open   A task with no edge      │┃  │ ○  TASK-c0a3   waits 1       The third of a chain                 ┃
+│  TASK-d1a4   open   The bottom of a diam     │┃  │ ○  TASK-c0a2   waits 1       The second of a chain                ┃
+│                                              │┃  ├─┘                                                                 ┃
+│                                              │┃  ○    TASK-c0a1   ready         The first of a chain                 ┃
 │                                              │┃                                                                      ┃
+│                                              │┃  ○─┐  TASK-d1a4   waits 2       The bottom of a diamond              ┃
+│                                              │┃  │ ○  TASK-d1a3   waits 1       The right of a diamond               ┃
+│                                              │┃  ○ │  TASK-d1a2   waits 1       The left of a diamond                ┃
+│                                              │┃  ├─┘                                                                 ┃
+│                                              │┃  ○    TASK-d1a1   ready         The top of a diamond                 ┃
+│                                              │┃                                                                      ┃
+│                                              │┃  ○    TASK-c1b2   ready         A dependent of the closed one        ┃
+│                                              │┃  ●    TASK-c1b1   closed        A blocker that was closed            ┃
+│                                              │┃                                                                      ┃
+│                                              │┃  unlinked                                                            ┃
+│                                              │┃  ○    TASK-a10e   ready         A task with no edge                  ┃
 │                                              │┃                                                                      ┃
 ╰──────────────────────────────────────────────╯┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛";
 
 /// The same graph at the desk, eighty columns, on a terminal that declared
 /// itself dumb: one region from the window's left edge to its right, ruled in
-/// ASCII, where a passing lane is the very `|` the border is drawn with.
+/// ASCII, where a passing lane is the very `|` the border is drawn with and
+/// so is the kept lane of a junction row.
 const DRAWN_DESK: &str = "\
-ank  10 tasks   TASK-c3a3 is held
+ank  11 tasks   TASK-b0a1 is held
 --------------------------------------------------------------------------------
-+> 3 GRAPH all 10   (10 tasks in the corpus) ==================================+
-|> *      TASK-a10e   ready         A task with no edge                        |
-|  *      TASK-de9e   ready         A dependent of the closed one              |
-|  | o-+  TASK-b077   waits 2       The bottom of a diamond                    |
-|  | | o  TASK-4167   waits 1       The right of a diamond                     |
-|  | o-+  TASK-1ef7   waits 1       The left of a diamond                      |
-|  |   *  TASK-7090   ready         The top of a diamond                       |
-|  | o    TASK-c3a3   waits 1       The third of a chain                       |
-|  | o    TASK-c2a2   waits 1       The second of a chain                      |
-|  | *    TASK-c1a1   ready         The first of a chain                       |
-|  .      TASK-c105   closed        A blocker that was closed                  |
++> 3 GRAPH all 11   (11 tasks in the corpus) ==================================+
+|> .    TASK-b0a1   in progress   A task under way  [held]                     |
+|  | o  TASK-c0a3   waits 1       The third of a chain                         |
+|  | o  TASK-c0a2   waits 1       The second of a chain                        |
+|  |-'                                                                         |
+|  o    TASK-c0a1   ready         The first of a chain                         |
 |                                                                              |
+|  o-+  TASK-d1a4   waits 2       The bottom of a diamond                      |
+|  | o  TASK-d1a3   waits 1       The right of a diamond                       |
+|  o |  TASK-d1a2   waits 1       The left of a diamond                        |
+|  |-'                                                                         |
+|  o    TASK-d1a1   ready         The top of a diamond                         |
+|                                                                              |
+|  o    TASK-c1b2   ready         A dependent of the closed one                |
+|  @    TASK-c1b1   closed        A blocker that was closed                    |
+|                                                                              |
+|  unlinked                                                                    |
+|  o    TASK-a10e   ready         A task with no edge                          |
 |                                                                              |
 +==============================================================================+";
 
 /// **The rows of the graph are found inside the panel's rectangle and never
-/// end at the first vertical glyph** (TASK-44e35bd40c83), on every platform.
+/// end at the first vertical glyph** (TASK-44e35bd40c83), and the blocks are
+/// read off the panel's lines with their junctions, blanks and heading
+/// (TASK-de02dbcf9965), on every platform.
 ///
 /// `│` and `|` are the border's and the layout's Pass glyph both, so a row
 /// whose lane field carries a passing lane is the row an instrument cutting
@@ -266,44 +350,48 @@ ank  10 tasks   TASK-c3a3 is held
 #[test]
 fn the_graph_rows_are_found_inside_the_panel_whatever_lanes_pass_through_them() {
     let shorts = [
+        "TASK-b0a1",
+        "TASK-c0a3",
+        "TASK-c0a2",
+        "TASK-c0a1",
+        "TASK-d1a4",
+        "TASK-d1a3",
+        "TASK-d1a2",
+        "TASK-d1a1",
+        "TASK-c1b2",
+        "TASK-c1b1",
         "TASK-a10e",
-        "TASK-de9e",
-        "TASK-b077",
-        "TASK-4167",
-        "TASK-1ef7",
-        "TASK-7090",
-        "TASK-c3a3",
-        "TASK-c2a2",
-        "TASK-c1a1",
-        "TASK-c105",
     ];
     let boxes = [
-        "●",
-        "●",
-        "│ ○─┐",
-        "│ │ ○",
-        "│ ○─┤",
-        "│   ●",
-        "│ ○",
-        "│ ○",
-        "│ ●",
         "·",
+        "│ ○",
+        "│ ○",
+        "○",
+        "○─┐",
+        "│ ○",
+        "○ │",
+        "○",
+        "○",
+        "●",
+        "○",
     ];
     let ascii = [
-        "*", "*", "| o-+", "| | o", "| o-+", "|   *", "| o", "| o", "| *", ".",
+        ".", "| o", "| o", "o", "o-+", "| o", "o |", "o", "o", "@", "o",
     ];
-    for (frame, columns, lanes, third) in [
+    for (frame, columns, lanes, third, junction) in [
         (
             DRAWN_WIDE,
             120,
             boxes,
-            "  │ ○─┐  TASK-b077   waits 2       The bottom of a diamond",
+            "  │ ○  TASK-c0a2   waits 1       The second of a chain",
+            "  ├─┘",
         ),
         (
             DRAWN_DESK,
             80,
             ascii,
-            "  | o-+  TASK-b077   waits 2       The bottom of a diamond",
+            "  | o  TASK-c0a2   waits 1       The second of a chain",
+            "  |-'",
         ),
     ] {
         let rows = graph_rows(frame, columns);
@@ -314,7 +402,7 @@ fn the_graph_rows_are_found_inside_the_panel_whatever_lanes_pass_through_them() 
         );
         assert_eq!(
             rows.iter().map(|r| r.line).collect::<Vec<_>>(),
-            (3..=12).collect::<Vec<_>>(),
+            [3, 4, 5, 7, 9, 10, 11, 13, 15, 16, 19],
             "at {columns} columns: {rows:?}"
         );
         assert_eq!(
@@ -323,6 +411,37 @@ fn the_graph_rows_are_found_inside_the_panel_whatever_lanes_pass_through_them() 
             "at {columns} columns: {rows:?}"
         );
         assert_eq!(rows[2].text, third, "at {columns} columns");
+        // The panel's every line, the junctions and the blanks among them.
+        let lines = panel_lines(frame, columns);
+        assert_eq!(lines.len(), 18, "at {columns} columns: {lines:?}");
+        assert_eq!(lines[0].0, 3);
+        assert_eq!(lines[3].1, junction, "at {columns} columns");
+        assert_eq!(lines[9].1, junction, "at {columns} columns");
+        assert_eq!(lines[15].1, "  unlinked", "at {columns} columns");
+        let blank: Vec<usize> = lines
+            .iter()
+            .filter(|(_, t)| t.is_empty())
+            .map(|(line, _)| *line)
+            .collect();
+        assert_eq!(blank, [8, 14, 17, 20], "at {columns} columns");
+        // And the blocks: the chain, the diamond, the pair, the unlinked.
+        let blocks = blocks(frame, columns);
+        assert_eq!(
+            blocks.iter().map(|b| block_shorts(b)).collect::<Vec<_>>(),
+            [
+                shorts[..4].to_vec(),
+                shorts[4..8].to_vec(),
+                shorts[8..10].to_vec(),
+                shorts[10..].to_vec(),
+            ],
+            "at {columns} columns: {blocks:?}"
+        );
+        assert_eq!(blocks[3][0], "  unlinked", "at {columns} columns");
+        assert_eq!(
+            blocks[0].len(),
+            5,
+            "the chain's junction row is a line of its block"
+        );
     }
 }
 
@@ -382,15 +501,17 @@ fn declared_scopes(shown: &str) -> Vec<String> {
 }
 
 /// **`3` reaches `3 GRAPH`, and what the graph holds is one row per open
-/// task of the fixture, placed above everything it waits on**, at both
-/// windows (TASK-a9cd362ee5e2, TASK-643611645dea).
+/// task of the fixture, placed above everything it waits on, in blocks**, at
+/// both windows (TASK-a9cd362ee5e2, TASK-643611645dea, TASK-de02dbcf9965).
 ///
 /// Eleven tasks and eleven rows: nine open, one under way, and the closed
-/// blocker drawn because its dependent is open, under that dependent. The row of the task with two
-/// blockers leaves toward a second lane and the row under it carries both;
-/// the two tasks sharing a blocker join one lane before the blocker's row,
-/// which gathers none. And the title counts what is shown and what the corpus
-/// holds, as the entities title does.
+/// blocker drawn because its dependent is open, under that dependent. The
+/// blocks stand, top first, the chain with the task under way, the diamond,
+/// the closed blocker with its dependent, then the lone task under
+/// `unlinked`, with exactly one blank row between two blocks; a junction row
+/// carrying `├─┘` stands immediately above the first of the chain and one
+/// above the top of the diamond. And the title counts what is shown and what
+/// the corpus holds, as the entities title does.
 #[cfg(unix)]
 #[test]
 fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers() {
@@ -453,84 +574,115 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
                 "{task} is not above {blocker} at {columns}x{rows}:\n{frame}"
             );
         }
-        // The lanes are read by column and never counted across the row: the
-        // rows come in the listing's order, which within one second of
-        // `created` is the order of the identifiers, so which other lanes pass
-        // beside the diamond is the hash's to decide (TASK-44e35bd40c83).
-        use ank_tui::graph::Glyph;
-        let glyph = |g: Glyph| ank_tui::graph::Alphabet::Boxes.glyph(g);
-        let leaves = [Glyph::LeaveRight, Glyph::LeaveLeft, Glyph::LeaveThrough].map(glyph);
-        let joins = [Glyph::JoinRight, Glyph::JoinLeft, Glyph::JoinThrough].map(glyph);
-        let cells = |r: &GraphRow| r.lanes().chars().collect::<Vec<char>>();
-        // Two blockers: the row leaves to a second lane, and the row under it
-        // carries both lanes, the node's own and the one it left toward.
-        let bottom_row = row_of(&drawn, bottom);
-        let bottom_cells = cells(bottom_row);
-        let node = bottom_cells
+        // The blocks, top first: the chain with the task under way, the
+        // diamond, the closed blocker with its dependent, then the lone task
+        // under its heading. Which of a block's rows stands above which,
+        // where the edges leave two free, is the listing's to decide, so a
+        // block is held to its members and not to their order
+        // (TASK-44e35bd40c83).
+        let blocks = blocks(&frame, columns);
+        let members = |block: &[String]| {
+            let mut shorts = block_shorts(block);
+            shorts.sort();
+            shorts
+        };
+        let want = |ids: &[&String]| {
+            let mut shorts: Vec<String> = ids.iter().map(|id| short_of(id)).collect();
+            shorts.sort();
+            shorts
+        };
+        assert_eq!(blocks.len(), 4, "four blocks at {columns}x{rows}:\n{frame}");
+        assert_eq!(
+            members(&blocks[0]),
+            want(&[chain_1, chain_2, chain_3, &fixture.under_way]),
+            "the first block is not the chain with the task under way at {columns}x{rows}:\n{frame}"
+        );
+        assert_eq!(
+            members(&blocks[1]),
+            want(&[top, left, right, bottom]),
+            "the second block is not the diamond at {columns}x{rows}:\n{frame}"
+        );
+        assert_eq!(
+            members(&blocks[2]),
+            want(&[&fixture.closed, &fixture.dependent]),
+            "the third block is not the closed blocker with its dependent at \
+             {columns}x{rows}:\n{frame}"
+        );
+        assert_eq!(
+            blocks[3],
+            [
+                "  unlinked".to_string(),
+                row_of(&drawn, &fixture.lone).text.clone()
+            ],
+            "the last block is not the lone task under its heading at {columns}x{rows}:\n{frame}"
+        );
+        // Exactly one blank row between consecutive blocks, and none first
+        // or last: the panel's lines from the first that says something to
+        // the last never hold two blanks in a row.
+        let lines = panel_lines(&frame, columns);
+        let first = lines
             .iter()
-            .position(|c| *c == glyph(Glyph::Waiting))
-            .unwrap_or_else(|| panic!("the diamond's bottom has no node: {bottom_row:?}"));
-        let corner = bottom_cells
+            .position(|(_, t)| !t.is_empty())
+            .expect("a line");
+        // The first line of the panel says something: the panel's lines
+        // begin under its title, wherever on the frame that is.
+        assert_eq!(
+            first, 0,
+            "a blank stands first at {columns}x{rows}:\n{frame}"
+        );
+        let last = lines
             .iter()
-            .position(|c| leaves.contains(c))
-            .unwrap_or_else(|| {
-                panic!(
-                    "the diamond's bottom leaves toward no second lane at \
-                     {columns}x{rows}: {:?}\n{frame}",
-                    bottom_row.lanes()
-                )
-            });
-        let under = drawn
+            .rposition(|(_, t)| !t.is_empty())
+            .expect("a line");
+        let blanks: Vec<usize> = lines[first..=last]
             .iter()
-            .find(|r| r.line == bottom_row.line + 1)
-            .unwrap_or_else(|| panic!("no row under the diamond's bottom:\n{frame}"));
-        for column in [node, corner] {
+            .filter(|(_, t)| t.is_empty())
+            .map(|(line, _)| *line)
+            .collect();
+        assert_eq!(
+            blanks.len(),
+            3,
+            "three blanks between four blocks at {columns}x{rows}:\n{frame}"
+        );
+        for pair in blanks.windows(2) {
             assert!(
-                cells(under).get(column).is_some_and(|c| *c != ' '),
-                "the lane in column {column} stops under a task with two blockers: \
-                 {:?} then {:?} at {columns}x{rows}:\n{frame}",
-                bottom_row.lanes(),
-                under.lanes()
+                pair[1] > pair[0] + 1,
+                "two blank rows stand together at {columns}x{rows}:\n{frame}"
             );
         }
-        // One blocker shared: the second of the two tasks waiting on it joins
-        // the lane already waiting, so the blocker's row gathers nothing.
-        let second = match at(left) > at(right) {
-            true => left,
-            false => right,
-        };
-        assert!(
-            row_of(&drawn, second)
-                .lanes()
-                .chars()
-                .any(|c| joins.contains(&c)),
-            "{second} does not join the lane already waiting for {top} at \
-             {columns}x{rows}: {:?}\n{frame}",
-            row_of(&drawn, second).lanes()
-        );
-        assert!(
-            !row_of(&drawn, top)
-                .lanes()
-                .chars()
-                .any(|c| joins.contains(&c) || leaves.contains(&c)),
-            "the lanes did not join before the shared blocker's row: {:?} at \
-             {columns}x{rows}:\n{frame}",
-            row_of(&drawn, top).lanes()
+        // A junction row carrying ├─┘ immediately above the first of the
+        // chain, which two lanes wait for, and one above the top of the
+        // diamond, and no other.
+        let junction = ank_tui::graph::Alphabet::Boxes.glyph(ank_tui::graph::Glyph::JoinFar);
+        for id in [chain_1, top] {
+            let above = lines
+                .iter()
+                .find(|(line, _)| *line + 1 == at(id))
+                .unwrap_or_else(|| panic!("no line above {id}:\n{frame}"));
+            assert_eq!(
+                above.1, "  ├─┘",
+                "no junction row stands above {id} at {columns}x{rows}:\n{frame}"
+            );
+        }
+        assert_eq!(
+            lines.iter().filter(|(_, t)| t.contains(junction)).count(),
+            2,
+            "a junction row stands where no lanes merge at {columns}x{rows}:\n{frame}"
         );
         live.quit();
     }
 }
 
-/// **The node character says what the status word cannot: Ready, Waiting or
-/// Finished** (TASK-643611645dea), at both windows.
+/// **The cell of the task under way is `·` and the closed blocker's is `●`;
+/// every other task's is `○`** (TASK-de02dbcf9965), at both windows.
 ///
 /// The column between the identifier and the title holds the readiness word
 /// (TASK-9ea4dc65755b) -- `ready` on the dependent whose blocker is closed and
-/// `waits 1` on the chain's third -- and the cell on the lane says the same
-/// thing a second way.
+/// `waits 1` on the chain's third -- and the cell says the status, not the
+/// readiness.
 #[cfg(unix)]
 #[test]
-fn the_node_character_says_ready_waiting_or_finished() {
+fn the_cell_says_finished_open_or_under_way() {
     let _one = ONE_AT_A_TIME
         .lock()
         .unwrap_or_else(|held| held.into_inner());
@@ -555,16 +707,20 @@ fn the_node_character_says_ready_waiting_or_finished() {
                 row.text
             );
         };
-        cell(&fixture.lone, ank_tui::graph::Glyph::Ready, "ready");
-        cell(&fixture.chain[0], ank_tui::graph::Glyph::Ready, "ready");
-        cell(&fixture.dependent, ank_tui::graph::Glyph::Ready, "ready");
-        cell(&fixture.chain[2], ank_tui::graph::Glyph::Waiting, "waits 1");
         cell(
-            &fixture.diamond[3],
-            ank_tui::graph::Glyph::Waiting,
-            "waits 2",
+            &fixture.under_way,
+            ank_tui::graph::Glyph::InProgress0,
+            "in progress",
         );
-        cell(&fixture.closed, ank_tui::graph::Glyph::Finished, "closed");
+        cell(&fixture.closed, ank_tui::graph::Glyph::Settled, "closed");
+        cell(&fixture.lone, ank_tui::graph::Glyph::Open, "ready");
+        cell(&fixture.chain[0], ank_tui::graph::Glyph::Open, "ready");
+        cell(&fixture.dependent, ank_tui::graph::Glyph::Open, "ready");
+        cell(&fixture.chain[2], ank_tui::graph::Glyph::Open, "waits 1");
+        cell(&fixture.diamond[3], ank_tui::graph::Glyph::Open, "waits 2");
+        assert_eq!(glyph(ank_tui::graph::Glyph::InProgress0), '\u{00B7}');
+        assert_eq!(glyph(ank_tui::graph::Glyph::Settled), '\u{25CF}');
+        assert_eq!(glyph(ank_tui::graph::Glyph::Open), '\u{25CB}');
         live.quit();
     }
 }
@@ -600,9 +756,10 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
     }
 }
 
-/// **On a terminal declaring `TERM=dumb` the lanes and nodes are the ASCII
-/// alphabet the layout module declares** (TASK-643611645dea,
-/// ADR-559eebf5c6f5), at both windows.
+/// **On a terminal declaring `TERM=dumb` the same frame carries `@`, `o`,
+/// `.` and the ASCII connectors: every cell, lane and junction glyph is the
+/// ASCII alphabet the layout module declares** (TASK-643611645dea,
+/// TASK-de02dbcf9965, ADR-559eebf5c6f5), at both windows.
 #[cfg(unix)]
 #[test]
 fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
@@ -610,6 +767,8 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
+    use ank_tui::graph::Glyph;
+    let ascii = |g: Glyph| ank_tui::graph::Alphabet::Ascii.glyph(g);
     for (columns, rows) in WINDOWS {
         let mut live = Live::dumb(&fixture.repo, columns, rows);
         live.until("the session to open", |t| {
@@ -621,32 +780,50 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
         });
         let drawn = graph_rows(&frame, columns);
         assert_eq!(drawn.len(), 11, "eleven rows in ASCII:\n{frame}");
-        for (glyph, boxes, ascii) in ank_tui::graph::TABLE {
+        for (glyph, boxes, _) in ank_tui::graph::TABLE {
             assert!(
                 !frame.contains(boxes),
                 "{glyph:?} is drawn as {boxes:?} on a dumb terminal:\n{frame}"
             );
-            if matches!(
-                glyph,
-                ank_tui::graph::Glyph::Ready
-                    | ank_tui::graph::Glyph::Waiting
-                    | ank_tui::graph::Glyph::Finished
-                    | ank_tui::graph::Glyph::Pass
-            ) {
-                assert!(
-                    drawn.iter().any(|r| r.lanes().contains(ascii)),
-                    "{glyph:?} is never drawn as {ascii:?}:\n{frame}"
-                );
-            }
         }
+        let cell = |id: &str, g: Glyph| {
+            let row = row_of(&drawn, id);
+            assert!(
+                row.lanes().contains(ascii(g)),
+                "{id} does not carry {:?} ({g:?}) at {columns}x{rows}: {:?}\n{frame}",
+                ascii(g),
+                row.text
+            );
+        };
+        cell(&fixture.under_way, Glyph::InProgress0);
+        cell(&fixture.closed, Glyph::Settled);
+        cell(&fixture.lone, Glyph::Open);
+        // The second of the chain has a lane passing beside it whichever of
+        // the chain's third and the task under way the listing put first.
+        cell(&fixture.chain[1], Glyph::Pass);
+        assert_eq!(ascii(Glyph::InProgress0), '.');
+        assert_eq!(ascii(Glyph::Settled), '@');
+        assert_eq!(ascii(Glyph::Open), 'o');
+        // The connectors: the bottom of the diamond opens a lane, and the
+        // two junction rows merge one.
+        let bottom = row_of(&drawn, &fixture.diamond[3]).lanes();
+        assert_eq!(bottom, "o-+", "at {columns}x{rows}:\n{frame}");
+        let lines = panel_lines(&frame, columns);
+        assert_eq!(
+            lines.iter().filter(|(_, t)| *t == "  |-'").count(),
+            2,
+            "two junction rows in ASCII at {columns}x{rows}:\n{frame}"
+        );
         live.quit();
     }
 }
 
-/// **j, k, Space, g and the arrows move the cursor over the rows; Enter on
-/// a row opens that task's document and Back returns to GRAPH with the same
-/// row selected; and none of it, nor a resize, spawns a graph read**
-/// (TASK-643611645dea), at both windows.
+/// **j, k, Space, g and the arrows move the cursor over the task rows and
+/// never a junction, blank or heading row; Down from the second of the chain
+/// lands on the first of the chain, under their junction row; Enter there
+/// opens its document and Back returns to GRAPH with it selected; and none
+/// of it, nor a resize, spawns a graph read** (TASK-643611645dea,
+/// TASK-de02dbcf9965), at both windows.
 ///
 /// Measured with `ANK_TRACE_READS`: on a wide frame the graph is read on
 /// the opening, in the pass after `find` has answered and together with the
@@ -725,14 +902,35 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
                 settled,
                 "{key:?} spawned a read at {columns}x{rows}"
             );
+            // The marker is on a task row and never on a junction, a blank
+            // or the heading (TASK-de02dbcf9965).
+            let line = frame
+                .lines()
+                .find(|l| l.contains("\u{2503}>") || l.contains("\u{2502}>"))
+                .expect("a row under the cursor");
+            assert!(
+                line.contains(lands),
+                "the cursor is drawn on a row that is nobody's at {columns}x{rows}: \
+                 {line:?}\n{frame}"
+            );
             frame
         };
         moved(&mut live, "j", &at(1));
         moved(&mut live, DOWN, &at(2));
         moved(&mut live, "k", &at(1));
         moved(&mut live, UP, &at(0));
-        // A page is longer than the eleven rows, so Space lands on the last.
-        moved(&mut live, " ", &at(10));
+        // A page is longer than the eleven rows, so Space lands on the last:
+        // the lone task, under its heading.
+        let last = moved(&mut live, " ", &at(10));
+        assert_eq!(
+            at(10),
+            short_of(&fixture.lone),
+            "the last row is not the lone task"
+        );
+        assert!(
+            last.contains("unlinked"),
+            "the heading is not on the frame at {columns}x{rows}:\n{last}"
+        );
         moved(&mut live, "g", &at(0));
         moved(&mut live, "j", &at(1));
         moved(&mut live, "j", &at(2));
@@ -752,11 +950,43 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
         live.resize(columns, rows);
         moved(&mut live, "j", &at(2));
 
+        // Down from the second of the chain lands on the first of the chain,
+        // over the junction row between them. The second is the second or
+        // the third task row, the listing deciding whether the task under
+        // way or the chain's third stands first in the block.
+        let second = drawn
+            .iter()
+            .position(|r| r.short() == short_of(&fixture.chain[1]))
+            .expect("the second of the chain is a row");
+        assert!(
+            (1..=2).contains(&second),
+            "the second of the chain is row {second} at {columns}x{rows}:\n{frame}"
+        );
+        if second == 1 {
+            moved(&mut live, "k", &at(1));
+        }
+        assert_eq!(
+            at(second + 1),
+            short_of(&fixture.chain[0]),
+            "the first of the chain is not the row under the second:\n{frame}"
+        );
+        let under = moved(&mut live, DOWN, &at(second + 1));
+        let lines = panel_lines(&under, columns);
+        let cursor = row_of(&graph_rows(&under, columns), &fixture.chain[0]).line;
+        assert_eq!(
+            lines
+                .iter()
+                .find(|(line, _)| *line + 1 == cursor)
+                .map(|(_, t)| t.as_str()),
+            Some("  ├─┘"),
+            "no junction row stands above the first of the chain at {columns}x{rows}:\n{under}"
+        );
+
         // Enter opens the row's document, and costs one `show` and one
         // `scope` for every scope the task declares, which is how the document
         // finds the constraints binding it, and nothing else: measured against
         // the same verbs run by hand (TASK-44e35bd40c83).
-        let row = at(2);
+        let row = at(second + 1);
         let full = fixture
             .open()
             .into_iter()
@@ -1340,6 +1570,33 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
             on,
             "the fold moved the cursor off its row at {columns}x{rows}:\n{all}"
         );
+        // Under the fold all the finished history is a block after every
+        // alive block (TASK-de02dbcf9965): linked to nothing, it stands in
+        // the last block, under the lone task that is alive, and every block
+        // above holds a task that is neither done nor closed.
+        let unfolded_blocks = blocks(&all, columns);
+        let history_in = unfolded_blocks
+            .iter()
+            .position(|b| block_shorts(b).contains(&short_of(&history)))
+            .expect("the history is in a block");
+        assert_eq!(
+            history_in,
+            unfolded_blocks.len() - 1,
+            "the finished history is not in the last block at {columns}x{rows}:\n{all}"
+        );
+        assert_eq!(
+            block_shorts(&unfolded_blocks[history_in]),
+            [short_of(&fixture.lone), short_of(&history)],
+            "the history does not stand under the lone task at {columns}x{rows}:\n{all}"
+        );
+        for block in &unfolded_blocks[..history_in] {
+            assert!(
+                block.iter().any(|l| l.contains("  ready  ")
+                    || l.contains("  waits ")
+                    || l.contains("  in progress  ")),
+                "a block above the history holds nothing alive at {columns}x{rows}: {block:?}"
+            );
+        }
 
         live.send(&key);
         let back = live.until("the fold to come back to the open work", |t| {

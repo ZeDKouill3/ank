@@ -5,7 +5,7 @@ slug: the-graph-screen-draws-one-block-per-group-of-li
 title: The GRAPH screen draws one block per group of linked tasks on the junction lanes, the cursor walks task rows only, and the unlinked tasks come last
 created: 2026-10-14T18:31:30Z
 author: planner-b
-status: open
+status: done
 scope:
   - crates/ank-tui/src/view.rs
   - crates/ank-tui/src/graph.rs
@@ -17,8 +17,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/fc654c0e3635@ef1cdbe
+    tree: scope/b4290ee6faf2
+    criteria: b1cf589bc2b2
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@ef1cdbe
+    tree: scope/b4290ee6faf2
+    criteria: b1cf589bc2b2
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 The screen of GRAPH option B: what the layout task and the readiness task
