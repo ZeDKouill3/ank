@@ -357,12 +357,16 @@ impl Corpus {
         // fixture means neither.
         std::fs::create_dir_all(self.0.join("doc")).unwrap();
         std::fs::write(self.0.join("doc/note.md"), "// seed\n").unwrap();
-        // Declared, or every verdict is `None`: with no key in the file, §8's
-        // advisory mode is what `signature_state` answers, and it answers it
-        // before it ever asks about a commit.
+        // Declared, or every verdict is `None`: with no key under `signers:`,
+        // §8's advisory mode is what `signature_state` answers, and it answers
+        // it before it ever asks about a commit.
+        let config = std::fs::read_to_string(self.0.join(".ank/config.yml")).unwrap();
         std::fs::write(
-            self.0.join(".ank/allowed_signers"),
-            "marie@example.org gpg 0123456789ABCDEF0123456789ABCDEF01234567\n",
+            self.0.join(".ank/config.yml"),
+            format!(
+                "{config}signers:\n  marie@example.org:\n    keys:\n      \
+                 - key: gpg 0123456789ABCDEF0123456789ABCDEF01234567\n"
+            ),
         )
         .unwrap();
         for n in 0..count {

@@ -1417,7 +1417,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         // kind. Found while pinning the goldens for TASK-2c12b027f805.
         notes: &[
             "exit 8 means findings, as it does for check; a signal alone leaves it 0",
-            "the signers are what .ank/allowed_signers declares; this is where they are read, since ADR-3c8d94a0bbe0 closes that file to a direct read",
+            "the signers are what signers: in .ank/config.yml declares, one row per key",
         ],
         refuses_globals: &[],
         output: &[one(&[f("proposed", Type::Array(&[f("id", Type::Str), f("title", Type::Str)])), f("signers", Type::Array(&[f("principal", Type::Str), f("keytype", Type::Str)])), f("live", Type::Array(&[f("id", Type::Str), f("title", Type::Str), f("files", Type::Num)])), f("dead", Type::Num), f("faults", Type::Num), f("signals", Type::Num)])],
@@ -2076,6 +2076,39 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
         refuses_globals: &[],
         output: &[when("reading, `ank config <key>`", &[f("key", Type::Str), opt("value", Type::Str), f("source", Type::Str)]), when("writing, `ank config <key> <value>`", &[f("key", Type::Str), opt("previous", Type::Str), opt("value", Type::Str), f("changed", Type::Bool)])],
+        owner_task: None,
+    },
+    // After `config` and before `init`: §4's order. It writes one block of the
+    // file `config` maintains, the block `config` refuses (ADR-5c6db7a161b8).
+    // `migrate` is the subcommand that ships first; `add`, `retire` and
+    // `remove` arrive with TASK-68313ec97cd6.
+    CommandSpec {
+        name: "signers",
+        group: "set up a repository",
+        renews: Renews::Never,
+        writes: Writes::Files,
+        coordinates: false,
+        summary: "writes who may ratify under signers: in .ank/config.yml; migrate moves a former .ank/allowed_signers there",
+        subcommands: &["migrate"],
+        kinds: &[],
+        max_positionals: 0,
+        positional_help: "",
+        flags: &[],
+        refuses: &[
+            refuses(ExitCode::Prerequisite, "no .ank/allowed_signers to migrate"),
+            refuses(
+                ExitCode::Generic,
+                "a line the block cannot carry, an option other than valid-before among them, or keys to add beside a signers: block already written: named, and nothing is written",
+            ),
+        ],
+        notes: &[
+            "declaring who may ratify is a trust act: the skills reserve it to a human, as they reserve accept",
+            "migrate keeps each comment above a key, and the comment after it, as that key's note, carries valid-before as valid_before, and deletes the file",
+            "every byte of config.yml above the block it appends is left as it was",
+            "it writes files and never commits: review with git diff .ank",
+        ],
+        refuses_globals: &[],
+        output: &[one(&[f("principals", Type::Num), f("keys", Type::Num), f("removed", Type::Str)])],
         owner_task: None,
     },
     CommandSpec {

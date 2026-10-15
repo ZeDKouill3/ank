@@ -88,6 +88,130 @@ struct ConfigFile {
     /// machine, and only somebody who knows there are several can set it.
     #[serde(default)]
     verifier_jobs: Option<usize>,
+    /// Who may ratify, keyed by principal (ADR-5c6db7a161b8). A mapping rather
+    /// than a `BTreeMap` for the reason `verifiers` is one: the order the file
+    /// declares them in is the order `review` lists them in.
+    #[serde(default)]
+    signers: serde_yaml::Mapping,
+}
+
+/// One principal under `signers:`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrincipalFile {
+    #[serde(default)]
+    keys: Vec<SignerKeyFile>,
+}
+
+/// One key of a principal, as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignerKeyFile {
+    key: String,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    valid_before: Option<String>,
+}
+
+/// One key allowed to ratify (§8, ADR-5c6db7a161b8): a principal, the key in
+/// git's `<keytype> <key>` form, and the date after which it ratifies nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signer {
+    pub principal: String,
+    /// Lowercased: `gpg`, or an ssh key type.
+    pub keytype: String,
+    pub key: String,
+    pub note: Option<String>,
+    /// `YYYY-MM-DD`, read as midnight UTC. A commit dated at or after it is
+    /// not a ratification this key can make.
+    pub valid_before: Option<String>,
+}
+
+/// Whether a field names a key type: every ssh type is `ssh-`, `ecdsa-`,
+/// `sk-` or `webauthn-`, certificate forms included, and `gpg` is ank's own
+/// extension (§8) and the one exact match.
+pub fn is_keytype(field: &str) -> bool {
+    let lower = field.to_ascii_lowercase();
+    lower == "gpg"
+        || ["ssh-", "ecdsa-", "sk-", "webauthn-"]
+            .iter()
+            .any(|p| lower.starts_with(p))
+}
+
+/// `YYYY-MM-DD` as days since the epoch, or `None` when it is not a date.
+pub fn date_days(text: &str) -> Option<i64> {
+    let b = text.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let y: i64 = text[..4].parse().ok()?;
+    let m: u32 = text[5..7].parse().ok()?;
+    let d: u32 = text[8..].parse().ok()?;
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days_in = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if d == 0 || d > days_in {
+        return None;
+    }
+    // Howard Hinnant's days_from_civil.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = i64::from((m + 9) % 12);
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Reads `signers:` into one row per key, in the order the file declares them.
+fn parse_signers(map: serde_yaml::Mapping, path: &Path) -> Result<Vec<Signer>> {
+    let refuse = |what: String| {
+        CliError::new(ExitCode::Generic, format!("{}: {what}", path.display()))
+    };
+    let mut out = Vec::new();
+    for (principal, value) in map {
+        let Some(principal) = principal.as_str().map(str::to_string) else {
+            return Err(refuse("a signer is named by a string".to_string()));
+        };
+        let p: PrincipalFile = serde_yaml::from_value(value)
+            .map_err(|e| refuse(format!("signers.{principal}: {e}")))?;
+        for k in p.keys {
+            let fields: Vec<&str> = k.key.split_whitespace().collect();
+            let [keytype, key] = fields.as_slice() else {
+                return Err(refuse(format!(
+                    "signers.{principal}: '{}' is not '<keytype> <key>'",
+                    k.key
+                )));
+            };
+            if !is_keytype(keytype) {
+                return Err(refuse(format!(
+                    "signers.{principal}: '{keytype}' is not a key type (gpg, ssh-..., ecdsa-..., sk-...)"
+                )));
+            }
+            let valid_before = k.valid_before.map(|d| d.trim().to_string());
+            if let Some(d) = &valid_before {
+                if date_days(d).is_none() {
+                    return Err(refuse(format!(
+                        "signers.{principal}: valid_before '{d}' is not a YYYY-MM-DD date"
+                    )));
+                }
+            }
+            out.push(Signer {
+                principal: principal.clone(),
+                keytype: keytype.to_ascii_lowercase(),
+                key: (*key).to_string(),
+                note: k.note,
+                valid_before,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// `weight:`, what the corpus declares it may grow to before `check` says so
@@ -243,6 +367,8 @@ pub struct Config {
     /// How old a passing run of the local registry may be for `done` to
     /// reuse it, `proof.reuse_max_age` (ADR-a2faf59f6ce0).
     pub reuse_max_age: Duration,
+    /// Who may ratify, one row per key (ADR-5c6db7a161b8).
+    pub signers: Vec<Signer>,
 }
 
 impl Config {
@@ -359,6 +485,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
     let claim_ttl_max = dur(&raw.claim_ttl_max, "claim_ttl_max")?;
     let claim_ttl_default = dur(&raw.claim_ttl_default, "claim_ttl_default")?;
     let reuse_max_age = dur(&raw.proof.reuse_max_age, "proof.reuse_max_age")?;
+    let signers = parse_signers(raw.signers, path)?;
     let mut verifiers = BTreeMap::new();
     let mut default_verifiers = Vec::new();
     for (name, value) in raw.verifiers {
@@ -443,6 +570,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
         weight: raw.weight,
         verifier_jobs: raw.verifier_jobs,
         reuse_max_age,
+        signers,
     })
 }
 
@@ -946,6 +1074,13 @@ fn resolve_key(path: &str) -> Result<Key> {
             format!("'{path}': the weight has two counters"),
         )
         .with_hint("ank config weight.hot_files   or   weight.plane_bytes")),
+        // ADR-5c6db7a161b8: declaring who may ratify is a trust act, and it
+        // has a verb of its own.
+        ["signers", ..] => Err(CliError::new(
+            ExitCode::Generic,
+            format!("'{path}': who may ratify is written by ank signers, not by ank config"),
+        )
+        .with_hint("ank help signers")),
         ["roles", ..] => Err(structured("roles")),
         ["identities", ..] => Err(structured("identities")),
         ["verifiers"] => Err(CliError::new(
@@ -2522,6 +2657,320 @@ pub fn run(inv: &Invocation, repo: &crate::repo::Repo, out: &mut dyn Write) -> R
     Ok(ExitCode::Ok)
 }
 
+// ---------------------------------------------------------------------------
+// `ank signers` (ADR-5c6db7a161b8)
+// ---------------------------------------------------------------------------
+
+/// `ank signers <subcommand>`. `migrate` is the one that ships; the parser
+/// refuses the others before this is reached, because the contract names no
+/// other subcommand yet.
+pub fn run_signers(
+    inv: &Invocation,
+    repo: &crate::repo::Repo,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    match inv.subcommand.as_deref() {
+        Some("migrate") => migrate_signers(inv, repo, out),
+        other => Err(CliError::new(
+            ExitCode::Generic,
+            format!("unknown subcommand '{}'", other.unwrap_or_default()),
+        )
+        .with_hint("ank signers migrate")),
+    }
+}
+
+/// One key read out of `.ank/allowed_signers`, before it is written anywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Migrated {
+    principal: String,
+    keytype: String,
+    key: String,
+    note: Vec<String>,
+    valid_before: Option<String>,
+}
+
+/// Reads git's allowed-signers layout, `principal [options] keytype key
+/// [comment]`, keeping what the layout's readers throw away: the comment lines
+/// above a key and the comment after it become that key's note, in order.
+///
+/// Refuses rather than drops. A line it cannot read, or an option `signers:`
+/// has no field for, stops the migration naming the line: the file is deleted
+/// at the end, and a key quietly left out of the block is a key that stops
+/// ratifying without anybody having decided it.
+fn read_allowed_signers(text: &str) -> std::result::Result<Vec<Migrated>, String> {
+    let mut keys: Vec<Migrated> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.is_empty() {
+            // A blank line inside a block of comments is a paragraph break in
+            // the note; a blank line with nothing pending separates nothing.
+            if !pending.is_empty() {
+                pending.push(String::new());
+            }
+            continue;
+        }
+        if let Some(c) = t.strip_prefix('#') {
+            pending.push(c.strip_prefix(' ').unwrap_or(c).trim_end().to_string());
+            continue;
+        }
+        let at = |why: &str| format!(".ank/allowed_signers line {}: {why}: {t}", n + 1);
+        let mut fields = t.split_whitespace();
+        let principal = fields.next().unwrap_or_default().to_string();
+        let mut valid_before = None;
+        let keytype = loop {
+            let Some(f) = fields.next() else {
+                return Err(at("no key type"));
+            };
+            if is_keytype(f) {
+                break f.to_ascii_lowercase();
+            }
+            match f.strip_prefix("valid-before=") {
+                Some(v) => {
+                    let v = v.trim_matches('"');
+                    let date = (v.len() == 8 && v.bytes().all(|b| b.is_ascii_digit()))
+                        .then(|| format!("{}-{}-{}", &v[..4], &v[4..6], &v[6..]))
+                        .filter(|d| date_days(d).is_some())
+                        .ok_or_else(|| at("valid-before is not a YYYYMMDD date"))?;
+                    valid_before = Some(date);
+                }
+                None => {
+                    return Err(at(&format!(
+                        "'{f}' is an option signers: has no field for"
+                    )))
+                }
+            }
+        };
+        let Some(key) = fields.next() else {
+            return Err(at("no key after the key type"));
+        };
+        while pending.last().is_some_and(String::is_empty) {
+            pending.pop();
+        }
+        let mut note = std::mem::take(&mut pending);
+        let trailing: Vec<&str> = fields.collect();
+        if !trailing.is_empty() {
+            note.push(trailing.join(" "));
+        }
+        keys.push(Migrated {
+            principal,
+            keytype,
+            key: key.to_string(),
+            note,
+            valid_before,
+        });
+    }
+    while pending.last().is_some_and(String::is_empty) {
+        pending.pop();
+    }
+    if !pending.is_empty() {
+        // Comments below the last key belong to no key; they are kept on the
+        // last one rather than lost, after a blank line.
+        let Some(last) = keys.last_mut() else {
+            return Err(".ank/allowed_signers declares no key: nothing to move, and its \
+                 comments would have nowhere to go"
+                .to_string());
+        };
+        if !last.note.is_empty() {
+            last.note.push(String::new());
+        }
+        last.note.extend(pending);
+    }
+    if keys.is_empty() {
+        return Err(".ank/allowed_signers declares no key".to_string());
+    }
+    Ok(keys)
+}
+
+/// A scalar as a plain one when YAML reads it back unchanged, double-quoted
+/// otherwise.
+fn scalar(s: &str) -> String {
+    if plain_safe(s) {
+        s.to_string()
+    } else {
+        double_quoted(s)
+    }
+}
+
+/// A note, at the indentation of its key's fields. Several lines are a
+/// literal block, which keeps them readable in review; a line a literal block
+/// could not carry as written falls back to one double-quoted scalar.
+fn note_lines(note: &[String], indent: &str) -> Vec<String> {
+    if note.len() == 1 {
+        return vec![format!("{indent}note: {}", scalar(&note[0]))];
+    }
+    let literal = note.first().is_some_and(|l| !l.is_empty())
+        && note
+            .iter()
+            .all(|l| !l.starts_with([' ', '\t']) && !l.chars().any(char::is_control));
+    if !literal {
+        return vec![format!("{indent}note: {}", double_quoted(&note.join("\n")))];
+    }
+    let mut out = vec![format!("{indent}note: |-")];
+    for l in note {
+        out.push(match l.is_empty() {
+            true => String::new(),
+            false => format!("{indent}  {l}"),
+        });
+    }
+    out
+}
+
+/// The `signers:` block, principals in the order the file first names them.
+fn render_signers(keys: &[Migrated]) -> Vec<String> {
+    let mut principals: Vec<&str> = Vec::new();
+    for k in keys {
+        if !principals.contains(&k.principal.as_str()) {
+            principals.push(&k.principal);
+        }
+    }
+    let mut out = vec!["signers:".to_string()];
+    for p in principals {
+        out.push(format!("  {}:", scalar(p)));
+        out.push("    keys:".to_string());
+        for k in keys.iter().filter(|k| k.principal == p) {
+            out.push(format!("      - key: {}", scalar(&format!("{} {}", k.keytype, k.key))));
+            if !k.note.is_empty() {
+                out.extend(note_lines(&k.note, "        "));
+            }
+            if let Some(d) = &k.valid_before {
+                out.push(format!("        valid_before: {d}"));
+            }
+        }
+    }
+    out
+}
+
+/// `ank signers migrate`: `.ank/allowed_signers` becomes `signers:` in
+/// `config.yml`, and the file is deleted.
+///
+/// The block is appended, so every byte above it is the file as it was; it is
+/// read back through the parser every other verb uses and compared key by key
+/// before anything is written, and the file is removed only once the block is
+/// on disk.
+fn migrate_signers(
+    inv: &Invocation,
+    repo: &crate::repo::Repo,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let source = repo.ank.join("allowed_signers");
+    let file = match std::fs::read_to_string(&source) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CliError::new(
+                ExitCode::Prerequisite,
+                "no .ank/allowed_signers to migrate: who may ratify is already signers: in .ank/config.yml",
+            )
+            .with_hint("ank review"))
+        }
+        Err(e) => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("{}: {e}", source.display()),
+            ))
+        }
+    };
+    let keys = read_allowed_signers(&file)
+        .map_err(|why| CliError::new(ExitCode::Generic, format!("refused: {why}")))?;
+
+    let path = repo.config_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    let current = parse(&text, &path)?;
+    // What `signers:` already declares is not declared twice. Anything left to
+    // add beside a block that exists is refused: appending a second `signers:`
+    // would not parse, and merging into a block a human wrote is `ank signers
+    // add`'s surgery, not this one's.
+    let declared = |k: &Migrated| {
+        current
+            .signers
+            .iter()
+            .any(|s| s.principal == k.principal && s.keytype == k.keytype && s.key == k.key)
+    };
+    let remaining: Vec<Migrated> = keys.iter().filter(|k| !declared(k)).cloned().collect();
+    let mut lines = split_lines(&text);
+    let mut after_text = text.clone();
+    if !remaining.is_empty() {
+        if find_key(&lines, 0..lines.len(), 0, "signers").is_some() {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!(
+                    "refused: {} key(s) of .ank/allowed_signers are not under the signers: block \
+                     .ank/config.yml already has, and migrate only writes an absent one",
+                    remaining.len()
+                ),
+            )
+            .with_hint("move them under signers: by hand, then ank signers migrate removes the file"));
+        }
+        let eol = dominant_eol(&lines);
+        terminate_last(&mut lines, &eol);
+        for l in render_signers(&remaining) {
+            lines.push(Line {
+                text: l,
+                eol: eol.clone(),
+            });
+        }
+        after_text = join_lines(&lines);
+        // Read back through the parser, and compared field by field: a note
+        // YAML would fold or a principal it would retype is caught here,
+        // before the file that held it is gone.
+        let read = parse(&after_text, &path).map_err(|e| {
+            CliError::new(
+                ExitCode::Generic,
+                format!("refused: the block would leave {} unreadable", path.display()),
+            )
+            .with_hint(e.message)
+        })?;
+        for k in &remaining {
+            let note = (!k.note.is_empty()).then(|| k.note.join("\n"));
+            let back = read.signers.iter().any(|s| {
+                s.principal == k.principal
+                    && s.keytype == k.keytype
+                    && s.key == k.key
+                    && s.note == note
+                    && s.valid_before == k.valid_before
+            });
+            if !back {
+                return Err(CliError::new(
+                    ExitCode::Generic,
+                    format!(
+                        "refused: the key of {} would not read back as written",
+                        k.principal
+                    ),
+                ));
+            }
+        }
+        std::fs::write(&path, &after_text)
+            .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    }
+    std::fs::remove_file(&source)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", source.display())))?;
+
+    let mut principals: Vec<&str> = remaining.iter().map(|k| k.principal.as_str()).collect();
+    principals.dedup();
+    principals.sort_unstable();
+    principals.dedup();
+    if inv.json() {
+        let doc = crate::json::Obj::document()
+            .num("principals", principals.len())
+            .num("keys", remaining.len())
+            .str("removed", ".ank/allowed_signers")
+            .finish();
+        let _ = writeln!(out, "{doc}");
+    } else if !inv.quiet() {
+        let _ = writeln!(
+            out,
+            "migrated {} key(s) of {} principal(s) under signers: in .ank/config.yml, \
+             and removed .ank/allowed_signers",
+            remaining.len(),
+            principals.len()
+        );
+        let _ = writeln!(out, "  review: git diff .ank");
+    }
+    let _ = after_text;
+    Ok(ExitCode::Ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3435,13 +3884,21 @@ mod reference_table {
                         .into_iter()
                         .map(|f| format!("proof.{f}")),
                 ),
+                "signers" => {
+                    assert_eq!(fields_of::<PrincipalFile>(), vec!["keys"]);
+                    accepted.extend(
+                        fields_of::<SignerKeyFile>()
+                            .into_iter()
+                            .map(|f| format!("signers.<principal>.keys[].{f}")),
+                    );
+                }
                 scalar => {
                     accepted.insert(scalar.to_string());
                 }
             }
         }
         let table: BTreeSet<String> = KEYS.iter().map(|k| k.path.to_string()).collect();
-        assert_eq!(accepted.len(), 17, "{accepted:?}");
+        assert_eq!(accepted.len(), 20, "{accepted:?}");
         assert_eq!(table, accepted);
         // What `ank config` addresses is a subset of the table, never a key
         // of its own.

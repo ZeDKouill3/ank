@@ -5,7 +5,7 @@ slug: signers-move-into-config-yml-check-reads-signers
 title: "Signers move into config.yml: check reads signers:, and ank signers migrate retires allowed_signers"
 created: 2026-10-11T18:26:56Z
 author: claude-code/opus-5.5
-status: open
+status: in_progress
 scope:
   - crates/ank-cli/src/config.rs
   - crates/ank-core/src/config.rs
@@ -23,7 +23,7 @@ criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
 schema: 4
-version: 2
+version: 3
 ---
 
 First task of ADR-5c6db7a161b8. The valid-before measurement the ADR rests on was taken with git 2.55; the floor in git.rs is 2.34 and is unmeasured.

@@ -26,3 +26,6 @@ The file declares `schema: 1`, the only version this build reads. A duration is 
 | `identities.<identity>` | string | none | the role of an identity; one absent from the table is an `agent` |
 | `weight.hot_files` | integer | `3000` | `check` signals a hot corpus holding more entity files |
 | `weight.plane_bytes` | integer | `4000000` | `check` signals claim and proof records weighing more bytes |
+| `signers.<principal>.keys[].key` | string | required | a key allowed to ratify, `gpg <fingerprint>` or `<ssh key type> <base64>`; the block is written by `ank signers`, never by `ank config` (ADR-5c6db7a161b8) |
+| `signers.<principal>.keys[].note` | string | none | what the key is, for the reader; `ank signers migrate` puts the comments of a former `.ank/allowed_signers` here |
+| `signers.<principal>.keys[].valid_before` | date | none | `YYYY-MM-DD`: the key ratifies nothing committed from that day on, UTC, and what it signed before stays verified; absent, the key has no end |

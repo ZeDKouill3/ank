@@ -1491,6 +1491,7 @@ fn dispatch(
         "release" => crate::commands::release(&inv, &s.repo, &s.identity, out),
         "check" => crate::human::check(&inv, &s.repo, &s.config, out),
         "migrate" => crate::migrate::run(&inv, &s.repo, out),
+        "signers" => crate::config::run_signers(&inv, &s.repo, out),
         "archive" => crate::archive::run(&inv, &s.repo, &s.config, out),
         "review" => crate::human::review(&inv, &s.repo, &s.config, out),
         "accept" => crate::human::accept(&inv, &s.repo, &s.config, &s.identity, out),
@@ -1642,7 +1643,7 @@ mod tests {
         // counting.
         assert_eq!(
             COMMANDS.len(),
-            30,
+            31,
             "every verb of §4, plus init and help from §9. The surface is \
              complete, so this number moves only when §4 does"
         );

@@ -169,4 +169,22 @@ pub static KEYS: &[ConfigKey] = &[
         Absent::Number(DEFAULT_WEIGHT_PLANE_BYTES),
         "`check` signals claim and proof records weighing more bytes",
     ),
+    key(
+        "signers.<principal>.keys[].key",
+        "string",
+        Absent::Required,
+        "a key allowed to ratify, `gpg <fingerprint>` or `<ssh key type> <base64>`; the block is written by `ank signers`, never by `ank config` (ADR-5c6db7a161b8)",
+    ),
+    key(
+        "signers.<principal>.keys[].note",
+        "string",
+        Absent::None,
+        "what the key is, for the reader; `ank signers migrate` puts the comments of a former `.ank/allowed_signers` here",
+    ),
+    key(
+        "signers.<principal>.keys[].valid_before",
+        "date",
+        Absent::None,
+        "`YYYY-MM-DD`: the key ratifies nothing committed from that day on, UTC, and what it signed before stays verified; absent, the key has no end",
+    ),
 ];
