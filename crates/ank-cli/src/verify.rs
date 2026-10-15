@@ -120,6 +120,191 @@ pub fn definition_ref(name: &str, v: &Verifier) -> String {
     format!("{name}@{}", definition_hash(v))
 }
 
+// ---------------------------------------------------------------------------
+// The run registry (ADR-a2faf59f6ce0, ADR-7224dea611c1)
+// ---------------------------------------------------------------------------
+//
+// **What a result is keyed on.** `name@hash`, the definition that ran, and a
+// digest of the content on disk when it ran: every file git counts as the work
+// tree -- tracked, or untracked and not ignored -- that matches the verifier's
+// `inputs`, or every such file when it declares none. Content on disk and not
+// a commit, because `done` runs on an uncommitted tree and a key built on HEAD
+// would name a state nobody tested.
+//
+// **Where it lives.** `<git-common-dir>/ank/runs/`, one file per key, never
+// versioned: sibling worktrees of one repository share it with no
+// coordination, and no other machine ever reads it.
+//
+// **What may be reused.** A passing entry with the same key, no older than
+// `proof.reuse_max_age`, and nothing else: never a failure, which would forbid
+// a plain retry and hide a flaky test, and never an attestation on
+// `refs/ank/proof`, which nothing here reads.
+
+/// The content key of one verifier, `name@hash` and the inputs digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunKey {
+    pub verifier: String,
+    pub inputs: String,
+}
+
+impl RunKey {
+    /// The registry file the key is recorded under.
+    fn file_name(&self) -> String {
+        let mut h = Sha256::new();
+        put(&mut h, &self.verifier);
+        put(&mut h, &self.inputs);
+        hex::encode(h.finalize())[..32].to_string()
+    }
+}
+
+/// The keys of `names`, in order, computed over the work tree as it stands.
+///
+/// **Two git processes for the whole list, whatever it holds**
+/// (ADR-cc65f1388a71): one listing of the work tree, and one `hash-object
+/// --stdin-paths` over the union of the files any verifier reads. `None` where
+/// a key cannot be established -- git refusing, a path it cannot hash -- and
+/// then nothing is reused and nothing recorded: a verb that cannot name its key
+/// pays the full cost rather than guessing.
+pub fn keys(worktree: &Path, names: &[(&str, &Verifier)]) -> Option<Vec<RunKey>> {
+    let files = crate::git::worktree_files(worktree)?.counted;
+    let mut selected: Vec<Vec<usize>> = Vec::with_capacity(names.len());
+    let mut wanted = vec![false; files.len()];
+    for (_, v) in names {
+        let picked: Vec<usize> = match &v.inputs {
+            Some(globs) => {
+                let set = ank_core::ScopeSet::new(globs).ok()?;
+                (0..files.len())
+                    .filter(|&i| set.matches(&files[i]))
+                    .collect()
+            }
+            None => (0..files.len()).collect(),
+        };
+        for &i in &picked {
+            wanted[i] = true;
+        }
+        selected.push(picked);
+    }
+
+    let union: Vec<usize> = (0..files.len()).filter(|&i| wanted[i]).collect();
+    let mut blob: Vec<Option<String>> = vec![None; files.len()];
+    if !union.is_empty() {
+        let mut input = String::new();
+        for &i in &union {
+            input.push_str(&files[i]);
+            input.push('\n');
+        }
+        let args = ["hash-object", "--stdin-paths"];
+        let out = crate::git::output_with_stdin(worktree, &args, input.as_bytes()).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let ids: Vec<&str> = text.lines().collect();
+        if ids.len() != union.len() {
+            return None;
+        }
+        for (&i, id) in union.iter().zip(ids) {
+            blob[i] = Some(id.to_string());
+        }
+    }
+
+    let mut out = Vec::with_capacity(names.len());
+    for ((name, v), picked) in names.iter().zip(selected) {
+        let mut paths: Vec<(&str, &str)> = picked
+            .iter()
+            .map(|&i| (files[i].as_str(), blob[i].as_deref().unwrap_or("")))
+            .collect();
+        paths.sort();
+        let mut h = Sha256::new();
+        for (path, id) in paths {
+            put(&mut h, path);
+            put(&mut h, id);
+        }
+        out.push(RunKey {
+            verifier: definition_ref(name, v),
+            inputs: hex::encode(h.finalize())[..16].to_string(),
+        });
+    }
+    Some(out)
+}
+
+/// One recorded run: what it was keyed on, what it answered, who ran it and
+/// when, and the reference its proof entry carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Run {
+    pub key: RunKey,
+    pub ok: bool,
+    /// The exit code, `None` for a run killed by a signal or by its timeout.
+    pub code: Option<i32>,
+    pub by: String,
+    /// Seconds since the epoch.
+    pub at: i64,
+    pub reference: String,
+}
+
+/// The registry directory of the repository `worktree` belongs to.
+pub fn registry(worktree: &Path) -> Option<PathBuf> {
+    crate::git::common_dir(worktree).map(|d| d.join("ank").join("runs"))
+}
+
+/// Records `run` under `dir`, replacing whatever the same key held: the latest
+/// answer for a key is the one that counts, so a failure after a pass forbids
+/// the reuse the pass allowed.
+///
+/// Written to a temporary file and renamed into place, so a sibling worktree
+/// reading at the same moment sees the old entry or the new one, never half.
+pub fn record(dir: &Path, run: &Run) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let text = format!(
+        "verifier: {}\ninputs: {}\nok: {}\nexit: {}\nby: {}\nat: {}\nref: {}\n",
+        run.key.verifier,
+        run.key.inputs,
+        run.ok,
+        run.code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "none".into()),
+        run.by,
+        run.at,
+        run.reference,
+    );
+    let name = run.key.file_name();
+    let tmp = dir.join(format!(".{name}.{}", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, dir.join(name))
+}
+
+/// The entry recorded under `key`, if any and if it reads whole.
+pub fn lookup(dir: &Path, key: &RunKey) -> Option<Run> {
+    let text = std::fs::read_to_string(dir.join(key.file_name())).ok()?;
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(name)?.strip_prefix(": "))
+            .map(str::to_string)
+    };
+    let run = Run {
+        key: RunKey {
+            verifier: field("verifier")?,
+            inputs: field("inputs")?,
+        },
+        ok: field("ok")? == "true",
+        code: field("exit")?.parse().ok(),
+        by: field("by")?,
+        at: field("at")?.parse().ok()?,
+        reference: field("ref")?,
+    };
+    // The file name is a digest of the key, so this only ever disagrees on a
+    // file somebody wrote by hand, and then it is not this key's entry.
+    (run.key == *key).then_some(run)
+}
+
+/// The entry `done` may reuse for `key` at `now`: passing, and no older than
+/// `max_age`. Anything else, absent included, means run the verifier.
+pub fn reusable(dir: &Path, key: &RunKey, now: i64, max_age: Duration) -> Option<Run> {
+    let run = lookup(dir, key)?;
+    let age = now.saturating_sub(run.at);
+    (run.ok && run.code == Some(0) && age >= 0 && (age as u64) <= max_age.as_secs()).then_some(run)
+}
+
 /// Locates a POSIX shell.
 ///
 /// `sh` on `PATH` when there is one. Otherwise, on Windows, the one Git for

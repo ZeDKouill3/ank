@@ -49,5 +49,6 @@ mod status;
 mod tui;
 mod update;
 mod verifier_env;
+mod verifier_reuse;
 mod warm_readers;
 mod watch;

@@ -340,6 +340,15 @@ pub struct Proof {
     /// How the entry arrived. `None` means it predates the field (§3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<ProofVia>,
+    /// Where a result `done` reused rather than ran came from: `local`, the
+    /// run registry under the git common directory (ADR-a2faf59f6ce0).
+    /// `None` is an entry produced by an execution for this task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused: Option<String>,
+    /// The identity of the run a reused entry was taken from, which is not
+    /// necessarily the one that recorded the entry. Present with `reused`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
 
 impl Proof {

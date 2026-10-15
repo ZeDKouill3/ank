@@ -205,6 +205,19 @@ do is clear the `done with no test proof` signal, which stays until a pipeline
 anchors the run. Entries written before the field carry no `via` and are read
 exactly as they were.
 
+**A run that already passed on the same bytes is not run again.** Every run
+`done` starts is recorded, pass or fail, under `<git-common-dir>/ank/runs/`,
+keyed on the verifier's `name@hash` and a digest of the files its `inputs`
+match -- tracked, or untracked and not ignored, as they are on disk -- or of the
+whole tree without `inputs`. A later `done`, in this worktree or a sibling of
+it, reuses a passing entry with the same key no older than
+`proof.reuse_max_age` (default `24h`) instead of starting the verifier, and
+says so: the entry keeps the reference and the route of the run it came from
+and adds `reused: local` and `by: <identity>`. A failure is never reused, nor a
+run from another machine, nor an attestation. Split a suite into verifiers with
+disjoint `inputs` and only those whose files changed run again;
+`ank done --fresh` runs every one (ADR-a2faf59f6ce0).
+
 `done` records what ran on the machine that ran it, which is a local claim.
 [Anchoring a run](ci.md#anchoring-a-run) is how a pipeline adds the external
 half after the merge, without a commit.

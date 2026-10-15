@@ -950,6 +950,7 @@ config_keys!(
     "verifiers.<name>.env.platform",
     "verifiers.<name>.env.network",
     "verifiers.<name>.env.vars.<var>",
+    "proof.reuse_max_age",
     "verifier_jobs",
     "weight.hot_files",
     "weight.plane_bytes",
@@ -1161,7 +1162,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         kinds: &[],
         max_positionals: 1,
         positional_help: "[<id>]",
-        flags: &[flag("--proof")],
+        flags: &[flag("--proof"), switch("--fresh")],
         refuses: &[
             refuses(ExitCode::Proof, "no proof, and the task's verify: list names no verifier to produce one"),
             refuses(ExitCode::Transition, "no claim held by this agent, or the frozen done_criteria has diverged"),
@@ -1173,6 +1174,8 @@ pub const COMMANDS: &[CommandSpec] = &[
         notes: &[
             "--proof is <type>:<ref>; type is commit, human-review, assertion or test",
             "config.yml defines the verifiers; the task's verify: list decides which of them run",
+            "a verifier whose passing run is recorded under <git-common-dir>/ank/runs/ with the same definition and inputs content, no older than proof.reuse_max_age, is reused rather than run, and its entry says reused: local and by whom",
+            "--fresh reuses nothing and runs every verifier",
             // The task file carries the proof and the new status; the ref is the
             // claim being given up.
             PUSH_DEGRADES,

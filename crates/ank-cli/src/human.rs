@@ -9111,6 +9111,8 @@ mod tests {
                     criteria: None,
                     verifier: None,
                     via: Some(ProofVia::Submitted),
+                    reused: None,
+                    by: None,
                 }]
             } else {
                 vec![]
@@ -9615,6 +9617,8 @@ mod tests {
                 criteria: None,
                 verifier: None,
                 via: Some(ProofVia::Submitted),
+                reused: None,
+                by: None,
             }];
         }
         t.write(&weak);
@@ -9650,6 +9654,8 @@ mod tests {
                 criteria: None,
                 verifier: None,
                 via: None,
+                reused: None,
+                by: None,
             }
         }
         fn with_proofs(id: &str, proofs: Vec<Proof>) -> Entity {
@@ -9874,6 +9880,8 @@ mod tests {
                 criteria: None,
                 verifier: Some("cargo-test@000000000000".into()),
                 via: Some(ProofVia::Verifier),
+                reused: None,
+                by: None,
             }];
         }
         t.write(&done);
