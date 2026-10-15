@@ -45,6 +45,7 @@ mod peer_url_refusal;
 mod remote_without_claim;
 mod renewal_noop;
 mod schema;
+mod signers;
 mod skill;
 mod spec_page;
 mod status;

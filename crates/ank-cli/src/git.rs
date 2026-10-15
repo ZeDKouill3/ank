@@ -2106,6 +2106,10 @@ pub struct Ratification {
     /// would not read, which leaves such a rule without an instant rather than
     /// with a wrong one.
     pub authored: Option<i64>,
+    /// The committer date, in seconds since the epoch: what git compares a
+    /// key's `valid-before` against, and what `check` compares a `gpg` key's
+    /// `valid_before` against itself (ADR-5c6db7a161b8).
+    pub committed: Option<i64>,
 }
 
 /// `paths` are the candidate paths of the entity, canonical first. There is
@@ -2191,7 +2195,7 @@ fn all_ratifications(cwd: &Path) -> Result<HashMap<String, Ratification>> {
     let args = [
         "rev-list",
         "--full-history",
-        "--format=%H%x00%at%x00%s%x00%b%x00",
+        "--format=%H%x00%at%x00%ct%x00%s%x00%b%x00",
         "HEAD",
     ];
     let out = output(cwd, &args)?;
@@ -2210,7 +2214,7 @@ fn all_ratifications(cwd: &Path) -> Result<HashMap<String, Ratification>> {
         // An empty field is a field, so counting is what a separator could not
         // do.
         let fields: Vec<&str> = text.split('\0').collect();
-        for record in fields.chunks_exact(4) {
+        for record in fields.chunks_exact(5) {
             let sha = record[0];
             // `--format` implies `--pretty`, whose own `commit <sha>` line
             // precedes the format output. `%H` is the last line of this field
@@ -2218,10 +2222,11 @@ fn all_ratifications(cwd: &Path) -> Result<HashMap<String, Ratification>> {
             // instead would rest on the two never disagreeing.
             let sha = sha.lines().next_back().unwrap_or_default().trim();
             let authored = record[1].trim().parse::<i64>().ok();
-            let Some(id) = record[2].trim().strip_prefix("ratify ") else {
+            let committed = record[2].trim().parse::<i64>().ok();
+            let Some(id) = record[3].trim().strip_prefix("ratify ") else {
                 continue;
             };
-            let body = record[3];
+            let body = record[4];
             // Newest first, and the newest wins: `rev-list` returned the same
             // order and the search took the first match, so a decision ratified
             // twice answers with the same commit it answered with before.
@@ -2242,6 +2247,7 @@ fn all_ratifications(cwd: &Path) -> Result<HashMap<String, Ratification>> {
                         sha: sha.to_string(),
                         anchor,
                         authored,
+                        committed,
                     },
                 );
             }
@@ -2342,6 +2348,12 @@ fn ratification_uncached(cwd: &Path, id: &str, path: &str) -> Result<Option<Rati
             .find_map(|l| l.strip_prefix("author "))
             .and_then(|l| l.rsplit(' ').nth(1))
             .and_then(|epoch| epoch.parse::<i64>().ok());
+        let committed = text
+            .lines()
+            .take_while(|l| !l.is_empty())
+            .find_map(|l| l.strip_prefix("committer "))
+            .and_then(|l| l.rsplit(' ').nth(1))
+            .and_then(|epoch| epoch.parse::<i64>().ok());
         let mut lines = text.lines().skip_while(|l| !l.is_empty());
         if lines.next().is_none() {
             continue;
@@ -2363,6 +2375,7 @@ fn ratification_uncached(cwd: &Path, id: &str, path: &str) -> Result<Option<Rati
                 sha: sha.trim().to_string(),
                 anchor,
                 authored,
+                committed,
             }));
     }
     Ok(None)

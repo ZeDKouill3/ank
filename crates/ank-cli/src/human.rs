@@ -140,6 +140,7 @@ kinds! {
     OrphanRef => "orphan-ref",
     Unmerged => "unmerged",
     NoSigners => "no-signers",
+    SignersFile => "signers-file",
     NoScope => "no-scope",
     InvalidGlob => "invalid-glob",
     ScopeNotYet => "scope-not-yet",
@@ -1232,11 +1233,11 @@ pub fn inspect_with(
         let n = report.unchecked_signatures;
         report.findings.push(Finding::signal(
             Kind::SignatureUnchecked,
-            "allowed_signers",
+            "signers",
             format!(
                 "{n} ratification signature(s) could not be checked here: no public key \
                  for the signing identity, so they are not verified and not refused \
-                 (import the key declared in .ank/allowed_signers)"
+                 (import the key declared under signers: in .ank/config.yml)"
             ),
         ));
     }
@@ -1249,7 +1250,7 @@ pub fn inspect_with(
         let why = report.signature_failure.as_deref().unwrap_or("git failed");
         report.findings.push(Finding::signal(
             Kind::SignatureUnreadable,
-            "allowed_signers",
+            "signers",
             format!(
                 "{n} ratification signature(s) could not be read, so they are \
                  neither verified nor refused: {why}"
@@ -1485,115 +1486,35 @@ fn foreign_namespaces(refs: &[git::AnkRef], report: &mut Report) {
     }
 }
 
-/// One entry of `.ank/allowed_signers`: an identity allowed to ratify (§8).
-///
-/// Git's allowed-signers layout, `principal [options] keytype key`, read from
-/// the end because the optional middle is what varies: the key is the last
-/// field and its type the one before, whatever sits between them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signer {
-    pub principal: String,
-    pub keytype: String,
-    pub key: String,
-}
+/// One key allowed to ratify, as `signers:` declares it (ADR-5c6db7a161b8).
+pub use crate::config::Signer;
 
-/// Whether a field names a key type rather than an option or a comment.
+/// The allowed-signers file git is handed, generated from `signers:`
+/// (ADR-5c6db7a161b8).
 ///
-/// Recognised from the front and by prefix: every SSH type is `ssh-`, `ecdsa-`,
-/// `sk-` or `webauthn-`, certificate forms included, since a
-/// `-cert-v01@openssh.com` suffix leaves the prefix alone. `gpg` is ank's own
-/// extension (§8) and the one exact match.
+/// One line per ssh key, `principal [valid-before="YYYYMMDD"] keytype key`,
+/// which is git's layout and its option for a retired key: git compares the
+/// bound against the committer date. `gpg` keys are never written, since
+/// ssh-keygen has no keytype for them and git never reads this file under
+/// OpenPGP; `check` judges those itself.
 ///
-/// The options that may precede it -- `cert-authority`, `namespaces="git"`,
-/// `valid-after=...` -- match none of these, which is what makes reading from
-/// the front safe where reading from the end was not.
-fn is_keytype(field: &str) -> bool {
-    let lower = field.to_ascii_lowercase();
-    lower == "gpg"
-        || ["ssh-", "ecdsa-", "sk-", "webauthn-"]
-            .iter()
-            .any(|p| lower.starts_with(p))
-}
-
-/// One entry split into the three fields that matter, or `None` for a line
-/// neither reader can make sense of.
-///
-/// **Read from the front, and this used to read from the end** — the key as the
-/// last field and its type as the one before. That is right for
-/// `principal [options] keytype key` and wrong for the line everybody actually
-/// writes, because an SSH public key carries a trailing comment: pasting
-/// `id_ed25519.pub` after a principal yields four fields, and the last two are
-/// the key and the comment. The type then read as base64 and the key as an
-/// email address (TASK-8a80b590b356, measured on the golden corpus the moment
-/// `review` first printed the field: `ssh-ed25519` came out as `ank`).
-///
-/// It stayed invisible because nothing displayed these fields and because git,
-/// not ank, decides the allowlist under `gpg.format = ssh`. Under OpenPGP it did
-/// not stay invisible: [`declares`] compares the fingerprint against `key`, and
-/// against a comment it can only ever answer no.
-fn split_entry(line: &str) -> Option<(&str, &str, &str)> {
-    let mut fields = line.split_whitespace();
-    let principal = fields.next()?;
-    let mut rest = fields.skip_while(|f| !is_keytype(f));
-    let keytype = rest.next()?;
-    let key = rest.next()?;
-    Some((principal, keytype, key))
-}
-
-/// Parses `allowed_signers`. Unreadable lines are dropped rather than reported:
-/// this file is versioned and reviewed, and a check that refuses to start over a
-/// stray line is a check that stops answering the question it exists for.
-pub fn parse_signers(text: &str) -> Vec<Signer> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(split_entry)
-        .map(|(principal, keytype, key)| Signer {
-            principal: principal.to_string(),
-            keytype: keytype.to_lowercase(),
-            key: key.to_string(),
-        })
-        .collect()
-}
-
-/// The lines of `allowed_signers` git is able to parse, and only those.
-///
-/// The file serves two readers (§12), and they do not read the same thing. Under
-/// `gpg.format = ssh` git opens it and decides the allowlist itself; under
-/// OpenPGP git never opens it at all, so `check` matches the fingerprint here
-/// against `gpg <fingerprint>` entries. Those entries are ank's own extension
-/// and ssh-keygen has no keytype for them: it reports `invalid key` on the line,
-/// and how much of the rest of the file it goes on to read afterwards is a
-/// property of its version rather than of this repository. Measured on CI run
-/// 32191115856, where the same SSH-signed ratification was `G` on two runners
-/// and `U` on the third.
-///
-/// So git is handed what git can read. Lines are filtered and never rewritten:
-/// an entry may carry options between the principal and the key,
-/// `parse_signers` drops them, and re-rendering from what it returns would
-/// quietly change what the file permits. A comment survives because ssh-keygen
-/// skips it, and a line neither parser can make sense of is dropped, which is
-/// the one case where dropping is the conservative act.
-pub fn git_readable_signers(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let trimmed = line.trim();
-        let keep = if trimmed.is_empty() || trimmed.starts_with('#') {
-            true
-        } else {
-            // The same reading as `parse_signers`, and through the same
-            // helper: two ways of locating the key type in one file is two
-            // chances to disagree about which lines git may be handed, and a
-            // `gpg` line let through is the failure TASK-01cc22478782 closed.
-            match split_entry(trimmed) {
-                Some((_, keytype, _)) => !keytype.eq_ignore_ascii_case("gpg"),
-                None => false,
-            }
-        };
-        if keep {
-            out.push_str(line);
-            out.push('\n');
+/// The date goes without the `Z` suffix ssh-keygen accepts from 9.x onwards,
+/// so an older one still reads the line: it is then read in the verifying
+/// machine's time zone, where `check`'s own reading is UTC. Within a day of the
+/// bound the stricter of the two wins, because `classify_signature` refuses
+/// what either refuses.
+pub fn allowed_signers_for_git(declared: &[Signer]) -> String {
+    let mut out = String::new();
+    for s in declared.iter().filter(|s| s.keytype != "gpg") {
+        out.push_str(&s.principal);
+        out.push(' ');
+        if let Some(d) = &s.valid_before {
+            out.push_str(&format!("valid-before=\"{}\" ", d.replace('-', "")));
         }
+        out.push_str(&s.keytype);
+        out.push(' ');
+        out.push_str(&s.key);
+        out.push('\n');
     }
     out
 }
@@ -1662,15 +1583,8 @@ fn held() -> &'static Mutex<HashMap<PathBuf, usize>> {
     HELD.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn signers_for_git(source: &Path) -> Option<SignersForGit> {
-    let text = std::fs::read_to_string(source).ok()?;
-    let readable = git_readable_signers(&text);
-    if readable == text {
-        return Some(SignersForGit {
-            path: source.to_path_buf(),
-            scratch: false,
-        });
-    }
+fn signers_for_git(readable: &str) -> Option<SignersForGit> {
+    let readable = readable.to_string();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&readable, &mut hasher);
     let digest = std::hash::Hasher::finish(&hasher);
@@ -1703,6 +1617,13 @@ pub enum Signature {
     Trusted,
     /// Good signature, from a key nobody declared.
     Undeclared { fingerprint: String },
+    /// Good signature from a declared key, committed on or after the
+    /// `valid_before` that key carries: retired keys ratify nothing later
+    /// (ADR-5c6db7a161b8).
+    Retired {
+        fingerprint: String,
+        valid_before: String,
+    },
     /// A signature is there and this machine cannot check it: no local key, or
     /// no working gpg to ask (TASK-f4ed2020c964).
     Unchecked,
@@ -1736,6 +1657,7 @@ pub fn classify_signature(
     facts: &git::SignatureFacts,
     declared: &[Signer],
     carries_signature: bool,
+    committed: Option<i64>,
 ) -> Signature {
     match facts.status {
         // `N` is git saying it has no good signature to report, which covers
@@ -1745,35 +1667,117 @@ pub fn classify_signature(
         'N' => Signature::Absent,
         'E' => Signature::Unchecked,
         'G' | 'U' => {
-            if is_ssh(&facts.fingerprint) {
+            let fingerprint = facts.fingerprint.clone();
+            // The declared keys this signature is from. Under SSH by the
+            // fingerprint of the key, which is the SHA-256 of its blob; under
+            // OpenPGP by the fingerprint or its long-id tail.
+            let ssh = is_ssh(&facts.fingerprint);
+            let matching: Vec<&Signer> = declared
+                .iter()
+                .filter(|s| match ssh {
+                    true => {
+                        s.keytype != "gpg"
+                            && ssh_fingerprint(&s.key).as_deref()
+                                == Some(facts.fingerprint.as_str())
+                    }
+                    false => {
+                        s.keytype == "gpg" && declares(std::slice::from_ref(*s), &facts.fingerprint)
+                    }
+                })
+                .collect();
+            // A key is honoured where at least one declaration of it is live
+            // at the committer date; where every one is retired, the date
+            // is what refuses it, and the reader is told which.
+            let live = matching.iter().any(|s| !retired(s, committed));
+            let retired_on = matching.iter().filter_map(|s| s.valid_before.clone()).max();
+            if ssh {
                 // Under SSH git has already done the allowlist check, because
                 // it is the only format it will do it for: measured against
                 // git, `G` is a key the allowed-signers file matched and `U` is
-                // a good signature whose principal it did not. Re-deciding it
-                // here would mean comparing an `SHA256:` fingerprint against a
-                // base64 key and calling every correct signature undeclared.
-                if facts.status == 'G' {
-                    Signature::Trusted
-                } else {
-                    Signature::Undeclared {
-                        fingerprint: facts.fingerprint.clone(),
-                    }
+                // a good signature whose principal it did not -- including one
+                // whose `valid-before` the commit postdates. The date is judged
+                // here as well, so a git that does not honour the option still
+                // refuses a retired key.
+                match (facts.status, live, retired_on) {
+                    (_, false, Some(valid_before)) if !matching.is_empty() => Signature::Retired {
+                        fingerprint,
+                        valid_before,
+                    },
+                    ('G', _, _) => Signature::Trusted,
+                    _ => Signature::Undeclared { fingerprint },
                 }
-            } else if declares(declared, &facts.fingerprint) {
+            } else if live {
                 // OpenPGP, where git never reads the file at all. `U` here is a
                 // good signature from a key the local keyring does not
                 // *ultimately trust*, which is a statement about the operator's
                 // web of trust and not about this repository — so both good
                 // statuses are judged the same way, by the declaration.
                 Signature::Trusted
-            } else {
-                Signature::Undeclared {
-                    fingerprint: facts.fingerprint.clone(),
+            } else if let Some(valid_before) = retired_on.filter(|_| !matching.is_empty()) {
+                Signature::Retired {
+                    fingerprint,
+                    valid_before,
                 }
+            } else {
+                Signature::Undeclared { fingerprint }
             }
         }
         other => Signature::Invalid { status: other },
     }
+}
+
+/// Whether a commit dated `committed` postdates the key's `valid_before`,
+/// read as midnight UTC. A commit whose date did not read is judged retired
+/// against a key that carries a bound: no instant is not an instant before it.
+fn retired(s: &Signer, committed: Option<i64>) -> bool {
+    let Some(days) = s.valid_before.as_deref().and_then(crate::config::date_days) else {
+        return false;
+    };
+    committed.is_none_or(|c| c >= days * 86_400)
+}
+
+/// The fingerprint git prints for an ssh key, `SHA256:` and the unpadded
+/// base64 of the SHA-256 of the key blob, or `None` for a key that is not
+/// base64.
+pub fn ssh_fingerprint(key: &str) -> Option<String> {
+    let blob = base64_decode(key)?;
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(&blob);
+    Some(format!("SHA256:{}", base64_encode(&digest)))
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim_end_matches('=');
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in text.bytes() {
+        let v = BASE64.iter().position(|&b| b == c)? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// Unpadded, which is how ssh-keygen prints a fingerprint.
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.len();
+        let v = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..=n {
+            out.push(BASE64[((v >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    out
 }
 
 /// An SSH signature names its key as `SHA256:<base64>`; OpenPGP names it as a
@@ -1803,9 +1807,14 @@ fn declares(declared: &[Signer], fingerprint: &str) -> bool {
     })
 }
 
+/// The keys `signers:` declares, and nothing else: a remaining
+/// `.ank/allowed_signers` is a fault of its own and never a second source
+/// (ADR-5c6db7a161b8). A `config.yml` that will not load declares nothing,
+/// which every verb but `config` has already refused on.
 fn declared_signers(repo: &Repo) -> Vec<Signer> {
-    let text = std::fs::read_to_string(repo.ank.join("allowed_signers")).unwrap_or_default();
-    parse_signers(&text)
+    crate::config::load(&repo.config_path())
+        .map(|c| c.signers)
+        .unwrap_or_default()
 }
 
 /// What §8's advisory mode says, in one sentence and in one place.
@@ -1824,9 +1833,22 @@ fn check_signers(repo: &Repo, report: &mut Report) {
     if keys == 0 {
         report.findings.push(Finding::signal(
             Kind::NoSigners,
-            "allowed_signers",
+            "signers",
             NO_RATIFICATION_KEY,
         ));
+    }
+    // A fault and not a signal: it is a second list of who may ratify that
+    // nothing reads any more, and a reader editing it believes they changed
+    // who may ratify (ADR-5c6db7a161b8).
+    if repo.ank.join("allowed_signers").exists() {
+        let mut finding = Finding::fault(
+            Kind::SignersFile,
+            "allowed_signers",
+            "still present, and no longer read: who may ratify is signers: in \
+             .ank/config.yml (ank signers migrate moves it there)",
+        );
+        finding.note = vec!["ank signers migrate".to_string()];
+        report.findings.push(finding);
     }
 }
 
@@ -3859,7 +3881,13 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
         Some(Signature::Undeclared { fingerprint }) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             format!(
-                "ratified by {fingerprint}, which .ank/allowed_signers does not declare"
+                "ratified by {fingerprint}, which signers: in .ank/config.yml does not declare"
+            ),
+        )),
+        Some(Signature::Retired { fingerprint, valid_before }) => report.findings.push(Finding::fault(Kind::Signature,
+            view.id,
+            format!(
+                "ratified by {fingerprint} after its valid_before {valid_before}: a retired key ratifies nothing committed later"
             ),
         )),
 
@@ -7005,7 +7033,6 @@ fn ratification_of(repo: &Repo, view: &Anchored) -> Option<git::Ratification> {
 pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<Signature> {
     let view = of.into();
     let declared = declared_signers(repo);
-    let signers = repo.ank.join("allowed_signers");
 
     // Nothing declared is not "signed by nobody": it is the advisory mode §8
     // describes, already reported once by `check_signers`, and there is no
@@ -7013,11 +7040,13 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
     // reports `N` for a perfectly signed commit when `gpg.format` is ssh and no
     // allowed-signers file is configured, so a corpus with no file would have
     // every ratification called unsigned.
-    if declared.is_empty() || !signers.is_file() {
+    if declared.is_empty() {
         return None;
     }
 
-    let sha = ratification_of(repo, &view)?.sha;
+    let ratification = ratification_of(repo, &view)?;
+    let sha = ratification.sha;
+    let committed = ratification.committed;
 
     // **The verdict already reached for this commit, under this allowlist**
     // (TASK-dbef284a166c). gpg is 4.0 of the 7.1 seconds `check` costs on this
@@ -7037,7 +7066,7 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
             fingerprint,
         };
         let carries = facts.status == 'N' && commit_carries_signature(&repo.corpus, &sha);
-        return Some(classify_signature(&facts, &declared, carries));
+        return Some(classify_signature(&facts, &declared, carries, committed));
     }
 
     // The file git is pointed at, which is the reviewed one unless it carries
@@ -7050,11 +7079,9 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
     // verdict `check_adr` says nothing about — so a machine where the signature
     // could not be read looked exactly like a corpus that declared no key at
     // all (TASK-c92b7cc10f13). Failing to ask has to survive as an answer.
-    let for_git = signers_for_git(&signers);
-    let handed = for_git
-        .as_ref()
-        .map_or(signers.as_path(), SignersForGit::path);
-    match git::signature_of(&repo.corpus, &sha, Some(handed)) {
+    let for_git = signers_for_git(&allowed_signers_for_git(&declared));
+    let handed = for_git.as_ref().map(SignersForGit::path);
+    match git::signature_of(&repo.corpus, &sha, handed) {
         Ok(facts) => {
             signature_cache(repo, |index, key| {
                 index.remember_signature(&sha, key, facts.status, &facts.fingerprint);
@@ -7062,7 +7089,7 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
             // Asked only where the answer can change the verdict: every other
             // status already says whether a signature was there.
             let carries = facts.status == 'N' && commit_carries_signature(&repo.corpus, &sha);
-            Some(classify_signature(&facts, &declared, carries))
+            Some(classify_signature(&facts, &declared, carries, committed))
         }
         Err(e) => Some(Signature::Unreadable {
             reason: e.to_string(),
@@ -7120,9 +7147,20 @@ fn signature_cache<T>(repo: &Repo, with: impl FnOnce(&Index, &str) -> T) -> Opti
         static OPEN: std::cell::RefCell<HashMap<PathBuf, Index>> =
             std::cell::RefCell::new(HashMap::new());
     }
-    let text = std::fs::read(repo.ank.join("allowed_signers")).ok()?;
+    // What is hashed is every declared key with its date, rendered: a git
+    // verdict only depends on what git is handed, and a gpg key's
+    // `valid_before` is judged after the cache, against the commit's date.
+    let text: String = declared_signers(repo)
+        .iter()
+        .map(|s| {
+            format!(
+                "{} {} {} {:?}\n",
+                s.principal, s.keytype, s.key, s.valid_before
+            )
+        })
+        .collect();
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
-    sha2::Digest::update(&mut hasher, &text);
+    sha2::Digest::update(&mut hasher, text.as_bytes());
     // **The signing configuration is in the key too**, and a test that already
     // existed is what said it had to be: `gpg.format` set to something git
     // cannot use turns a readable signature into one it refuses to answer
@@ -11035,152 +11073,61 @@ mod tests {
     // The signature on the ratification commit (TASK-d31af22248d9)
     // -----------------------------------------------------------------------
 
-    /// The shape the file actually uses, which is git's: principal, then the
-    /// key, with anything optional allowed to sit between them.
+    /// What git is handed is generated from `signers:`: the ssh keys in
+    /// git's layout, a `valid_before` as git's `valid-before` option, and no
+    /// `gpg` key, which ssh-keygen has no keytype for (TASK-01cc22478782).
     #[test]
-    fn allowed_signers_is_read_as_git_writes_it() {
-        let parsed = parse_signers(
-            "# a comment\n\
-             \n\
-             sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n\
-             marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3NzaC1lZDI1\n\
-             nonsense\n",
-        );
-        assert_eq!(parsed.len(), 2, "{parsed:?}");
-        assert_eq!(parsed[0].keytype, "gpg");
-        assert_eq!(parsed[0].key, "739A603FB05F9F2F7D3C8D50624FCFCC1482554A");
+    fn git_is_handed_the_ssh_keys_with_their_valid_before_and_no_gpg_key() {
+        let declared = vec![
+            Signer {
+                principal: "sean@example.com".into(),
+                keytype: "gpg".into(),
+                key: "739A603FB05F9F2F7D3C8D50624FCFCC1482554A".into(),
+                note: Some("release key".into()),
+                valid_before: None,
+            },
+            Signer {
+                principal: "marie@laptop".into(),
+                keytype: "ssh-ed25519".into(),
+                key: "AAAAC3NzaC1lZDI1".into(),
+                note: None,
+                valid_before: Some("2026-10-01".into()),
+            },
+            Signer {
+                principal: "marie@laptop".into(),
+                keytype: "ssh-ed25519".into(),
+                key: "AAAAC3Other".into(),
+                note: Some("a note is never handed on".into()),
+                valid_before: None,
+            },
+        ];
         assert_eq!(
-            parsed[1].keytype, "ssh-ed25519",
-            "the option in the middle must not be mistaken for the key type"
+            allowed_signers_for_git(&declared),
+            "marie@laptop valid-before=\"20261001\" ssh-ed25519 AAAAC3NzaC1lZDI1\n\
+             marie@laptop ssh-ed25519 AAAAC3Other\n"
         );
-        assert_eq!(parsed[1].key, "AAAAC3NzaC1lZDI1");
     }
 
-    /// **A public key carries a comment, and that is the line everybody
-    /// writes** (TASK-8a80b590b356).
-    ///
-    /// `ssh-keygen` puts one at the end of `id_ed25519.pub`, and declaring a
-    /// signer is pasting that line after a principal. Read from the end, the
-    /// four fields made the base64 the key type and the comment the key; the
-    /// golden corpus, whose fixture generates a key with `-C "ank test"`, is
-    /// where it surfaced the moment `review` printed a type at all.
-    ///
-    /// A comment with a space in it is the case that matters, since it is two
-    /// fields and not one: a rule that only skipped a single trailing field
-    /// would pass this test's first half and fail here.
+    /// The fingerprint `check` computes for an ssh key is the one git prints,
+    /// measured with `ssh-keygen -lf` on 2026-10-15.
     #[test]
-    fn a_trailing_comment_is_not_the_key_and_its_key_is_not_the_type() {
-        let parsed = parse_signers(
-            "test@ank.local ssh-ed25519 AAAAC3NzaC1lZDI1 ank test
-             sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A a note
-             marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3Other marie@laptop
-",
-        );
-        assert_eq!(parsed.len(), 3, "{parsed:?}");
-        assert_eq!(parsed[0].keytype, "ssh-ed25519", "{parsed:?}");
-        assert_eq!(parsed[0].key, "AAAAC3NzaC1lZDI1", "{parsed:?}");
-        assert_eq!(parsed[1].keytype, "gpg", "{parsed:?}");
+    fn an_ssh_fingerprint_is_the_one_ssh_keygen_prints() {
         assert_eq!(
-            parsed[1].key, "739A603FB05F9F2F7D3C8D50624FCFCC1482554A",
-            "a fingerprint read as a comment is a fingerprint `declares` can              never match: {parsed:?}"
+            ssh_fingerprint("AAAAC3NzaC1lZDI1NTE5AAAAIOOLkBf5BY1ONWnxBxDOvYuLQyiQZFk2blyflwOvTqGp")
+                .as_deref(),
+            Some("SHA256:dzdOzasfxk3FuGnj+BaOfZnZy2vyhQ13iU7x3lGSEN4")
         );
-        assert_eq!(parsed[2].keytype, "ssh-ed25519", "{parsed:?}");
-        assert_eq!(parsed[2].key, "AAAAC3Other", "{parsed:?}");
+        assert_eq!(ssh_fingerprint("not base64!"), None);
     }
 
-    /// The filter git is handed reads the entry the same way, so a `gpg` line
-    /// with a comment is still withheld from ssh-keygen.
-    ///
-    /// Read from the end, that line's type was the fingerprint, `gpg` matched
-    /// nothing, and the entry went to a parser with no keytype for it -- which
-    /// is exactly the state TASK-01cc22478782 closed and a comment quietly
-    /// reopened.
+    /// The file handed to git is scratch: it holds what it was given, and it
+    /// lives for the git call it was written for and no longer
+    /// (TASK-02350943e2b1).
     #[test]
-    fn a_gpg_entry_with_a_comment_is_still_withheld_from_ssh_keygen() {
-        let handed = git_readable_signers(
-            "sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A a note
-             test@ank.local ssh-ed25519 AAAAC3NzaC1lZDI1 ank test
-",
-        );
-        assert!(!handed.contains("gpg"), "{handed}");
-        assert!(handed.contains("ssh-ed25519"), "{handed}");
-    }
-
-    /// What git is handed carries nothing ssh-keygen would reject, and carries
-    /// everything ssh-keygen would accept unchanged (TASK-01cc22478782).
-    ///
-    /// The `gpg` entry is ank's own extension and the reason the filter exists.
-    /// The line with an option in the middle is the reason it filters rather
-    /// than re-renders: `parse_signers` drops that option, so a copy built from
-    /// what it returns would hand git a permission the reviewed file does not
-    /// grant.
-    #[test]
-    fn git_is_handed_no_line_ssh_keygen_would_reject() {
-        let source = "# a comment\n\
-             \n\
-             sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n\
-             marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3NzaC1lZDI1\n\
-             nonsense\n";
-        let out = git_readable_signers(source);
-
-        for line in out.lines() {
-            let t = line.trim();
-            if t.is_empty() || t.starts_with('#') {
-                continue;
-            }
-            let fields: Vec<&str> = t.split_whitespace().collect();
-            assert!(
-                matches!(fields.as_slice(), [_, .., keytype, _] if !keytype.eq_ignore_ascii_case("gpg")),
-                "ssh-keygen has no keytype for this line: {line:?}"
-            );
-        }
-        assert!(
-            !out.contains("739A603FB05F9F2F7D3C8D50624FCFCC1482554A"),
-            "the gpg entry is ank's own and git cannot read it: {out:?}"
-        );
-        assert!(
-            out.contains("marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3NzaC1lZDI1"),
-            "an entry git can read survives whole, options included: {out:?}"
-        );
-        assert!(
-            !out.contains("nonsense"),
-            "a line neither parser can read is not handed on: {out:?}"
-        );
-        assert!(out.contains("# a comment"), "{out:?}");
-    }
-
-    /// The other half, and the one that says the filter costs nothing where it
-    /// is not needed: a file git can read whole is handed to git as itself, so
-    /// what verifies the corpus is the file under review and not a copy.
-    #[test]
-    fn a_file_git_can_read_whole_is_handed_over_untouched() {
+    fn the_file_handed_to_git_is_scratch() {
         let source = "marie@laptop ssh-ed25519 AAAAC3NzaC1lZDI1\n";
-        assert_eq!(git_readable_signers(source), source);
-
-        let dir = std::env::temp_dir().join(format!("ank-signers-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("allowed_signers");
-        std::fs::write(&file, source).unwrap();
-        assert_eq!(
-            signers_for_git(&file).unwrap().path(),
-            file.as_path(),
-            "no copy is written when none is needed"
-        );
-
-        std::fs::write(&file, format!("sean@example.com gpg 739A60\n{source}")).unwrap();
-        let handed = signers_for_git(&file).unwrap();
-        assert_ne!(
-            handed.path(),
-            file,
-            "a file carrying an ank-only entry needs a copy"
-        );
+        let handed = signers_for_git(source).unwrap();
         assert_eq!(std::fs::read_to_string(handed.path()).unwrap(), source);
-
-        // And the copy is scratch: it lives for the git call it was written
-        // for and no longer (TASK-02350943e2b1). It is not inside `dir` — it
-        // is named after its own content, in the temporary directory — so
-        // removing the directory this test made would never have reached it,
-        // which is how twenty of them came to stand beside the suite's root.
         let copy = handed.path().to_path_buf();
         drop(handed);
         assert!(
@@ -11188,8 +11135,6 @@ mod tests {
             "the copy outlived the value that owned it: {}",
             copy.display()
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn gpg_signer(key: &str) -> Vec<Signer> {
@@ -11197,6 +11142,8 @@ mod tests {
             principal: "sean@example.com".into(),
             keytype: "gpg".into(),
             key: key.into(),
+            note: None,
+            valid_before: None,
         }]
     }
 
@@ -11218,34 +11165,35 @@ mod tests {
         let declared = gpg_signer(fp);
 
         assert_eq!(
-            classify_signature(&facts('G', fp), &declared, false),
+            classify_signature(&facts('G', fp), &declared, false, None),
             Signature::Trusted
         );
         assert_eq!(
-            classify_signature(&facts('N', ""), &declared, false),
+            classify_signature(&facts('N', ""), &declared, false, None),
             Signature::Absent,
             "no signature is the forgery this check exists for"
         );
         assert_eq!(
-            classify_signature(&facts('N', ""), &declared, true),
+            classify_signature(&facts('N', ""), &declared, true, None),
             Signature::Unchecked,
             "the same letter over a commit that does carry a signature is a \
              machine that could not look, not a forgery"
         );
         assert_eq!(
-            classify_signature(&facts('E', fp), &declared, false),
+            classify_signature(&facts('E', fp), &declared, false, None),
             Signature::Unchecked,
             "a missing public key must never read as a valid signature"
         );
         assert_eq!(
-            classify_signature(&facts('B', fp), &declared, false),
+            classify_signature(&facts('B', fp), &declared, false, None),
             Signature::Invalid { status: 'B' }
         );
         assert_eq!(
             classify_signature(
                 &facts('G', "0000000000000000000000000000000000000000"),
                 &declared,
-                false
+                false,
+                None
             ),
             Signature::Undeclared {
                 fingerprint: "0000000000000000000000000000000000000000".into()
@@ -11263,7 +11211,8 @@ mod tests {
             classify_signature(
                 &facts('G', "739A603FB05F9F2F7D3C8D50624FCFCC1482554A"),
                 &declared,
-                false
+                false,
+                None
             ),
             Signature::Trusted
         );
@@ -11276,7 +11225,54 @@ mod tests {
     fn an_untrusted_openpgp_key_is_still_judged_by_the_declaration() {
         let fp = "739A603FB05F9F2F7D3C8D50624FCFCC1482554A";
         assert_eq!(
-            classify_signature(&facts('U', fp), &gpg_signer(fp), false),
+            classify_signature(&facts('U', fp), &gpg_signer(fp), false, None),
+            Signature::Trusted
+        );
+    }
+
+    /// `valid_before` against the committer date, midnight UTC: a commit the
+    /// second before the bound is the key's, the bound itself is not. Under
+    /// OpenPGP, where `check` alone judges it, and under SSH, where git may
+    /// already have said `U` and an older git `G`.
+    #[test]
+    fn a_retired_key_ratifies_nothing_committed_from_its_valid_before() {
+        let fp = "739A603FB05F9F2F7D3C8D50624FCFCC1482554A";
+        let mut declared = gpg_signer(fp);
+        declared[0].valid_before = Some("2026-10-01".into());
+        // 2026-10-01T00:00:00Z
+        let bound = 1_790_812_800;
+        assert_eq!(
+            classify_signature(&facts('G', fp), &declared, false, Some(bound - 1)),
+            Signature::Trusted
+        );
+        assert_eq!(
+            classify_signature(&facts('G', fp), &declared, false, Some(bound)),
+            Signature::Retired {
+                fingerprint: fp.into(),
+                valid_before: "2026-10-01".into()
+            }
+        );
+
+        let ssh_key = "AAAAC3NzaC1lZDI1NTE5AAAAIOOLkBf5BY1ONWnxBxDOvYuLQyiQZFk2blyflwOvTqGp";
+        let ssh_fp = "SHA256:dzdOzasfxk3FuGnj+BaOfZnZy2vyhQ13iU7x3lGSEN4";
+        let ssh = vec![Signer {
+            principal: "marie@laptop".into(),
+            keytype: "ssh-ed25519".into(),
+            key: ssh_key.into(),
+            note: None,
+            valid_before: Some("2026-10-01".into()),
+        }];
+        for status in ['G', 'U'] {
+            assert!(
+                matches!(
+                    classify_signature(&facts(status, ssh_fp), &ssh, false, Some(bound + 3600)),
+                    Signature::Retired { .. }
+                ),
+                "{status}: retired whatever git said"
+            );
+        }
+        assert_eq!(
+            classify_signature(&facts('G', ssh_fp), &ssh, false, Some(bound - 3600)),
             Signature::Trusted
         );
     }
@@ -11291,18 +11287,41 @@ mod tests {
         let ssh = "SHA256:KjhREDTh0GcSpp8doZ/yhLAG62FZ7h26dQTVffo3JFE";
         let unrelated = gpg_signer("739A603FB05F9F2F7D3C8D50624FCFCC1482554A");
         assert_eq!(
-            classify_signature(&facts('G', ssh), &unrelated, false),
+            classify_signature(&facts('G', ssh), &unrelated, false, None),
             Signature::Trusted
         );
         assert!(matches!(
-            classify_signature(&facts('U', ssh), &unrelated, false),
+            classify_signature(&facts('U', ssh), &unrelated, false, None),
             Signature::Undeclared { .. }
         ));
     }
 
-    /// Writes an allowed-signers file, since the fixture has none by default.
-    fn declare(t: &Temp, line: &str) {
-        std::fs::write(t.0.join(".ank").join("allowed_signers"), line).unwrap();
+    /// Declares keys under `signers:`, replacing whatever the block held,
+    /// from lines in git's allowed-signers layout: `principal keytype key`.
+    fn declare(t: &Temp, lines: &str) {
+        let path = t.0.join(".ank").join("config.yml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut text = match text.find("signers:\n") {
+            Some(at) => text[..at].to_string(),
+            None => text,
+        };
+        let mut principals: Vec<(String, Vec<String>)> = Vec::new();
+        for l in lines.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let key = format!("{} {}", f[1], f[2]);
+            match principals.iter_mut().find(|(p, _)| p == f[0]) {
+                Some((_, keys)) => keys.push(key),
+                None => principals.push((f[0].to_string(), vec![key])),
+            }
+        }
+        text.push_str("signers:\n");
+        for (p, keys) in principals {
+            text.push_str(&format!("  {p}:\n    keys:\n"));
+            for k in keys {
+                text.push_str(&format!("      - key: {k}\n"));
+            }
+        }
+        std::fs::write(&path, text).unwrap();
     }
 
     /// The public key `enable_signing` generated, in allowed-signers layout.
@@ -11641,7 +11660,7 @@ mod tests {
             let n = report.unchecked_signatures;
             report.findings.push(Finding::signal(
                 Kind::SignatureUnchecked,
-                "allowed_signers",
+                "signers",
                 format!("{n} ratification signature(s) could not be checked here"),
             ));
         }

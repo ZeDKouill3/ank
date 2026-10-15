@@ -22,8 +22,8 @@ run against.
 ## Layout
 
     .ank/
-      config.yml             repository settings and named verifiers
-      allowed_signers        public keys allowed to ratify (§8), versioned
+      config.yml             repository settings, named verifiers, and under signers:
+                             the keys allowed to ratify (§8)
       entities/TASK-<hex>.md
       entities/ADR-<hex>.md
       entities/SPEC-<hex>.md

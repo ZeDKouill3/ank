@@ -1274,9 +1274,14 @@ fn an_edited_constraint_is_reported_altered_and_stops_being_injected() {
 /// this test exists to refuse.
 fn declare_signing_key(r: &Repo) {
     let pub_key = std::fs::read_to_string(r.0.join("signing-key.pub")).unwrap();
+    let key: Vec<&str> = pub_key.split_whitespace().take(2).collect();
+    let config = std::fs::read_to_string(r.0.join(".ank/config.yml")).unwrap();
     std::fs::write(
-        r.0.join(".ank/allowed_signers"),
-        format!("test@ank.local {}", pub_key.trim()),
+        r.0.join(".ank/config.yml"),
+        format!(
+            "{config}signers:\n  test@ank.local:\n    keys:\n      - key: {}\n",
+            key.join(" ")
+        ),
     )
     .unwrap();
 }
@@ -1458,7 +1463,7 @@ fn a_ratification_by_a_human_is_recorded_as_a_human_reading() {
 /// that says so, and it does not pass for a human one.
 ///
 /// This is the case that was invisible. The commit is signed, `check` verifies
-/// it against `.ank/allowed_signers`, and the corpus used to read back as a
+/// it against `signers:`, and the corpus used to read back as a
 /// decision a human stood behind — because the only thing recorded was the
 /// signature, and the key is not the hand that typed.
 ///
@@ -12406,7 +12411,7 @@ fn a_spec_is_ratified_amended_and_checked_like_an_adr() {
     assert!(!message.contains("constraint+scope"), "{message}");
 
     // Ratified and untouched. Exit 0 here is also what says the signature was
-    // judged and trusted: `.ank/allowed_signers` declares the key, so an
+    // judged and trusted: `signers:` declares the key, so an
     // unsigned or undeclared ratification would be a fault rather than silence.
     let out = r.ank("claude-code@ank", &["check"]);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
@@ -17598,7 +17603,7 @@ fn a_repository_with_no_signing_key_ratifies_and_says_it_was_unsigned() {
             )
         })
         .trim()
-        .trim_start_matches("signal: allowed_signers:")
+        .trim_start_matches("signal: signers:")
         .trim()
         .to_string();
     let reviewed = stdout(&r.ank(AGENT, &["review"]));
@@ -17619,9 +17624,8 @@ review:
 /// **`review` names who may ratify, and nothing else can** (TASK-8a80b590b356).
 ///
 /// ADR-3c8d94a0bbe0 closes `.ank/` to a direct read by an agent, and
-/// `allowed_signers` is not an entity, so `show`, `find` and `config` all pass
-/// over it: before this, the one file the format asks a human to edit by hand
-/// was the one file no command could show. `review` is where the answer belongs
+/// `signers:` is not an entity and not a key `config` reads, so `show`, `find`
+/// and `config` all pass over it. `review` is where the answer belongs
 /// -- §4 calls it the ratification queue, and who may ratify is the standing
 /// half of that question.
 ///
@@ -17634,12 +17638,15 @@ review:
 fn review_names_the_signers_no_other_verb_serves() {
     let r = Repo::new();
     r.seed_docs();
+    let config = std::fs::read_to_string(r.0.join(".ank/config.yml")).unwrap();
     std::fs::write(
-        r.0.join(".ank/allowed_signers"),
-        "# a comment, which is not a signer
-         marie@laptop gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A
-         marie@laptop ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample
-",
+        r.0.join(".ank/config.yml"),
+        format!(
+            "{config}signers:\n  marie@laptop:\n    keys:\n      \
+             # a comment, which is not a signer\n      \
+             - key: gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n      \
+             - key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
+        ),
     )
     .unwrap();
     r.git(&["add", "-A"]);
@@ -17699,7 +17706,7 @@ fn no_declared_key_is_said_in_words_and_never_as_an_empty_section() {
             )
         })
         .trim()
-        .trim_start_matches("signal: allowed_signers:")
+        .trim_start_matches("signal: signers:")
         .trim()
         .to_string();
 
@@ -20571,6 +20578,17 @@ fn json_golden_verbs_needing_their_own_environment() {
     assert_eq!(code(&out), 0, "migrate: {}", stderr(&out));
     fixture::pin("migrate", &stdout(&out));
 
+    // signers migrate, over a former allowed_signers (ADR-5c6db7a161b8)
+    let r = Repo::new();
+    std::fs::write(
+        r.0.join(".ank/allowed_signers"),
+        "# the release key\nmarie@laptop gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n",
+    )
+    .unwrap();
+    let out = r.ank(AGENT, &["signers", "migrate", "--json"]);
+    assert_eq!(code(&out), 0, "signers: {}", stderr(&out));
+    fixture::pin("signers", &stdout(&out));
+
     // archive, over a corpus holding what is cold, and without moving it: the
     // list is the document (TASK-97fd1992567a)
     let r = cold_corpus();
@@ -20727,8 +20745,9 @@ fn every_golden_conforms_to_the_shape_its_verb_declares() {
     // `tests/update.rs` against a bare repository standing in for the releases,
     // and thirty-two since TASK-53a8f5ca2539, which gave `context --since` one,
     // pinned in `tests/context_since.rs` across two worktrees, and thirty-three
-    // since TASK-15b59a393a38, which gave `verify` one.
-    assert_eq!(checked, 33, "one fixture per document the surface returns");
+    // since TASK-15b59a393a38, which gave `verify` one, and thirty-four since
+    // TASK-3a7a73ccf2b7, which gave `signers migrate` one.
+    assert_eq!(checked, 34, "one fixture per document the surface returns");
     // **A declaration is unexercised when no instance of it anywhere carries a
     // row**, which is the reading this list is about (TASK-fbdf25e30058). It
     // used to be one instance at a time: a path went on the list every time the
