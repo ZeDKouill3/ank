@@ -5,7 +5,7 @@ slug: install-yml-restores-its-cargo-cache-on-every-ru
 title: install.yml restores its cargo cache on every run and writes it only from main
 created: 2026-10-14T10:19:07Z
 author: claude-code/opus-5.5
-status: in_progress
+status: done
 scope:
   - .github/workflows/install.yml
 blocked_by: []
@@ -13,8 +13,21 @@ done_criteria: |
   Both cargo-install cache steps of install.yml restore with actions/cache/restore and save with actions/cache/save only on a push to main; after a pull request run that changes Cargo.lock, gh api repos/haksolot/ank/actions/caches lists no entry whose ref is that pull request.
 criteria_by: creator
 verify: [cargo-test, fmt-check]
+proof:
+  - type: test
+    ref: local/8ae568196ffe@8640f4e
+    tree: scope/a4cb0d94c580
+    criteria: d0bd76d895c4
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@8640f4e
+    tree: scope/a4cb0d94c580
+    criteria: d0bd76d895c4
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 2
+version: 3
 ---
 
 TASK-0c23f3551e65 moved ci.yml to restore everywhere and save only from main.
