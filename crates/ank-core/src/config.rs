@@ -17,6 +17,10 @@ pub const DEFAULT_CLAIM_TTL_MAX: &str = "2h";
 /// What `claim` grants without `--ttl` (§3).
 pub const DEFAULT_CLAIM_TTL: &str = "30m";
 pub const DEFAULT_VERIFIER_TIMEOUT: &str = "10m";
+/// How old a passing run of the local registry may be and still be reused by
+/// `done` (ADR-a2faf59f6ce0): long enough to span a working day, short enough
+/// that a toolchain upgraded on the machine meanwhile is not trusted for long.
+pub const DEFAULT_PROOF_REUSE_MAX_AGE: &str = "24h";
 /// The hot corpus a reader pays per file for, as `init` declares it
 /// (ADR-467ce7e9cda1). Measured on 2026-09-14, this repository held 1979 files
 /// under `.ank/entities/`; 3000 leaves it half again, which at August's rate of
@@ -146,6 +150,12 @@ pub static KEYS: &[ConfigKey] = &[
         "string",
         Absent::None,
         "a variable with a fixed value; nothing is passed through from the caller",
+    ),
+    key(
+        "proof.reuse_max_age",
+        "duration",
+        Absent::Text(DEFAULT_PROOF_REUSE_MAX_AGE),
+        "how old a passing run recorded under `<git-common-dir>/ank/runs/` may be for `done` to reuse it rather than run the verifier again; `done --fresh` reuses nothing",
     ),
     key(
         "verifier_jobs",

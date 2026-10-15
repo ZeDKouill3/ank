@@ -169,7 +169,7 @@ static TASK_FIELDS: &[FieldSpec] = &[
     opt(
         "proof",
         Maps,
-        "keys in order: `type`, `ref`, `tree`, `criteria`, `verifier`, `via`",
+        "keys in order: `type`, `ref`, `tree`, `criteria`, `verifier`, `via`, `reused`, `by`",
     ),
     opt(
         "verified",

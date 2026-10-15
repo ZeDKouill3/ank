@@ -570,6 +570,12 @@ fn emit_field(o: &mut String, name: &str, value: &FieldValue<'_>) {
                 if let Some(via) = p.via {
                     o.push_str(&format!("    via: {}\n", via.as_str()));
                 }
+                if let Some(r) = &p.reused {
+                    o.push_str(&format!("    reused: {}\n", emit_scalar(r)));
+                }
+                if let Some(by) = &p.by {
+                    o.push_str(&format!("    by: {}\n", emit_scalar(by)));
+                }
             }
         }
         FieldValue::Readings(readings) => {

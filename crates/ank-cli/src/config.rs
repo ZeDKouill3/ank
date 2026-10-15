@@ -27,6 +27,7 @@ pub const DEFAULT_CLAIM_TTL: &str = ank_core::config::DEFAULT_CLAIM_TTL;
 pub const DEFAULT_VERIFIER_TIMEOUT: &str = ank_core::config::DEFAULT_VERIFIER_TIMEOUT;
 pub const DEFAULT_WEIGHT_HOT_FILES: u64 = ank_core::config::DEFAULT_WEIGHT_HOT_FILES;
 pub const DEFAULT_WEIGHT_PLANE_BYTES: u64 = ank_core::config::DEFAULT_WEIGHT_PLANE_BYTES;
+pub const DEFAULT_PROOF_REUSE_MAX_AGE: &str = ank_core::config::DEFAULT_PROOF_REUSE_MAX_AGE;
 
 pub type Result<T> = std::result::Result<T, CliError>;
 
@@ -79,6 +80,9 @@ struct ConfigFile {
     identities: BTreeMap<String, String>,
     #[serde(default)]
     weight: Weight,
+    /// `proof:`, how `done` treats what it already ran (ADR-a2faf59f6ce0).
+    #[serde(default)]
+    proof: ProofFile,
     /// How many verifiers of one `done` run at once. Absent, the machine's
     /// available parallelism: the bound exists for several agents sharing one
     /// machine, and only somebody who knows there are several can set it.
@@ -106,6 +110,27 @@ impl Default for Weight {
             plane_bytes: DEFAULT_WEIGHT_PLANE_BYTES,
         }
     }
+}
+
+/// `proof:` as written. A mapping of its own rather than a top-level key, so
+/// the next setting about proofs lands beside this one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProofFile {
+    #[serde(default = "default_reuse_max_age")]
+    reuse_max_age: String,
+}
+
+impl Default for ProofFile {
+    fn default() -> ProofFile {
+        ProofFile {
+            reuse_max_age: default_reuse_max_age(),
+        }
+    }
+}
+
+fn default_reuse_max_age() -> String {
+    DEFAULT_PROOF_REUSE_MAX_AGE.to_string()
 }
 
 fn default_hot_files() -> u64 {
@@ -260,6 +285,9 @@ pub struct Config {
     /// [`Config::verifier_jobs`], because what it resolves to is the machine
     /// and not the file.
     pub verifier_jobs: Option<usize>,
+    /// How old a passing run of the local registry may be for `done` to
+    /// reuse it, `proof.reuse_max_age` (ADR-a2faf59f6ce0).
+    pub reuse_max_age: Duration,
 }
 
 impl Config {
@@ -375,6 +403,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
 
     let claim_ttl_max = dur(&raw.claim_ttl_max, "claim_ttl_max")?;
     let claim_ttl_default = dur(&raw.claim_ttl_default, "claim_ttl_default")?;
+    let reuse_max_age = dur(&raw.proof.reuse_max_age, "proof.reuse_max_age")?;
     let mut verifiers = BTreeMap::new();
     let mut default_verifiers = Vec::new();
     for (name, value) in raw.verifiers {
@@ -471,6 +500,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
         identities: raw.identities,
         weight: raw.weight,
         verifier_jobs: raw.verifier_jobs,
+        reuse_max_age,
     })
 }
 
@@ -1029,6 +1059,17 @@ fn resolve_key(path: &str) -> Result<Key> {
                 .to_string(),
             ),
         }),
+        ["proof", "reuse_max_age"] => Ok(Key::Under {
+            map: "proof",
+            name: "reuse_max_age".to_string(),
+            verbatim: false,
+            default: Some(DEFAULT_PROOF_REUSE_MAX_AGE.to_string()),
+        }),
+        ["proof", ..] => Err(CliError::new(
+            ExitCode::Generic,
+            format!("'{path}': proof has one key"),
+        )
+        .with_hint("ank config proof.reuse_max_age")),
         ["weight", ..] => Err(CliError::new(
             ExitCode::Generic,
             format!("'{path}': the weight has two counters"),
@@ -3645,13 +3686,18 @@ mod reference_table {
                         .into_iter()
                         .map(|f| format!("weight.{f}")),
                 ),
+                "proof" => accepted.extend(
+                    fields_of::<ProofFile>()
+                        .into_iter()
+                        .map(|f| format!("proof.{f}")),
+                ),
                 scalar => {
                     accepted.insert(scalar.to_string());
                 }
             }
         }
         let table: BTreeSet<String> = KEYS.iter().map(|k| k.path.to_string()).collect();
-        assert_eq!(accepted.len(), 20, "{accepted:?}");
+        assert_eq!(accepted.len(), 21, "{accepted:?}");
         assert_eq!(table, accepted);
         // What `ank config` addresses is a subset of the table, never a key
         // of its own.
@@ -3729,6 +3775,7 @@ mod reference_table {
             row("weight.plane_bytes"),
             Absent::Number(cfg.weight.plane_bytes)
         );
+        assert_eq!(dur(row("proof.reuse_max_age")), cfg.reuse_max_age);
         assert_eq!(row("verifier_jobs"), Absent::None);
         assert_eq!(cfg.verifier_jobs, None);
         assert!(cfg.verifier_jobs() >= 1);

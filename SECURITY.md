@@ -34,7 +34,7 @@ layer to reach for when you need a refusal that holds.
 This repository ships no such hook. It had one, refusing direct reads of
 `.ank/`, and it was deleted along with the rest of `.claude/` in 264636c. The
 rule it guarded did not go with it: it is the ratified constraint of
-ADR-e45e1a29fe91, `ank context` serves it every session, and `ank check` reports
+ADR-3c8d94a0bbe0, `ank context` serves it every session, and `ank check` reports
 a file written behind the CLI's back. What changed is that the rule is advisory
 here, which is the regime section 1 describes rather than a hole in a defence.
 Install the hook on your own machine if you want the refusal; nothing in this
