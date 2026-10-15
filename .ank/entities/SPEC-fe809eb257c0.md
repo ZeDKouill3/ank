@@ -8,10 +8,10 @@ author: claude-code/opus-5.5+15b5
 status: proposed
 scope:
   - crates/ank-cli/**
-references: [SPEC-89070ce7f3b8, SPEC-ac4aad6d1edb, SPEC-a1234da5449a, ADR-e1d750884b82, ADR-a8f9c603a0e7, ADR-52bb0da2023a, ADR-64f32c74a0f9, ADR-467ce7e9cda1, ADR-4b45f344344f, ADR-5c6db7a161b8, ADR-2a63c0c87691, SPEC-fe67fbaa2708, ADR-c621cb9c6739]
+references: [SPEC-ac4aad6d1edb, SPEC-a1234da5449a, ADR-e1d750884b82, ADR-a8f9c603a0e7, ADR-52bb0da2023a, ADR-64f32c74a0f9, ADR-467ce7e9cda1, ADR-4b45f344344f, ADR-5c6db7a161b8, ADR-2a63c0c87691, ADR-c621cb9c6739, SPEC-558c07ebae8e, SPEC-380d36d6d2db]
 supersedes: SPEC-14cd3e35e927
 schema: 4
-version: 1
+version: 2
 ---
 
 One of the ten documents that carry the Ank specification (ADR-5a690829388d).
