@@ -5,7 +5,7 @@ slug: install-yml-restores-its-cargo-cache-on-every-ru
 title: install.yml restores its cargo cache on every run and writes it only from main
 created: 2026-10-14T10:19:07Z
 author: claude-code/opus-5.5
-status: open
+status: in_progress
 scope:
   - .github/workflows/install.yml
 blocked_by: []
@@ -14,7 +14,7 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 schema: 4
-version: 1
+version: 2
 ---
 
 TASK-0c23f3551e65 moved ci.yml to restore everywhere and save only from main.
