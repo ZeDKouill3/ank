@@ -339,7 +339,14 @@ jobs:
       # Built for the runner's own triple, whichever one the archive name
       # carries: the script picks an archive by name and never reads the
       # format of what is inside, and what has to run here is this machine.
-      - uses: actions/cache@v4
+      #
+      # Restored on every event, written from main only, as ci.yml does and for
+      # its reason (TASK-4a982cff9d5c): an entry a pull request writes is scoped
+      # to its merge ref, which no other run reads, and evicts one of main's
+      # from the 10 GiB the repository gets.
+      - name: restore the cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry/index
@@ -375,6 +382,21 @@ jobs:
           cp "${name}.tar.gz" "${name}.tar.gz.sha256" "../stage/srv/v${BUILT_VERSION}/"
           curl -fs -o /dev/null "http://127.0.0.1:${STAGED_PORT}/v${BUILT_VERSION}/${name}.tar.gz.sha256"
           echo "serving ${name} on ${STAGED_PORT}"
+
+      # The other half of the restore above, right after the only step that
+      # compiles: a push to main, and only when the restore missed its key.
+      - name: save the cargo cache
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       # The offer ADR-5fbd99bf6fd5 describes, driven through a real pty, which
       # is the only place it exists: it is gated on a terminal, and a workflow
@@ -1224,7 +1246,14 @@ jobs:
       # stand-in printing what the verb prints would rehearse the stand-in. So
       # the release below carries ank.exe as this tree builds it, and a stub
       # npx is the only thing faked.
-      - uses: actions/cache@v4
+      #
+      # Restored on every event, written from main only, as ci.yml does and for
+      # its reason (TASK-4a982cff9d5c): an entry a pull request writes is scoped
+      # to its merge ref, which no other run reads, and evicts one of main's
+      # from the 10 GiB the repository gets.
+      - name: restore the cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry/index
@@ -1266,6 +1295,21 @@ jobs:
           Invoke-WebRequest -Uri $url -UseBasicParsing -OutFile (Join-Path $env:TEMP 'probe-built') | Out-Null
           "serving $name on $env:STAGED_PORT"
           exit 0
+
+      # The other half of the restore above, right after the only step that
+      # compiles: a push to main, and only when the restore missed its key.
+      - name: save the cargo cache
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       # The Windows half of the same claim, and the place the two files stop
       # being translations of each other. install.sh opens /dev/tty; this one
