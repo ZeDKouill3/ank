@@ -203,6 +203,10 @@ pub fn run(
             &task.scope,
             &criteria,
             &id,
+            Reuse {
+                identity,
+                fresh: inv.has("--fresh"),
+            },
             inv.style(),
         )?
     };
@@ -444,7 +448,22 @@ fn check_frozen_criteria(id: &EntityId, criteria: &str, claim: &ClaimRecord) -> 
     Ok(())
 }
 
+/// Who is running `done`, and whether it may reuse what already ran
+/// (ADR-a2faf59f6ce0): `--fresh` reuses nothing.
+struct Reuse<'a> {
+    identity: &'a str,
+    fresh: bool,
+}
+
 /// Runs the declared verifiers and gathers one proof each.
+///
+/// **A verifier whose key has a passing run in the registry is not run**
+/// (ADR-a2faf59f6ce0): its entry is the one that run produced, keeping its
+/// reference and its route, with `reused: local` and the identity that ran it,
+/// so it never reads as an execution for this task. Every run this does start
+/// is recorded there, pass or fail, before the verdict is acted on: the pass
+/// of one verifier is exactly what the next `done` after a failure of another
+/// wants to find.
 ///
 /// **It takes no writer**, and that is the point rather than an accident: the
 /// progress it reports goes to standard error, so a function with no way to
@@ -458,11 +477,43 @@ fn run_verifiers(
     scope: &[String],
     criteria: &str,
     id: &EntityId,
+    reuse: Reuse,
     style: crate::style::Style,
 ) -> Result<Vec<Proof>> {
     let head = git::run(&repo.worktree, &["rev-parse", "HEAD"]).unwrap_or_default();
     let tree = scope_hash(&repo.worktree, scope);
     let criteria_hash = freeze_hash_short(criteria);
+
+    // The keys, taken over the tree before anything runs: what a verifier is
+    // recorded against is the content it was started on. Only when every name
+    // is declared -- an undeclared one is refused below, as it always was.
+    let defs: Option<Vec<(&str, &crate::config::Verifier)>> = declared
+        .iter()
+        .map(|n| cfg.verifier(n).map(|v| (n.as_str(), v)))
+        .collect();
+    let registry = verify::registry(&repo.worktree);
+    let keys = defs
+        .as_deref()
+        .zip(registry.as_ref())
+        .and_then(|(defs, _)| verify::keys(&repo.worktree, defs));
+    let now = claim::now_secs();
+    let reused: Vec<Option<verify::Run>> = declared
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            if reuse.fresh {
+                return None;
+            }
+            let (dir, key) = (registry.as_ref()?, keys.as_ref()?.get(i)?);
+            verify::reusable(dir, key, now, cfg.reuse_max_age)
+        })
+        .collect();
+    let to_run: Vec<String> = declared
+        .iter()
+        .zip(&reused)
+        .filter(|(_, r)| r.is_none())
+        .map(|(n, _)| n.clone())
+        .collect();
 
     // Side by side, at most `verifier_jobs` at once (TASK-26eab418555a), and
     // answering exactly what a run one after another would have answered: the
@@ -471,12 +522,64 @@ fn run_verifiers(
     // failure can no longer change that answer, so it is not started, and
     // killed if it already was; one declared before it still can, so it is
     // waited for.
-    let outcomes = run_concurrently(repo, cfg, declared, id, cfg.verifier_jobs());
+    let outcomes = run_concurrently(repo, cfg, &to_run, id, cfg.verifier_jobs());
 
+    // Recorded before the verdict, every run that finished, the failure
+    // included: exit 9 never reaches here, since it is an error and not an
+    // outcome, and a verifier killed because another failed has no answer.
+    if let (Some(dir), Some(keys)) = (&registry, &keys) {
+        let at = claim::now_secs();
+        let ran = declared
+            .iter()
+            .zip(keys)
+            .filter(|(n, _)| to_run.contains(n));
+        for ((_, key), outcome) in ran.zip(&outcomes) {
+            let Ok(Some(o)) = outcome else { continue };
+            let run = verify::Run {
+                key: key.clone(),
+                ok: o.ok,
+                code: if o.timed_out { None } else { o.code },
+                by: reuse.identity.to_string(),
+                at,
+                reference: o.reference(&head, false),
+            };
+            if let Err(e) = verify::record(dir, &run) {
+                eprintln!(
+                    "{} the run of {} was not recorded for reuse: {e}",
+                    style.on_stderr().yellow("warning:"),
+                    o.name
+                );
+            }
+        }
+    }
+
+    let mut outcomes = outcomes.into_iter();
     let mut proofs = Vec::new();
-    for (name, outcome) in declared.iter().zip(outcomes) {
+    for (name, reused) in declared.iter().zip(reused) {
+        if let Some(run) = reused {
+            eprintln!(
+                "running: {name} ... {} (local, by {})",
+                style.on_stderr().green("reused"),
+                run.by
+            );
+            proofs.push(Proof {
+                proof_type: ProofType::Test,
+                reference: run.reference,
+                tree: tree.clone(),
+                criteria: Some(criteria_hash.clone()),
+                verifier: Some(run.key.verifier),
+                // The route of the run that produced it: no new route enters
+                // the trust hierarchy, and `reused` with `by` says the rest.
+                via: Some(ProofVia::Verifier),
+                reused: Some("local".to_string()),
+                by: Some(run.by),
+            });
+            continue;
+        }
         // `None` only ever follows a failure, which returned below first.
-        let Some(outcome) = outcome? else { break };
+        let Some(outcome) = outcomes.next().unwrap_or(Ok(None))? else {
+            break;
+        };
         let def = cfg
             .verifier(name)
             .expect("an undeclared verifier never ran");
@@ -516,6 +619,8 @@ fn run_verifiers(
             // route from another field is a second rule free to disagree with
             // this one.
             via: Some(ProofVia::Verifier),
+            reused: None,
+            by: None,
         });
     }
     Ok(proofs)
@@ -676,6 +781,8 @@ pub fn submitted_proof(
         // file and the route it takes is what makes it a third-party
         // statement. Nothing here is refused: the record is what changes.
         via: Some(ProofVia::Submitted),
+        reused: None,
+        by: None,
     })
 }
 

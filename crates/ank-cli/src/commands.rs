@@ -924,8 +924,8 @@ fn resolve_blockers(store: &Store, ids: &[EntityId], hint: &str) -> Result<()> {
 ///
 /// It names the command that declares one rather than the file to open
 /// (ADR-e64dfaafd578): a hint telling an agent to edit `.ank/config.yml` is the
-/// tool instructing it to do what ADR-e45e1a29fe91 forbids — `ank config` is
-/// the route that writes that file, and that ADR is where it is named as one.
+/// tool instructing it to do what ADR-3c8d94a0bbe0 forbids — `ank config` is
+/// the route that writes that file, and its `writes` declaration says so.
 /// The names already declared come first when there are any, because a typo is
 /// the likelier of the two mistakes and the list settles it in one line.
 fn undeclared_verifier(name: &str, cfg: &Config) -> CliError {
@@ -3662,7 +3662,7 @@ mod tests {
             err.hint.as_deref(),
             Some("ank config verifiers.nope.run \"<command>\""),
             "a hint that names the file is the tool telling an agent to do \
-             what ADR-e45e1a29fe91 forbids"
+             what ADR-3c8d94a0bbe0 forbids"
         );
 
         // With verifiers already declared, the names come first -- a typo is

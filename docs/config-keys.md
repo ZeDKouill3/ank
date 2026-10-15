@@ -23,6 +23,7 @@ The file declares `schema: 1`, the only version this build reads. A duration is 
 | `verifiers.<name>.env.platform` | string | none | `os/arch`, required with `env.image` |
 | `verifiers.<name>.env.network` | `none` or `open` | none | absent, `none` under an image and the host's network without one |
 | `verifiers.<name>.env.vars.<var>` | string | none | a variable with a fixed value; nothing is passed through from the caller |
+| `proof.reuse_max_age` | duration | `24h` | how old a passing run recorded under `<git-common-dir>/ank/runs/` may be for `done` to reuse it rather than run the verifier again; `done --fresh` reuses nothing |
 | `verifier_jobs` | integer | none | how many verifiers one `done` runs at once, at least 1; absent, the machine's available parallelism |
 | `roles.<name>.can` | list of strings | `[]` | what the role may do, declared |
 | `roles.<name>.cannot` | list of strings | `[]` | what the role may not do, declared |
