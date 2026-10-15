@@ -342,8 +342,8 @@ impl Report {
     /// files it is nothing at all: a single dead scope would arrive as "fires
     /// on 1 entity" with its rename read off `--kind`. Measured on this suite,
     /// a threshold of zero turned 80 tests red and every output block of
-    /// docs/check.md into that sentence; the floor is recorded as an amendment
-    /// to the decision rather than taken silently here.
+    /// docs/check.md into that sentence. The floor is ADR-1a91435caf07, an
+    /// amendment proposed beside this code rather than a reading taken here.
     pub fn fold_threshold(&self) -> usize {
         FOLD_CEILING.min(self.hot_files * 5 / 100).max(FOLD_NAMES)
     }
@@ -354,7 +354,8 @@ impl Report {
     ///
     /// **A fault is never folded.** A fault is for reading one by one, and a
     /// folded one would be a red CI with nothing to read. **Nor is a finding
-    /// whose subject is not an entity**: the rule counts entities, and a
+    /// whose subject is not an entity** (ADR-1a91435caf07): the rule counts
+    /// entities, and a
     /// subject such as `corpus`, `allowed_signers` or a ref name is not one --
     /// `corpus` least of all, since it is the shape the fold produces, written
     /// by hand before the rule existed.
