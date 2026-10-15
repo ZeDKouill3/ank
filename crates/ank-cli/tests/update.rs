@@ -863,10 +863,7 @@ fn a_route_that_leaves_no_binary_exits_non_zero_naming_the_repair() {
         run.stderr()
     );
     let stderr = run.stderr();
-    assert!(
-        stderr.contains(&*exe.to_string_lossy()),
-        "the refusal does not name the path that did not answer:\n{stderr}"
-    );
+    assert_names_the_executable(&stderr, " is missing after the install", &exe);
     assert!(
         stderr.contains("npm install -g @haksolot/ank@9000.10.0 --prefer-online"),
         "the refusal does not name the npm command that repairs it:\n{stderr}"
@@ -888,11 +885,35 @@ fn an_installed_binary_that_does_not_answer_exits_non_zero_naming_the_repair() {
     let run = install(&exe, &bare, &[], &[("ANK_STUB_INSTALLED", os(&mute))]);
     assert_eq!(run.code(), Some(9), "{}{}", run.stdout(), run.stderr());
     let stderr = run.stderr();
-    assert!(stderr.contains(&*exe.to_string_lossy()), "{stderr}");
+    assert_names_the_executable(&stderr, " did not answer --version after the install", &exe);
     assert!(
         stderr.contains(&format!(
             "curl -fsSL {INSTALL_SH} | sh -s -- --version v9000.10.0"
         )),
         "the refusal does not name the installer that repairs it:\n{stderr}"
+    );
+}
+
+/// The refusal names `exe`, compared as the filesystem resolves both and never
+/// as strings: the binary names its running executable as the platform reports
+/// it, which on Windows is all backslashes and may be the short name `TEMP`
+/// spelled (`RUNNER~1`), where the test joined `/`-separated components.
+/// The file is gone, so its directory is what gets resolved.
+fn assert_names_the_executable(stderr: &str, tail: &str, exe: &Path) {
+    let named = stderr
+        .lines()
+        .find_map(|l| {
+            l.split_once("the route exited 0, and ")?
+                .1
+                .strip_suffix(tail)
+        })
+        .unwrap_or_else(|| {
+            panic!("the refusal does not name the path that did not answer:\n{stderr}")
+        });
+    let named = Path::new(named);
+    assert_eq!(named.file_name(), exe.file_name(), "{stderr}");
+    assert_same_directory(
+        &named.parent().unwrap().to_string_lossy(),
+        exe.parent().unwrap(),
     );
 }
