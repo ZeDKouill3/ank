@@ -5,7 +5,7 @@ slug: an-in-progress-row-pulses-every-250-ms-while-it
 title: An in-progress row pulses every 250 ms while it is on the screen, and the clock paints, reads nothing and never waits on a key
 created: 2026-10-14T18:31:31Z
 author: planner-b
-status: open
+status: done
 scope:
   - crates/ank-tui/src/lib.rs
   - crates/ank-tui/src/term.rs
@@ -19,8 +19,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/b48661f0b90a@5d9a5b1
+    tree: scope/577298166811
+    criteria: ede175ea0159
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@5d9a5b1
+    tree: scope/577298166811
+    criteria: ede175ea0159
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 The pulse of GRAPH option B: an in-progress row breathes, and the clock that

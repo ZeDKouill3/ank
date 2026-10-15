@@ -357,7 +357,7 @@ impl Repo {
 
     /// One task written through the CLI, blocked by whatever `blocked_by`
     /// names, and the identifier it was given.
-    fn new_task(&self, title: &str, blocked_by: &[&str]) -> String {
+    pub fn new_task(&self, title: &str, blocked_by: &[&str]) -> String {
         let mut args = vec![
             "new",
             "task",
@@ -1080,6 +1080,56 @@ fn utf8_width(first: u8) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// The pulse
+// ---------------------------------------------------------------------------
+
+/// Every character the pulse of a task in progress is drawn with, in both
+/// alphabets (TASK-54bb5cddc671): `· • ●` and `. o O`, read off the layout's
+/// own table.
+pub fn pulse_glyphs() -> Vec<char> {
+    use ank_tui::graph::{Alphabet, Glyph};
+    let phases = [
+        Glyph::InProgress0,
+        Glyph::InProgress1,
+        Glyph::InProgress2,
+        Glyph::InProgress3,
+    ];
+    let mut out: Vec<char> = Vec::new();
+    for alphabet in [Alphabet::Boxes, Alphabet::Ascii] {
+        for phase in phases {
+            let c = alphabet.glyph(phase);
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// Whether two samples of one screen differ in nothing but cells where both
+/// carry a glyph of the pulse (TASK-54bb5cddc671): the same lines, each the
+/// same width, and every character equal or both the pulse's.
+///
+/// **Masked where they differ and nowhere else**, so a screen whose only
+/// motion is a task in progress breathing counts as settled, and a screen
+/// where anything else moved does not. In the ASCII alphabet the pulse is
+/// `.`, `o` and `O`, which prose carries too; a frame whose only difference
+/// was one of those letters turning into another would be read as settled,
+/// and no screen this reader draws changes that way.
+pub fn same_but_the_pulse(a: &str, b: &str) -> bool {
+    let pulse = pulse_glyphs();
+    let (a, b): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+    a.len() == b.len()
+        && a.iter().zip(&b).all(|(x, y)| {
+            let (x, y): (Vec<char>, Vec<char>) = (x.chars().collect(), y.chars().collect());
+            x.len() == y.len()
+                && x.iter()
+                    .zip(&y)
+                    .all(|(p, q)| p == q || (pulse.contains(p) && pulse.contains(q)))
+        })
+}
+
+// ---------------------------------------------------------------------------
 // A driven session
 // ---------------------------------------------------------------------------
 
@@ -1350,12 +1400,20 @@ impl Live {
     /// for every suite at once: there are twenty `until("the session to open")`
     /// calls in this crate and one of them going unfixed is a flake nobody
     /// reproduces.
+    ///
+    /// **Settled modulo the pulse** (TASK-54bb5cddc671). A task in progress on
+    /// the graph changes its cell four times a second, so two samples two
+    /// hundred milliseconds apart of a screen that has otherwise stopped are
+    /// as often different as equal. They are compared with the pulse's cells
+    /// masked ([`same_but_the_pulse`]), and what comes back is the second
+    /// sample, at whichever phase it was taken: a caller comparing two
+    /// frames where a task pulses compares them the same way.
     pub fn frame(&self) -> String {
         let mut last = String::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
             let now = self.screen.lock().unwrap().text();
-            if !now.trim().is_empty() && now == last && !now.contains(UNREAD) {
+            if !now.trim().is_empty() && same_but_the_pulse(&now, &last) && !now.contains(UNREAD) {
                 return now;
             }
             last = now;
@@ -1397,6 +1455,13 @@ impl Live {
     pub fn tap(&mut self, column: u16, row: u16) {
         self.send(&format!("\x1b[<0;{};{}M", column + 1, row + 1));
         self.send(&format!("\x1b[<0;{};{}m", column + 1, row + 1));
+    }
+
+    /// Every distinct frame this session has painted so far, in order
+    /// (TASK-54bb5cddc671): what a suite counting the frames a clock drew
+    /// reads, before and after the interval it measures.
+    pub fn painted(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
     }
 
     /// Every byte the session wrote, sequences included.

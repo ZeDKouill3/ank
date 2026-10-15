@@ -50,6 +50,12 @@ const WIDE: (u16, u16) = (160, 45);
 /// The two windows the criterion names.
 const WINDOWS: [(u16, u16); 2] = [DESK, WIDE];
 
+/// The pulse of a task under way, phase by phase (TASK-54bb5cddc671): `· • ●
+/// •` where the terminal draws box-drawing glyphs, and `. o O o` on one that
+/// declared itself dumb.
+const BOXES_PULSE: [char; 4] = ['\u{00B7}', '\u{2022}', '\u{25CF}', '\u{2022}'];
+const ASCII_PULSE: [char; 4] = ['.', 'o', 'O', 'o'];
+
 /// The arrow keys, as a terminal sends them.
 const DOWN: &str = "\x1b[B";
 const UP: &str = "\x1b[A";
@@ -673,13 +679,15 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
     }
 }
 
-/// **The cell of the task under way is `·` and the closed blocker's is `●`;
-/// every other task's is `○`** (TASK-de02dbcf9965), at both windows.
+/// **The cell of the task under way is the pulse and the closed blocker's is
+/// `●`; every other task's is `○`** (TASK-de02dbcf9965), at both windows.
 ///
 /// The column between the identifier and the title holds the readiness word
 /// (TASK-9ea4dc65755b) -- `ready` on the dependent whose blocker is closed and
 /// `waits 1` on the chain's third -- and the cell says the status, not the
-/// readiness.
+/// readiness. The task under way breathes (TASK-54bb5cddc671), so the frame
+/// read here carries whichever phase of `· • ● •` was up when it was taken;
+/// which phases it walks through is the pulse's own test, below.
 #[cfg(unix)]
 #[test]
 fn the_cell_says_finished_open_or_under_way() {
@@ -707,10 +715,16 @@ fn the_cell_says_finished_open_or_under_way() {
                 row.text
             );
         };
-        cell(
-            &fixture.under_way,
-            ank_tui::graph::Glyph::InProgress0,
-            "in progress",
+        let breathing = row_of(&drawn, &fixture.under_way);
+        assert!(
+            BOXES_PULSE.iter().any(|c| breathing.lanes().contains(*c)),
+            "the task under way carries no phase of the pulse at {columns}x{rows}: {:?}\n{frame}",
+            breathing.text
+        );
+        assert!(
+            breathing.text.contains("  in progress  "),
+            "the task under way lost its word: {:?}\n{frame}",
+            breathing.text
         );
         cell(&fixture.closed, ank_tui::graph::Glyph::Settled, "closed");
         cell(&fixture.lone, ank_tui::graph::Glyph::Open, "ready");
@@ -726,8 +740,14 @@ fn the_cell_says_finished_open_or_under_way() {
 }
 
 /// **The frame painted and the frame drawn with `NO_COLOR` are identical
-/// character for character** (TASK-643611645dea, ADR-1f70ce2c3eac), at both
-/// windows.
+/// character for character, at every phase of the pulse**
+/// (TASK-643611645dea, TASK-54bb5cddc671, ADR-1f70ce2c3eac), at both windows.
+///
+/// Two sessions cannot share a tick, so the measurement is over sets: each
+/// session is left on the graph for three seconds of pulsing, and every frame
+/// the painting session painted in them, read as characters, is a frame the
+/// plain session painted too. The painted frames are held to carrying every
+/// phase's glyph, so the comparison is made at each of them and not at one.
 #[cfg(unix)]
 #[test]
 fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
@@ -738,22 +758,280 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
     for (columns, rows) in WINDOWS {
         let mut painted = Live::painting(&fixture.repo, columns, rows);
         opened(&painted, columns);
-        let with = on_graph(&mut painted, columns);
+        on_graph(&mut painted, columns);
+        let with = pulsing(&painted, PULSING);
         painted.quit();
         let mut plain = Live::open(&fixture.repo, columns, rows);
         opened(&plain, columns);
-        let without = on_graph(&mut plain, columns);
+        on_graph(&mut plain, columns);
+        let without = pulsing(&plain, PULSING);
         plain.quit();
+        let seen = phases(&with, columns, &fixture.under_way);
         assert_eq!(
-            with, without,
-            "the painted graph says something the plain one does not at {columns}x{rows}"
+            seen,
+            BOXES_PULSE.iter().copied().collect(),
+            "the painting session did not walk the pulse at {columns}x{rows}"
         );
+        for frame in &with {
+            assert!(
+                without.contains(frame),
+                "the painting session painted a frame the plain one never did at \
+                 {columns}x{rows}:\n{frame}"
+            );
+        }
         assert_eq!(
-            graph_rows(&with, columns).len(),
+            graph_rows(&with[0], columns).len(),
             11,
-            "the frames compared hold no graph:\n{with}"
+            "the frames compared hold no graph:\n{}",
+            with[0]
         );
     }
+}
+
+/// How long a session is left pulsing where the pulse is measured.
+#[cfg(unix)]
+const PULSING: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long a session is left where nothing may pulse.
+#[cfg(unix)]
+const STILL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The frames a session painted over `interval`, from the one on the screen
+/// when it began: the session is settled first, so what follows is what a
+/// clock drew and nothing a key or a read did.
+#[cfg(unix)]
+fn pulsing(live: &Live, interval: std::time::Duration) -> Vec<String> {
+    live.frame();
+    let from = live.painted().len().saturating_sub(1);
+    std::thread::sleep(interval);
+    live.painted()[from..].to_vec()
+}
+
+/// The glyphs the cell of `under_way` carried over `frames`.
+///
+/// A frame that does not carry the row -- one a chunk of the terminal handed
+/// over half drawn -- says nothing and is passed over; the cell is the first
+/// character of the row's lane field that is a glyph of the pulse in either
+/// alphabet, which no other glyph on that row is.
+#[cfg(unix)]
+fn phases(frames: &[String], columns: u16, under_way: &str) -> std::collections::BTreeSet<char> {
+    let short = short_of(under_way);
+    let pulse = crate::terminal::pulse_glyphs();
+    frames
+        .iter()
+        .filter_map(|frame| {
+            let rows = graph_rows(frame, columns);
+            let row = rows.iter().find(|r| r.short() == short)?;
+            row.lanes().chars().find(|c| pulse.contains(c))
+        })
+        .collect()
+}
+
+/// **A task under way pulses `· • ● •` in its cell, a tick at most every
+/// quarter of a second, and the pulse reads nothing** (TASK-54bb5cddc671), at
+/// both windows.
+///
+/// Three seconds on the graph with the task under way on the screen: every
+/// phase's glyph is seen in its cell; no more than thirteen distinct frames
+/// are painted, which is twelve ticks and one settle, a bound a slow runner
+/// can only undershoot; and `ANK_TRACE_READS` is the same file byte for byte
+/// after them as before, so not one verb was spawned for the clock.
+#[cfg(unix)]
+#[test]
+fn a_task_under_way_pulses_through_its_four_phases_and_the_pulse_reads_nothing() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let fixture = Repo::graphed();
+    fixture.repo.warm_find();
+    for (columns, rows) in WINDOWS {
+        let trace_path = fixture.repo.0.join(format!("pulse-{columns}.trace"));
+        let _ = std::fs::remove_file(&trace_path);
+        let traced = trace_path.to_str().expect("a UTF-8 path");
+        let mut live = Live::with(&fixture.repo, columns, rows, &[("ANK_TRACE_READS", traced)]);
+        opened(&live, columns);
+        on_graph(&mut live, columns);
+        live.frame();
+        let before = std::fs::read(&trace_path).expect("the opening's reads were traced");
+        let frames = pulsing(&live, PULSING);
+        let after = std::fs::read(&trace_path).expect("the trace is still there");
+        assert_eq!(
+            before,
+            after,
+            "the pulse spawned a read at {columns}x{rows}:\n{}",
+            String::from_utf8_lossy(&after[before.len().min(after.len())..])
+        );
+        let seen = phases(&frames, columns, &fixture.under_way);
+        assert_eq!(
+            seen,
+            BOXES_PULSE.iter().copied().collect(),
+            "not every phase of the pulse was seen in three seconds at {columns}x{rows}"
+        );
+        // The frame the interval began on is not one it painted.
+        let painted = frames.len() - 1;
+        assert!(
+            painted <= 13,
+            "{painted} distinct frames in three seconds at {columns}x{rows}: more than one \
+             a quarter of a second"
+        );
+        live.quit();
+    }
+}
+
+/// **On a terminal declaring `TERM=dumb` the pulse is `. o O o`**
+/// (TASK-54bb5cddc671, ADR-559eebf5c6f5), at both windows.
+#[cfg(unix)]
+#[test]
+fn a_dumb_terminal_pulses_in_the_ascii_alphabet() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let fixture = Repo::graphed();
+    for (columns, rows) in WINDOWS {
+        let mut live = Live::dumb(&fixture.repo, columns, rows);
+        live.until("the session to open", |t| {
+            t.contains("2 ENTITIES") && !t.contains(crate::terminal::UNREAD)
+        });
+        live.send("3");
+        live.until("the graph to be drawn", |t| {
+            t.contains("3 GRAPH") && graph_drawn(t) && t.contains("> ")
+        });
+        let frames = pulsing(&live, PULSING);
+        assert_eq!(
+            phases(&frames, columns, &fixture.under_way),
+            ASCII_PULSE.iter().copied().collect(),
+            "the dumb terminal's pulse at {columns}x{rows}"
+        );
+        live.quit();
+    }
+}
+
+/// Whether a session paints nothing at all for `STILL`: not a frame, not a
+/// byte. The session is settled first.
+#[cfg(unix)]
+fn paints_nothing(live: &Live, what: &str) {
+    live.frame();
+    let (frames, bytes) = (live.painted().len(), live.raw().len());
+    std::thread::sleep(STILL);
+    assert_eq!(
+        live.painted().len(),
+        frames,
+        "{what}: a frame was painted with nobody typing:\n{}",
+        live.now()
+    );
+    assert_eq!(
+        live.raw().len(),
+        bytes,
+        "{what}: the session wrote to the terminal with nobody typing"
+    );
+}
+
+/// [`Repo::graphed`] and thirty tasks more, linked to nothing, so the graph
+/// is longer than a page at both windows and the row of the task under way,
+/// in the first block, can be scrolled out of it.
+#[cfg(unix)]
+fn taller() -> Graphed {
+    let fixture = Repo::graphed();
+    for n in 0..30 {
+        fixture
+            .repo
+            .new_task(&format!("A task the page has to scroll past {n}"), &[]);
+    }
+    fixture
+}
+
+/// **Off the page, under a document, or with nothing in progress, nothing is
+/// painted** (TASK-54bb5cddc671), at both windows.
+///
+/// With the row of the task under way scrolled out of the graph's page, and
+/// again with its document opened over the graph, two seconds pass and the
+/// session writes not one byte; and over a corpus with no task in progress,
+/// on the graph, the same.
+#[cfg(unix)]
+#[test]
+fn off_the_page_under_a_document_or_with_nothing_in_progress_nothing_is_painted() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let fixture = taller();
+    let under_way = short_of(&fixture.under_way);
+    for (columns, rows) in WINDOWS {
+        let mut live = Live::open(&fixture.repo, columns, rows);
+        opened(&live, columns);
+        on_graph(&mut live, columns);
+        // Paged to the end of the graph: the first block leaves the page.
+        for _ in 0..8 {
+            live.send(" ");
+        }
+        live.until("the row under way to leave the page", |t| {
+            graph_drawn(t)
+                && !graph_rows(t, columns).is_empty()
+                && graph_rows(t, columns)
+                    .iter()
+                    .all(|r| r.short() != under_way)
+        });
+        paints_nothing(&live, &format!("scrolled out at {columns}x{rows}"));
+
+        // Back to the top, onto the row under way, and its document opened.
+        live.send("g");
+        let top = live.until("the cursor on the first row", |t| {
+            graph_rows(t, columns)
+                .iter()
+                .any(|r| r.short() == under_way)
+                && under_cursor(t).is_some()
+        });
+        if under_cursor(&top).as_deref() != Some(under_way.as_str()) {
+            live.send("j");
+        }
+        live.until("the cursor on the row under way", |t| {
+            under_cursor(t).as_deref() == Some(under_way.as_str())
+        });
+        live.send("\r");
+        live.until("the document to open", |t| {
+            t.contains(&crate::terminal::body_naming(&under_way))
+        });
+        paints_nothing(&live, &format!("under its document at {columns}x{rows}"));
+        live.quit();
+    }
+
+    // A corpus with no task in progress, on the graph.
+    let quiet = Repo::seeded();
+    for (columns, rows) in WINDOWS {
+        let mut live = Live::open(&quiet, columns, rows);
+        opened(&live, columns);
+        on_graph(&mut live, columns);
+        paints_nothing(&live, &format!("nothing in progress at {columns}x{rows}"));
+        live.quit();
+    }
+}
+
+/// **Two samples that differ only where the pulse is drawn are one settled
+/// screen; any other difference is not** (TASK-54bb5cddc671): the harness's
+/// wait, held to literal frames.
+#[cfg(unix)]
+#[test]
+fn a_screen_whose_only_motion_is_the_pulse_is_settled() {
+    use crate::terminal::same_but_the_pulse;
+    let at = |cell: char| {
+        format!("ank tui\n|> {cell}  TASK-b0a1   in progress\n|  o  TASK-c0a1   ready\n")
+    };
+    for (a, b) in [
+        ('\u{00B7}', '\u{2022}'),
+        ('\u{2022}', '\u{25CF}'),
+        ('.', 'o'),
+        ('o', 'O'),
+    ] {
+        assert!(same_but_the_pulse(&at(a), &at(b)), "{a} -> {b}");
+    }
+    assert!(!same_but_the_pulse(&at('.'), &at('x')), "a letter moved");
+    assert!(
+        !same_but_the_pulse(&at('.'), &at('.').replace("ready", "waits")),
+        "a word moved"
+    );
+    assert!(
+        !same_but_the_pulse(&at('.'), &format!("{}more\n", at('.'))),
+        "a line was added"
+    );
 }
 
 /// **On a terminal declaring `TERM=dumb` the same frame carries `@`, `o`,
@@ -795,7 +1073,14 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
                 row.text
             );
         };
-        cell(&fixture.under_way, Glyph::InProgress0);
+        // Whichever phase of `. o O o` was up when the frame was taken
+        // (TASK-54bb5cddc671).
+        let breathing = row_of(&drawn, &fixture.under_way).lanes();
+        assert!(
+            ASCII_PULSE.iter().any(|c| breathing.contains(*c)),
+            "the task under way carries no ASCII phase of the pulse at \
+             {columns}x{rows}: {breathing:?}\n{frame}"
+        );
         cell(&fixture.closed, Glyph::Settled);
         cell(&fixture.lone, Glyph::Open);
         // The second of the chain has a lane passing beside it whichever of
