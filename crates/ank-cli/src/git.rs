@@ -387,6 +387,7 @@ pub fn worktree_files(cwd: &Path) -> Option<WorktreeFiles> {
     Some(WorktreeFiles {
         counted,
         set_aside: set_aside.into_iter().collect(),
+        deleted,
     })
 }
 
@@ -479,6 +480,10 @@ pub struct WorktreeFiles {
     /// on disk (a gitlink, a link to a directory), anything under `target` or
     /// `node_modules`. None of them is a file git ignores.
     pub set_aside: HashSet<String>,
+    /// The tracked paths whose working copy is gone, which `counted` leaves
+    /// out. Already in hand from the second listing, at no process of its own:
+    /// `verify` counts a deletion as a change (ADR-c621cb9c6739).
+    pub deleted: HashSet<String>,
 }
 
 /// Splits a `-z` stream into relative paths, dropping the trailing empty

@@ -20465,6 +20465,19 @@ fn json_golden_writing_verbs() {
     );
     fixture::pin("attest", &stdout(&out));
 
+    // verify, over a corpus declaring one verifier a change touches and one
+    // it does not, so both `ran` and `skipped` carry a row
+    let r = golden_repo();
+    let config = r.0.join(".ank/config.yml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "verifiers:\n  whole:\n    run: \"true\"\n  docs:\n    run: \"true\"\n    inputs: [\"docs/**\"]\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    let out = r.ank(AGENT, &["verify", "--json"]);
+    assert_eq!(code(&out), 0, "verify: {}", stderr(&out));
+    fixture::pin("verify", &stdout(&out));
+
     // amend and close, on a corpus that never claimed. A fourth task, because
     // the corpus already blocks ID on GOLDEN_BLOCKER: a blocker the task
     // already carries is nothing to amend, and the fixture would pin an empty
@@ -20673,8 +20686,9 @@ fn every_golden_conforms_to_the_shape_its_verb_declares() {
     // since TASK-161c402c27fb, which gave `update --check` one, pinned in
     // `tests/update.rs` against a bare repository standing in for the releases,
     // and thirty-two since TASK-53a8f5ca2539, which gave `context --since` one,
-    // pinned in `tests/context_since.rs` across two worktrees.
-    assert_eq!(checked, 32, "one fixture per document the surface returns");
+    // pinned in `tests/context_since.rs` across two worktrees, and thirty-three
+    // since TASK-15b59a393a38, which gave `verify` one.
+    assert_eq!(checked, 33, "one fixture per document the surface returns");
     // **A declaration is unexercised when no instance of it anywhere carries a
     // row**, which is the reading this list is about (TASK-fbdf25e30058). It
     // used to be one instance at a time: a path went on the list every time the

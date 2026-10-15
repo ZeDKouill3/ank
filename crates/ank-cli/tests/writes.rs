@@ -66,6 +66,10 @@ const READERS: &[(&str, &[&str])] = &[
     ("skills", &["skills"]),
     ("skills", &["skills", "--json"]),
     ("update", &["update", "--check"]),
+    // No verifier is declared here, so the measurement is of the verb and its
+    // selection alone; what it records lives under the git common directory.
+    ("verify", &["verify"]),
+    ("verify", &["verify", "--json"]),
     ("help", &["help"]),
     ("help", &["help", "--json"]),
 ];

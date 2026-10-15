@@ -1473,6 +1473,7 @@ fn dispatch(
     let code = match inv.command {
         "context" => crate::context::run(&inv, &s.repo, &s.config, &s.identity, out),
         "done" => crate::done::run(&inv, &s.repo, &s.config, &s.identity, out),
+        "verify" => crate::verify::run_verb(&inv, &s.repo, &s.config, &s.identity, out),
         "claim" => crate::claim::run(&inv, &s.repo, &s.config, &s.identity, out),
         "new" => crate::commands::new(&inv, &s.repo, &s.config, &s.identity, out),
         "find" => crate::commands::find(&inv, &s.repo, &s.config, &s.identity, out),
@@ -1641,7 +1642,7 @@ mod tests {
         // counting.
         assert_eq!(
             COMMANDS.len(),
-            29,
+            30,
             "every verb of §4, plus init and help from §9. The surface is \
              complete, so this number moves only when §4 does"
         );
@@ -1717,9 +1718,9 @@ mod tests {
         // opposite direction: `init`, `claim` and `context` are the verbs
         // routed today, and all must be clear of it.
         for routed in [
-            "init", "help", "config", "claim", "context", "done", "log", "release", "new", "find",
-            "attest", "amend", "show", "edit", "migrate", "tui", "mcp", "watch", "skills",
-            "update",
+            "init", "help", "config", "claim", "context", "verify", "done", "log", "release",
+            "new", "find", "attest", "amend", "show", "edit", "migrate", "tui", "mcp", "watch",
+            "skills", "update",
         ] {
             assert_eq!(
                 spec_of(routed).unwrap().owner_task,

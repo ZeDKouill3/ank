@@ -1164,6 +1164,38 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: &[when("reading, `ank log <id>`", &[f("about", Type::Str), f("total", Type::Num), f("shown", Type::Num), f("entries", Type::Array(LOG_ENTRY)), f("machinery", Type::Array(LOG_ENTRY))]), when("appending, `ank log <id> <message>`", &[f("about", Type::Str), f("entry", Type::Str), f("logged", Type::Bool), f("warnings", Type::Strings)])],
         owner_task: None,
     },
+    // Before `done`, which it feeds: the run `verify` records is the one the
+    // `done` after it reuses (ADR-c621cb9c6739). It writes no file and no ref
+    // of the corpus; the registry it fills lives under the git common
+    // directory, where `done` already writes it.
+    CommandSpec {
+        name: "verify",
+        group: "run the loop",
+        renews: Renews::Never,
+        writes: Writes::Nothing,
+        coordinates: true,
+        summary: "runs the verifiers config.yml declares that a change touches, and records each run for the done that follows; needs no claim",
+        subcommands: &[],
+        kinds: &[],
+        max_positionals: 0,
+        positional_help: "",
+        flags: &[],
+        refuses: &[
+            refuses(ExitCode::Proof, "a selected verifier ran and said no, or ran out of its timeout"),
+            UNPARSEABLE_CALL,
+            NO_GIT,
+        ],
+        notes: &[
+            "a file is changed when it was committed on the branch since the merge-base with the default branch, when it is tracked and modified or deleted, or when it is untracked and not ignored",
+            "a verifier is selected when one of its inputs globs matches a changed file; one declaring no inputs is always selected",
+            "each run is recorded under <git-common-dir>/ank/runs/ with the content key done computes, so a following done reuses a passing one and says reused: local",
+            "it writes no proof, no ref and no entity, and the selection is printed and never recorded",
+            PUSH_NONE,
+        ],
+        refuses_globals: &[],
+        output: &[one(&[opt("base", Type::Str), f("changed", Type::Num), f("ran", Type::Array(&[f("name", Type::Str), f("verifier", Type::Str), f("ok", Type::Bool)])), f("skipped", Type::Strings)])],
+        owner_task: None,
+    },
     CommandSpec {
         name: "done",
         group: "run the loop",
