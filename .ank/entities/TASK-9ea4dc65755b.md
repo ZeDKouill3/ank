@@ -5,7 +5,7 @@ slug: a-graph-row-says-ready-waits-n-in-progress-done
 title: A graph row says ready, waits N, in progress, done or closed in place of the raw status, and the fixture holds a task under way
 created: 2026-10-14T18:31:19Z
 author: planner-b
-status: open
+status: done
 scope:
   - crates/ank-tui/src/view.rs
   - crates/ank-tui/tests/graph.rs
@@ -16,8 +16,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/38e417015b51@fcf1f0b
+    tree: scope/94713d3db64c
+    criteria: 77ddafbbc3f5
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@fcf1f0b
+    tree: scope/94713d3db64c
+    criteria: 77ddafbbc3f5
+    verifier: fmt-check@5ca6d10bcd55
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 The readiness column of GRAPH option B: the row says what the graph knows
