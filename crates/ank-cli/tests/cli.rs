@@ -12916,6 +12916,9 @@ fn valid_value(flag: &str) -> &'static str {
         // A sibling this binary carries: any other name is the verb correctly
         // refusing the value, which is not a refusal of the flag.
         "--method" => "tdd",
+        // A kind `check` declares: any other word is the verb refusing the
+        // value, which is not a refusal of the flag (ADR-df1035934387).
+        "--kind" => "read-by-no-human",
         "--criteria" => "A measurable thing.",
         "--reason" => "a reason",
         "--title" => "A title",
@@ -14007,7 +14010,9 @@ const GLOB_FLAGS: [(&str, &str); 3] = [
 /// path if it is called `--scope`" — is exactly what would let the next
 /// `--under <glob>` through in silence, which is the failure this whole task is
 /// a correction of.
-const NOT_A_PATH: [&str; 40] = [
+const NOT_A_PATH: [&str; 41] = [
+    // A word naming a rule of `check`, and never a file (ADR-df1035934387).
+    "--kind",
     // Carries no value at all: `done --fresh` reuses no recorded run
     // (ADR-a2faf59f6ce0).
     "--fresh",
@@ -23063,7 +23068,11 @@ const REVIEW_PAGE: &str = concat!(
     "  ADR-00000000aa10\n",
     "  ADR-00000000aa11\n",
     "\n",
-    "12 fault(s), 14 signal(s)\n",
+    // 14 signals at ed72f51; twelve of them one kind on the twelve decisions,
+    // which `review` counts as the one signal `check` folds them into
+    // (ADR-df1035934387). The dead scopes above stay listed one by one: they
+    // are faults, and a fault is never folded.
+    "12 fault(s), 3 signal(s)\n",
 );
 
 /// What `scope src/` printed on this fixture before the change, whole.
@@ -24590,7 +24599,10 @@ fn a_ref_in_a_namespace_no_reader_serves_is_one_signal_naming_it_and_its_deletio
     // The existing shape, field for field and type for type.
     let map = f.as_mapping().expect("a finding is an object");
     let keys: Vec<&str> = map.keys().filter_map(|k| k.as_str()).collect();
-    assert_eq!(keys, ["level", "subject", "message", "note", "charge"]);
+    assert_eq!(
+        keys,
+        ["level", "kind", "subject", "message", "note", "charge"]
+    );
     assert!(
         f["subject"].is_string() && f["message"].is_string(),
         "{f:#?}"

@@ -77,9 +77,133 @@ pub struct Charge {
     pub characters: usize,
 }
 
+/// Declares [`Kind`] and the word each variant answers to, in one table.
+///
+/// One table, because the word is the contract (ADR-df1035934387): `--json`
+/// carries it, `check --kind` takes it, and the fold names it in the command it
+/// prints. A variant and its word declared apart would be two places for one
+/// fact to disagree.
+macro_rules! kinds {
+    ($($variant:ident => $word:literal,)*) => {
+        /// Which rule a finding comes from: one stable word per rule `check`
+        /// applies (ADR-df1035934387).
+        ///
+        /// Stable because a caller filters on it: renaming one is a contract
+        /// change, where rewording a message is not. A rule with two severities
+        /// -- a dead scope git can or cannot explain -- is still one rule and one
+        /// kind, and the level says which.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum Kind {
+            $($variant,)*
+        }
+
+        impl Kind {
+            /// Every kind, in the order `check --kind` names them on a refusal.
+            pub const ALL: &'static [Kind] = &[$(Kind::$variant,)*];
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Kind::$variant => $word,)*
+                }
+            }
+
+            pub fn parse(word: &str) -> Option<Kind> {
+                Kind::ALL.iter().copied().find(|k| k.as_str() == word)
+            }
+        }
+    };
+}
+
+kinds! {
+    Unreadable => "unreadable",
+    ConflictMarkers => "conflict-markers",
+    Unparseable => "unparseable",
+    Crlf => "crlf",
+    NonCanonical => "non-canonical",
+    FileName => "file-name",
+    Misfiled => "misfiled",
+    PreviousLayout => "previous-layout",
+    PreviousLogDir => "previous-log-dir",
+    ResolutionIncomplete => "resolution-incomplete",
+    CoordinationSkipped => "coordination-skipped",
+    ArchiveChanged => "archive-changed",
+    Cold => "cold",
+    SignatureUnchecked => "signature-unchecked",
+    SignatureUnreadable => "signature-unreadable",
+    DefaultBranchUnknown => "default-branch-unknown",
+    DefaultBranchEmpty => "default-branch-empty",
+    OriginRefspec => "origin-refspec",
+    RefName => "ref-name",
+    RefRecord => "ref-record",
+    ProofRefGrowth => "proof-ref-growth",
+    UnservedRef => "unserved-ref",
+    OrphanRef => "orphan-ref",
+    Unmerged => "unmerged",
+    NoSigners => "no-signers",
+    NoScope => "no-scope",
+    InvalidGlob => "invalid-glob",
+    ScopeNotYet => "scope-not-yet",
+    ScopeClosed => "scope-closed",
+    DeadScope => "dead-scope",
+    BlockerMissing => "blocker-missing",
+    BlockerClosed => "blocker-closed",
+    BlockerPeer => "blocker-peer",
+    Cycle => "cycle",
+    SelfBlocking => "self-blocking",
+    CriteriaByClaimer => "criteria-by-claimer",
+    NoCriteria => "no-criteria",
+    CriteriaDiverged => "criteria-diverged",
+    Claimless => "claimless",
+    ClaimExpired => "claim-expired",
+    ConstraintsChanged => "constraints-changed",
+    Discrepancy => "discrepancy",
+    LogUnreadable => "log-unreadable",
+    NoProof => "no-proof",
+    WeakProof => "weak-proof",
+    UnattestedProof => "unattested-proof",
+    ProofCommitUnreachable => "proof-commit-unreachable",
+    VerifierAbsent => "verifier-absent",
+    VerifierChanged => "verifier-changed",
+    Future => "future",
+    OverConstrained => "over-constrained",
+    Weight => "weight",
+    NoConstraint => "no-constraint",
+    EnforcedBy => "enforced-by",
+    Reference => "reference",
+    StaleCitation => "stale-citation",
+    Supersession => "supersession",
+    Unratified => "unratified",
+    RatificationAltered => "ratification-altered",
+    RatificationUnverifiable => "ratification-unverifiable",
+    Signature => "signature",
+    SelfRatified => "self-ratified",
+    EditedOutside => "edited-outside",
+    BornOutside => "born-outside",
+    LogRewritten => "log-rewritten",
+    LogUnknownWord => "log-unknown-word",
+    LogOrphan => "log-orphan",
+    LogChanged => "log-changed",
+    ProseIdentifiers => "prose-identifiers",
+    Authorless => "authorless",
+    UntypedAuthor => "untyped-author",
+    ReadByNoHuman => "read-by-no-human",
+    Burst => "burst",
+    Drift => "drift",
+    DriftUncompared => "drift-uncompared",
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub level: Level,
+    /// The rule that fired, which is what the fold groups by and what `--json`
+    /// hands a caller instead of the opening words of `message`.
+    pub kind: Kind,
     pub subject: String,
     pub message: String,
     /// What the finding does not say and the reader needs anyway, printed
@@ -101,18 +225,20 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn fault(subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
+    fn fault(kind: Kind, subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
         Finding {
             level: Level::Fault,
+            kind,
             subject: subject.to_string(),
             message: message.into(),
             note: Vec::new(),
             charge: Vec::new(),
         }
     }
-    fn signal(subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
+    fn signal(kind: Kind, subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
         Finding {
             level: Level::Signal,
+            kind,
             subject: subject.to_string(),
             message: message.into(),
             note: Vec::new(),
@@ -204,6 +330,111 @@ impl Report {
             ExitCode::Ok
         }
     }
+
+    /// How many entities a kind may fire on and still be reported per entity:
+    /// the smaller of [`FOLD_CEILING`] and five percent of the hot corpus
+    /// (ADR-df1035934387), twenty on a corpus of 400 hot files and more.
+    ///
+    /// **Never fewer than [`FOLD_NAMES`].** A fold names five entities, so a
+    /// kind firing on five or fewer would be folded into a line naming every
+    /// one of them, and the reader would be handed a longer answer with less in
+    /// it. Five percent of a corpus under 100 files is under five, and under 20
+    /// files it is nothing at all: a single dead scope would arrive as "fires
+    /// on 1 entity" with its rename read off `--kind`. Measured on this suite,
+    /// a threshold of zero turned 80 tests red and every output block of
+    /// docs/check.md into that sentence; the floor is recorded as an amendment
+    /// to the decision rather than taken silently here.
+    pub fn fold_threshold(&self) -> usize {
+        FOLD_CEILING.min(self.hot_files * 5 / 100).max(FOLD_NAMES)
+    }
+
+    /// The report a reader is shown: every signal kind firing on more entities
+    /// than [`Report::fold_threshold`] becomes one signal for the corpus, in the
+    /// place its first line held (ADR-df1035934387).
+    ///
+    /// **A fault is never folded.** A fault is for reading one by one, and a
+    /// folded one would be a red CI with nothing to read. **Nor is a finding
+    /// whose subject is not an entity**: the rule counts entities, and a
+    /// subject such as `corpus`, `allowed_signers` or a ref name is not one --
+    /// `corpus` least of all, since it is the shape the fold produces, written
+    /// by hand before the rule existed.
+    ///
+    /// Applied by the readers and never by [`inspect`], so the per-entity
+    /// findings stay what `check --kind` lists and what a rule's own test
+    /// asserts on, and the fold is the one place a count is turned into prose.
+    pub fn folded(mut self) -> Report {
+        let threshold = self.fold_threshold();
+        let mut fired: BTreeMap<Kind, Vec<String>> = BTreeMap::new();
+        let mut seen: HashSet<(Kind, &str)> = HashSet::new();
+        for f in self.findings.iter().filter(|f| f.foldable()) {
+            if seen.insert((f.kind, f.subject.as_str())) {
+                fired.entry(f.kind).or_default().push(f.subject.clone());
+            }
+        }
+        fired.retain(|_, entities| entities.len() > threshold);
+        if fired.is_empty() {
+            return self;
+        }
+        let mut placed: HashSet<Kind> = HashSet::new();
+        let findings = std::mem::take(&mut self.findings);
+        for f in findings {
+            match fired.get(&f.kind).filter(|_| f.foldable()) {
+                Some(entities) => {
+                    if placed.insert(f.kind) {
+                        self.findings.push(Finding::folded(f.kind, entities));
+                    }
+                }
+                None => self.findings.push(f),
+            }
+        }
+        self
+    }
+
+    /// The findings of one kind alone, unfolded: what the command a folded
+    /// signal names lists.
+    pub fn only(mut self, kind: Kind) -> Report {
+        self.findings.retain(|f| f.kind == kind);
+        self
+    }
+}
+
+/// The most entities a kind reports one by one, however large the corpus
+/// (ADR-df1035934387).
+pub const FOLD_CEILING: usize = 20;
+
+/// How many identifiers a folded signal names (ADR-df1035934387).
+const FOLD_NAMES: usize = 5;
+
+impl Finding {
+    /// Whether the fold may take it: a signal about one entity, named by its id
+    /// or by its file.
+    fn foldable(&self) -> bool {
+        self.level == Level::Signal
+            && EntityId::parse(self.subject.strip_suffix(".md").unwrap_or(&self.subject)).is_ok()
+    }
+
+    /// The one signal a kind becomes once it fires past the threshold.
+    ///
+    /// The message names the kind, the count and the first five entities in
+    /// the order `check` met them; the note is the command that lists them
+    /// all, on its own line so a reader can copy it.
+    fn folded(kind: Kind, entities: &[String]) -> Finding {
+        let n = entities.len();
+        let first = entities
+            .iter()
+            .take(FOLD_NAMES)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let what = if n == 1 { "entity" } else { "entities" };
+        let more = if n > FOLD_NAMES { " ..." } else { "" };
+        Finding::signal(
+            kind,
+            "corpus",
+            format!("{kind} fires on {n} {what}, reported once for the corpus: {first}{more}"),
+        )
+        .with_note(vec![format!("ank check --kind {kind} lists every one")])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +442,7 @@ impl Report {
 // ---------------------------------------------------------------------------
 
 pub fn check(inv: &Invocation, repo: &Repo, cfg: &Config, out: &mut dyn Write) -> Result<ExitCode> {
+    let kind = kind_flag(inv)?;
     let path = crate::context::perimeter(inv, repo)?;
     // Repaired before the inspection reads a single ref, so the proofs the
     // fetch brings are the ones it counts (ADR-1b030fe70442). Only where git
@@ -223,8 +455,39 @@ pub fn check(inv: &Invocation, repo: &Repo, cfg: &Config, out: &mut dyn Write) -
         origin
     });
     let report = inspect_with(repo, cfg, path.as_deref(), true, origin)?;
-    render(&report, inv, out);
-    Ok(report.exit_code())
+    // The code is the whole corpus's whatever is shown: narrowing the listing
+    // to one kind must not turn a corpus with a fault green.
+    let code = report.exit_code();
+    let shown = match kind {
+        Some(kind) => report.only(kind),
+        None => report.folded(),
+    };
+    render(&shown, inv, out);
+    Ok(code)
+}
+
+/// The kind `--kind` names, refused at 7 when no rule answers to it, before
+/// the corpus is read: a word misremembered lists nothing, and an empty list
+/// would read as a clean corpus.
+fn kind_flag(inv: &Invocation) -> Result<Option<Kind>> {
+    let Some(word) = inv.value("--kind") else {
+        return Ok(None);
+    };
+    match Kind::parse(word) {
+        Some(kind) => Ok(Some(kind)),
+        None => Err(CliError::new(
+            ExitCode::Prerequisite,
+            format!(
+                "no rule of check answers to the kind '{word}'; the kinds are {}",
+                Kind::ALL
+                    .iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+        .with_hint("ank check --kind <kind>")),
+    }
 }
 
 /// Everything mechanical §4 lists, plus the maintenance of §7.
@@ -299,19 +562,25 @@ pub fn inspect_with(
             let Ok(text) = std::fs::read_to_string(&p) else {
                 report
                     .findings
-                    .push(Finding::fault(&name, "unreadable file"));
+                    .push(Finding::fault(Kind::Unreadable, &name, "unreadable file"));
                 continue;
             };
             // A merge left half-done is a corpus fault long before it is a
             // parse error, and the message has to say so plainly (§7).
             if has_conflict_markers(&text) {
-                report
-                    .findings
-                    .push(Finding::fault(&name, "unresolved git conflict markers"));
+                report.findings.push(Finding::fault(
+                    Kind::ConflictMarkers,
+                    &name,
+                    "unresolved git conflict markers",
+                ));
                 continue;
             }
             match parse_entity(&text) {
-                Err(e) => report.findings.push(Finding::fault(&name, format!("{e}"))),
+                Err(e) => {
+                    report
+                        .findings
+                        .push(Finding::fault(Kind::Unparseable, &name, format!("{e}")))
+                }
                 Ok(entity) => {
                     let canonical = serialize_entity(&entity);
                     if canonical != text {
@@ -323,11 +592,13 @@ pub fn inspect_with(
                         // signal, exit 0. Anything else is a corpus defect.
                         if has_crlf(&text) && canonical == normalise_line_endings(&text) {
                             report.findings.push(Finding::signal(
+                                Kind::Crlf,
                                 &name,
                                 ank_core::Error::CrlfLineEndings.to_string(),
                             ));
                         } else {
                             report.findings.push(Finding::fault(
+                                Kind::NonCanonical,
                                 &name,
                                 "non-canonical form (round-trip differs)",
                             ));
@@ -335,6 +606,7 @@ pub fn inspect_with(
                     }
                     if name != format!("{}.md", entity.id()) {
                         report.findings.push(Finding::fault(
+                            Kind::FileName,
                             &name,
                             format!("file name does not carry {}", entity.id()),
                         ));
@@ -347,6 +619,7 @@ pub fn inspect_with(
                     if let Some(kind) = kind_of_dir {
                         if entity.id().kind() != kind {
                             report.findings.push(Finding::fault(
+                                Kind::Misfiled,
                                 &name,
                                 format!(
                                     "a {} filed under {}",
@@ -411,6 +684,7 @@ pub fn inspect_with(
             };
             if has_conflict_markers(&text) {
                 report.findings.push(Finding::fault(
+                    Kind::ConflictMarkers,
                     format!("{}/{stem}.md", Store::LOG_DIR),
                     "unresolved git conflict markers",
                 ));
@@ -452,9 +726,11 @@ pub fn inspect_with(
         for (rel, digest) in index.archived_digests()? {
             archived_paths.push(rel.clone());
             let Ok(bytes) = std::fs::read(repo.ank.join(&rel)) else {
-                report
-                    .findings
-                    .push(Finding::fault(&rel, "unreadable archived file"));
+                report.findings.push(Finding::fault(
+                    Kind::Unreadable,
+                    &rel,
+                    "unreadable archived file",
+                ));
                 continue;
             };
             if crate::index::hash_bytes(&bytes) != digest {
@@ -470,6 +746,7 @@ pub fn inspect_with(
     // `check`. Reported once, with the command that moves it.
     if still_legacy > 0 {
         report.findings.push(Finding::signal(
+            Kind::PreviousLayout,
             "corpus",
             format!(
                 "{still_legacy} entities are in the previous layout: entities live \
@@ -485,6 +762,7 @@ pub fn inspect_with(
     // becoming an entity is a rewrite and not a rename.
     if previous_log_files > 0 {
         report.findings.push(Finding::signal(
+            Kind::PreviousLogDir,
             "corpus",
             format!(
                 "{previous_log_files} entities keep their log in .ank/{}/: an entry is an \
@@ -601,6 +879,7 @@ pub fn inspect_with(
         };
         report.findings.push(
             Finding::signal(
+                Kind::ResolutionIncomplete,
                 "corpus",
                 format!(
                     "resolution is incomplete: {} entity file(s) could not be read{why}. \
@@ -715,6 +994,7 @@ pub fn inspect_with(
         (coord, detached, Some(branch))
     } else {
         report.findings.push(Finding::signal(
+            Kind::CoordinationSkipped,
             "coordination",
             "half skipped: no git repository here, so claim refs, ratification \
              signatures, completion refs and detached proofs were neither read \
@@ -749,6 +1029,7 @@ pub fn inspect_with(
         };
         if let Some(held_by) = held_by {
             report.findings.push(Finding::fault(
+                Kind::ArchiveChanged,
                 rel,
                 format!(
                     "archived file changed: its bytes no longer match {held_by}, and an \
@@ -902,6 +1183,7 @@ pub fn inspect_with(
         if !cold.is_empty() {
             report.findings.push(
                 Finding::signal(
+                    Kind::Cold,
                     "corpus",
                     format!(
                         "{} hot entities are cold and belong in .ank/archive/entities/, \
@@ -948,6 +1230,7 @@ pub fn inspect_with(
     if report.unchecked_signatures > 0 {
         let n = report.unchecked_signatures;
         report.findings.push(Finding::signal(
+            Kind::SignatureUnchecked,
             "allowed_signers",
             format!(
                 "{n} ratification signature(s) could not be checked here: no public key \
@@ -964,6 +1247,7 @@ pub fn inspect_with(
         let n = report.unreadable_signatures;
         let why = report.signature_failure.as_deref().unwrap_or("git failed");
         report.findings.push(Finding::signal(
+            Kind::SignatureUnreadable,
             "allowed_signers",
             format!(
                 "{n} ratification signature(s) could not be read, so they are \
@@ -985,6 +1269,7 @@ pub fn inspect_with(
             maintain_proofs(repo, branch, &detached, &statuses, prune, &mut report)?;
         }
         Some(Err(_)) => report.findings.push(Finding::signal(
+            Kind::DefaultBranchUnknown,
             "coordination",
             "default branch indeterminable, completion refs neither pruned nor judged \
              and log entries not compared against it (ank config default_branch <name>)",
@@ -1019,7 +1304,7 @@ pub fn inspect_with(
 /// The line is `status`'s too, word for word, so the two surfaces read alike.
 pub fn origin_refspec_finding(origin: crate::init::OriginFetch) -> Option<Finding> {
     (origin == crate::init::OriginFetch::Lacks)
-        .then(|| Finding::signal("origin", origin_refspec_gap()))
+        .then(|| Finding::signal(Kind::OriginRefspec, "origin", origin_refspec_gap()))
 }
 
 /// The sentence both surfaces print for [`crate::init::OriginFetch::Lacks`].
@@ -1073,9 +1358,11 @@ fn coordination(cwd: &Path, report: &mut Report) -> Result<Plane> {
         let Ok(id) = EntityId::parse(rest) else {
             // A ref in one of these namespaces whose tail is not an identifier
             // is an orphan by construction: nothing will ever address it.
-            report
-                .findings
-                .push(Finding::fault(&r.name, "ref name is not an identifier"));
+            report.findings.push(Finding::fault(
+                Kind::RefName,
+                &r.name,
+                "ref name is not an identifier",
+            ));
             continue;
         };
         let read = match records.get(&r.object) {
@@ -1099,6 +1386,7 @@ fn coordination(cwd: &Path, report: &mut Report) -> Result<Plane> {
                     let extra = claim::redundant_attestations(&p.proofs);
                     if extra > 0 {
                         report.findings.push(Finding::signal(
+                            Kind::ProofRefGrowth,
                             &r.name,
                             format!(
                                 "{} attestations of {} fact(s): the ref grows with runs \
@@ -1120,12 +1408,15 @@ fn coordination(cwd: &Path, report: &mut Report) -> Result<Plane> {
                 // a held task as free or lose an attestation, and both are the
                 // silent fallback this file refuses everywhere else.
                 _ => report.findings.push(Finding::fault(
+                    Kind::RefRecord,
                     &r.name,
                     "record of the wrong kind for its namespace",
                 )),
             },
             Ok(None) => {}
-            Err(e) => report.findings.push(Finding::fault(&r.name, e.message)),
+            Err(e) => report
+                .findings
+                .push(Finding::fault(Kind::RefRecord, &r.name, e.message)),
         }
     }
     Ok((map, proofs))
@@ -1177,6 +1468,7 @@ fn foreign_namespaces(refs: &[git::AnkRef], report: &mut Report) {
     for (namespace, mut names) in by_namespace {
         names.sort_unstable();
         let mut finding = Finding::signal(
+            Kind::UnservedRef,
             &namespace,
             format!(
                 "{} ref(s) in a namespace no reader serves: no verb reads \
@@ -1529,9 +1821,11 @@ pub const NO_RATIFICATION_KEY: &str =
 fn check_signers(repo: &Repo, report: &mut Report) {
     let keys = declared_signers(repo).len();
     if keys == 0 {
-        report
-            .findings
-            .push(Finding::signal("allowed_signers", NO_RATIFICATION_KEY));
+        report.findings.push(Finding::signal(
+            Kind::NoSigners,
+            "allowed_signers",
+            NO_RATIFICATION_KEY,
+        ));
     }
 }
 
@@ -1745,9 +2039,11 @@ fn check_scope_alive(
 ) {
     let globs = entity.scope();
     if globs.is_empty() {
-        report
-            .findings
-            .push(Finding::fault(entity.id(), "no scope: attached to nothing"));
+        report.findings.push(Finding::fault(
+            Kind::NoScope,
+            entity.id(),
+            "no scope: attached to nothing",
+        ));
         return;
     }
     // Fault for a constraint, signal for work still to come. The asymmetry is
@@ -1798,6 +2094,7 @@ fn check_scope_alive(
         // which is the fault this used to raise by compiling it here.
         let Some(alive) = verdicts.get(&compiled) else {
             report.findings.push(Finding::fault(
+                Kind::InvalidGlob,
                 entity.id(),
                 format!("invalid glob '{glob}'"),
             ));
@@ -1881,6 +2178,7 @@ fn check_scope_alive(
         }
         let finding = if ahead_of_the_code {
             Finding::signal(
+                Kind::ScopeNotYet,
                 entity.id(),
                 format!("scope '{glob}' matches no file yet: work not started, or a typo"),
             )
@@ -1891,6 +2189,7 @@ fn check_scope_alive(
             // that the task is closed and the perimeter went with it, which is a
             // record and not a repair — so nothing here names a command.
             Finding::signal(
+                Kind::ScopeClosed,
                 entity.id(),
                 format!("scope '{glob}' matches no file, and the task is closed: nothing is owed"),
             )
@@ -1900,8 +2199,8 @@ fn check_scope_alive(
                 None => format!("dead scope '{glob}': no file matches it"),
             };
             match explained || unverifiable || ignored.is_some() {
-                true => Finding::signal(entity.id(), message),
-                false => Finding::fault(entity.id(), message),
+                true => Finding::signal(Kind::DeadScope, entity.id(), message),
+                false => Finding::fault(Kind::DeadScope, entity.id(), message),
             }
         };
         report.findings.push(finding.with_note(note));
@@ -2218,6 +2517,7 @@ fn check_task(
             // leaves the dependent is judged nowhere here.
             None if archived.contains(&b.to_string()) => {}
             None => report.findings.push(Finding::fault(
+                Kind::BlockerMissing,
                 &t.id,
                 format!("blocked_by names {b}, which does not exist"),
             )),
@@ -2241,6 +2541,7 @@ fn check_task(
             // invent.
             Some(TaskStatus::Closed) if t.status != TaskStatus::Closed => {
                 report.findings.push(Finding::signal(
+                    Kind::BlockerClosed,
                     &t.id,
                     format!("blocked by {b}, which is closed: close down the chain or rewrite it"),
                 ))
@@ -2259,6 +2560,7 @@ fn check_task(
     for b in &t.peer_blocked_by {
         if !cfg.peers.contains_key(&b.peer) {
             report.findings.push(Finding::fault(
+                Kind::BlockerPeer,
                 &t.id,
                 format!(
                     "blocked_by names {b}, an undeclared peer (ank config peers.{} <path>)",
@@ -2277,11 +2579,13 @@ fn check_task(
         });
         match read {
             Err(why) => report.findings.push(Finding::signal(
+                Kind::BlockerPeer,
                 &t.id,
                 format!("blocked_by names {b}, which cannot be read, so it holds: {why}"),
             )),
             Ok(statuses) => match statuses.get(&b.id).map(String::as_str) {
                 None => report.findings.push(Finding::fault(
+                    Kind::BlockerMissing,
                     &t.id,
                     format!(
                         "blocked_by names {b}, a task peer '{}' does not hold",
@@ -2290,6 +2594,7 @@ fn check_task(
                 )),
                 Some("closed") if t.status != TaskStatus::Closed => {
                     report.findings.push(Finding::signal(
+                        Kind::BlockerClosed,
                         &t.id,
                         format!(
                             "blocked by {b}, which is closed: close down the chain or rewrite it"
@@ -2305,20 +2610,23 @@ fn check_task(
     // created it. Not forbidden, and visible.
     if t.criteria_by == Some(CriteriaBy::Claimer) {
         report.findings.push(Finding::signal(
+            Kind::CriteriaByClaimer,
             &t.id,
             "done_criteria set by the claimer, not by the creator",
         ));
     }
 
     if t.status == TaskStatus::InProgress && t.done_criteria.is_none() {
-        report
-            .findings
-            .push(Finding::fault(&t.id, "in progress with no done_criteria"));
+        report.findings.push(Finding::fault(
+            Kind::NoCriteria,
+            &t.id,
+            "in progress with no done_criteria",
+        ));
     }
     if t.status == TaskStatus::Done && proofs.is_empty() {
         report
             .findings
-            .push(Finding::fault(&t.id, "done with no proof"));
+            .push(Finding::fault(Kind::NoProof, &t.id, "done with no proof"));
     }
 
     // A status that says held, with no record to hold it. The arm below already
@@ -2333,6 +2641,7 @@ fn check_task(
     // matter, and an exit code people learn to ignore is worse than none.
     if t.status == TaskStatus::InProgress && !coord.contains_key(&t.id) {
         report.findings.push(Finding::signal(
+            Kind::Claimless,
             &t.id,
             format!(
                 "in_progress with no claim ref: nothing holds it (ank claim {})",
@@ -2347,6 +2656,7 @@ fn check_task(
         if let Some(criteria) = &t.done_criteria {
             if !verify_frozen(criteria, &c.criteria) {
                 report.findings.push(Finding::fault(
+                    Kind::CriteriaDiverged,
                     &t.id,
                     format!(
                         "done_criteria diverges from the claim (claimed {}, now {})",
@@ -2358,6 +2668,7 @@ fn check_task(
         }
         if claim::is_expired(c, claim::now_secs(), &t.id).unwrap_or(false) {
             report.findings.push(Finding::signal(
+                Kind::ClaimExpired,
                 &t.id,
                 format!("claim by {} expired: the task is claimable again", c.holder),
             ));
@@ -2369,6 +2680,7 @@ fn check_task(
         {
             if claim::constraints_hash(&applicable) != c.constraints {
                 report.findings.push(Finding::signal(
+                    Kind::ConstraintsChanged,
                     &t.id,
                     "applicable constraints changed since the claim: re-read ank context",
                 ));
@@ -2403,6 +2715,7 @@ fn check_task(
                 // reads one shape, which a leading count would have broken.
                 report.findings.push(
                     Finding::signal(
+                        Kind::Discrepancy,
                         &t.id,
                         format!(
                             "discrepancy recorded against the frozen criterion: the freeze is \
@@ -2423,6 +2736,7 @@ fn check_task(
         // refuses everywhere else: the record would disappear along with the
         // line that broke the parse, and no line anywhere would say so.
         Err(LogUnread::Why(why)) => report.findings.push(Finding::signal(
+            Kind::LogUnreadable,
             &t.id,
             format!(
                 "log unreadable, so a discrepancy it records is not reported: {why} \
@@ -2447,6 +2761,7 @@ fn check_task(
         // one finding per task, because the task is what is being judged.
         let kind = proofs[0].proof_type.as_str();
         report.findings.push(Finding::signal(
+            Kind::WeakProof,
             &t.id,
             format!("weak proof '{kind}': it anchors nothing"),
         ));
@@ -2501,6 +2816,7 @@ fn check_task(
             None => "done with no test proof: nothing external anchors it".to_string(),
         };
         report.findings.push(Finding::signal(
+            Kind::UnattestedProof,
             &t.id,
             format!(
                 "{head} (ank attest {} --proof test:<run-id> --detached)",
@@ -2532,6 +2848,7 @@ fn check_task(
         .collect();
     for reference in dead {
         report.findings.push(Finding::signal(
+            Kind::ProofCommitUnreachable,
             &t.id,
             format!(
                 "proof commit:{reference} names no commit reachable here: rebased away, \
@@ -2547,11 +2864,13 @@ fn check_task(
         if let Some((name, hash)) = p.verifier.as_ref().and_then(|v| v.split_once('@')) {
             match cfg.verifier(name) {
                 None => report.findings.push(Finding::signal(
+                    Kind::VerifierAbsent,
                     &t.id,
                     format!("proof anchors verifier '{name}', absent from config.yml"),
                 )),
                 Some(def) if verify::definition_hash(def) != hash => {
                     report.findings.push(Finding::signal(
+                        Kind::VerifierChanged,
                         &t.id,
                         format!(
                             "verifier '{name}' changed since the proof ({hash} -> {})",
@@ -2579,6 +2898,7 @@ fn check_task(
         match &t.done_criteria {
             Some(criteria) if verify_frozen(criteria, anchor) => {}
             Some(criteria) => report.findings.push(Finding::fault(
+                Kind::CriteriaDiverged,
                 &t.id,
                 format!(
                     "done_criteria diverges from the proof (proved {anchor}, now {}): \
@@ -2587,6 +2907,7 @@ fn check_task(
                 ),
             )),
             None => report.findings.push(Finding::fault(
+                Kind::CriteriaDiverged,
                 &t.id,
                 format!("done_criteria diverges from the proof (proved {anchor}, now absent)"),
             )),
@@ -2598,6 +2919,7 @@ fn check_task(
     if let Some(created) = claim::parse_utc(&t.created) {
         if created > claim::now_secs() + 86_400 {
             report.findings.push(Finding::signal(
+                Kind::Future,
                 &t.id,
                 format!("created in the future ({})", t.created),
             ));
@@ -2659,6 +2981,7 @@ fn check_task(
                 charge.sort_by(|a, b| b.characters.cmp(&a.characters).then(a.id.cmp(&b.id)));
                 report.findings.push(
                     Finding::signal(
+                        Kind::OverConstrained,
                         &t.id,
                         format!(
                             "over-constrained scope: {weight} characters of constraint against a \
@@ -2686,6 +3009,7 @@ fn check_weight(cfg: &Config, report: &mut Report) {
     let hot = report.hot_files as u64;
     if hot > budget.hot_files {
         report.findings.push(Finding::signal(
+            Kind::Weight,
             "weight.hot_files",
             format!(
                 "{hot} entity files under .ank/entities/, over the budget of {}: \
@@ -2709,6 +3033,7 @@ fn check_weight(cfg: &Config, report: &mut Report) {
             .collect();
         report.findings.push(
             Finding::signal(
+                Kind::Weight,
                 "weight.plane_bytes",
                 format!(
                     "{bytes} bytes of claim and proof records under refs/ank/, over the \
@@ -2931,9 +3256,11 @@ fn check_adr(
     check_anchor(&view, repo, "its constraint is no longer injected", report);
     check_enforced_by(a, &repo.worktree, tracked, report);
     if a.constraint.trim().is_empty() {
-        report
-            .findings
-            .push(Finding::fault(&a.id, "no constraint: it binds nothing"));
+        report.findings.push(Finding::fault(
+            Kind::NoConstraint,
+            &a.id,
+            "no constraint: it binds nothing",
+        ));
     }
 }
 
@@ -2957,6 +3284,7 @@ fn check_enforced_by(a: &Adr, root: &Path, tracked: &HashSet<&str>, report: &mut
         let repair = format!("ank amend {} --drop-enforced-by \"{entry}\"", a.id);
         let Some((path, symbol)) = ank_core::split_enforcement(entry) else {
             report.findings.push(Finding::signal(
+                Kind::EnforcedBy,
                 &a.id,
                 format!("enforced_by '{entry}' is not <path>#<symbol> ({repair})"),
             ));
@@ -2964,6 +3292,7 @@ fn check_enforced_by(a: &Adr, root: &Path, tracked: &HashSet<&str>, report: &mut
         };
         if !tracked.contains(path) {
             report.findings.push(Finding::signal(
+                Kind::EnforcedBy,
                 &a.id,
                 format!(
                     "enforced_by '{entry}': no tracked file is {path}, so nothing there \
@@ -2975,6 +3304,7 @@ fn check_enforced_by(a: &Adr, root: &Path, tracked: &HashSet<&str>, report: &mut
         let text = std::fs::read_to_string(root.join(path)).unwrap_or_default();
         if !contains_word(&text, symbol) {
             report.findings.push(Finding::signal(
+                Kind::EnforcedBy,
                 &a.id,
                 format!("enforced_by '{entry}': {path} does not contain {symbol} ({repair})"),
             ));
@@ -3099,6 +3429,7 @@ fn check_relation(
         // reason the one that does is.
         if !(rel.allowed)(target.kind()) {
             report.findings.push(Finding::fault(
+                Kind::Reference,
                 citer,
                 format!(
                     "{} ({})",
@@ -3131,6 +3462,7 @@ fn check_relation(
                 continue;
             }
             report.findings.push(Finding::fault(
+                Kind::Reference,
                 citer,
                 format!(
                     "{} {target}, which does not exist ({})",
@@ -3222,6 +3554,7 @@ fn judge_reference(
         // reference resolves and nothing is owed.
         AdrStatus::Accepted => {}
         AdrStatus::Proposed => report.findings.push(Finding::signal(
+            Kind::Reference,
             citer,
             if named == target {
                 format!(
@@ -3248,6 +3581,7 @@ fn judge_reference(
         // could not load, which is the same case one link further on.
         AdrStatus::Superseded if unread.is_empty() => {
             report.findings.push(Finding::signal(
+                Kind::Reference,
                 citer,
                 if named == target {
                     format!(
@@ -3377,6 +3711,7 @@ fn check_stale_citations(
         });
         report.findings.push(
             Finding::fault(
+                Kind::StaleCitation,
                 id,
                 format!(
                     "superseded, and the workspace still cites it in {} {}: {} {} outside .ank/",
@@ -3423,6 +3758,7 @@ fn check_succession(
             // what the archive holds is verified by digest, not re-judged.
         } else if !peers.contains(target) && !unread.contains(&target.to_string()) {
             report.findings.push(Finding::fault(
+                Kind::Supersession,
                 view.id,
                 format!("supersedes {target}, which does not exist"),
             ));
@@ -3447,11 +3783,12 @@ fn check_succession(
                 let message = format!("supersedes {target}, which is not marked superseded");
                 report.findings.push(if view.status == AdrStatus::Proposed {
                     Finding::signal(
+                        Kind::Supersession,
                         view.id,
                         format!("{message} (proposed: not yet a succession)"),
                     )
                 } else {
-                    Finding::fault(view.id, message)
+                    Finding::fault(Kind::Supersession, view.id, message)
                 });
             }
         }
@@ -3463,6 +3800,7 @@ fn check_succession(
             .any(|(_, e)| Anchored::of_kind(e, kind).is_some_and(|v| v.supersedes == Some(view.id)))
     {
         report.findings.push(Finding::fault(
+            Kind::Supersession,
             view.id,
             format!("marked superseded but no {} supersedes it", kind_word(kind)),
         ));
@@ -3480,12 +3818,14 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
         // bootstrap exception. Making it a violation would condemn a whole
         // corpus at once and block every `done` behind it.
         report.findings.push(Finding::signal(
+            Kind::Unratified,
             view.id,
             "accepted with no ratification commit (bootstrap, or accepted by hand)",
         ));
     }
     match freeze_state(repo, *view) {
         Freeze::Altered { ratified, now } => report.findings.push(Finding::fault(
+            Kind::RatificationAltered,
             view.id,
             format!("altered since ratification (ratified {ratified}, now {now}): {consequence}"),
         )),
@@ -3495,6 +3835,7 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
         // broken freeze — and a check that cries divergence over a shallow clone
         // is a check people learn to ignore.
         Freeze::Unverifiable => report.findings.push(Finding::signal(
+            Kind::RatificationUnverifiable,
             view.id,
             "ratified, but no ratification commit is reachable: the freeze cannot be verified",
         )),
@@ -3506,15 +3847,15 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
     // is worth (§8). An anchor read from a commit nobody signed anchors nothing
     // against the one case the whole mechanism exists for.
     match signature_state(repo, *view) {
-        Some(Signature::Absent) => report.findings.push(Finding::fault(
+        Some(Signature::Absent) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             "its ratification commit is not signed: the anchor proves nothing (§8)",
         )),
-        Some(Signature::Invalid { status }) => report.findings.push(Finding::fault(
+        Some(Signature::Invalid { status }) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             format!("its ratification commit carries a signature git refuses ({status}): not a ratification"),
         )),
-        Some(Signature::Undeclared { fingerprint }) => report.findings.push(Finding::fault(
+        Some(Signature::Undeclared { fingerprint }) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             format!(
                 "ratified by {fingerprint}, which .ank/allowed_signers does not declare"
@@ -3673,6 +4014,7 @@ fn check_accounting(
             let now = crate::entries::content_hash(e);
             if now != produced {
                 report.findings.push(Finding::signal(
+                    Kind::EditedOutside,
                     e.id(),
                     format!(
                         "content is {now} where the last write left {produced}: it was \
@@ -3707,6 +4049,7 @@ fn check_accounting(
             continue;
         }
         report.findings.push(Finding::signal(
+            Kind::EditedOutside,
             e.id(),
             format!(
                 "version {carried}, and its entries account for {accounted}: a write \
@@ -3812,6 +4155,7 @@ fn check_born_accounted(
         }
         let id = e.id();
         report.findings.push(Finding::fault(
+            Kind::BornOutside,
             id,
             format!(
                 "created {}, after {BORN_ACCOUNTED} was ratified, and {BORN_OUTSIDE}: \
@@ -3868,6 +4212,7 @@ fn check_entries(
         rewritten.truncate(5);
         report.findings.push(
             Finding::signal(
+                Kind::LogRewritten,
                 "corpus",
                 format!("{total} log entries have been rewritten: an entry is written once"),
             )
@@ -3900,7 +4245,7 @@ fn check_entries(
         let total = unknown.len();
         unknown.truncate(5);
         report.findings.push(
-            Finding::signal(
+            Finding::signal(Kind::LogUnknownWord,
                 "corpus",
                 format!(
                     "{total} log entries record a word this build does not know: read as machinery and kept out of the work trace"
@@ -3933,6 +4278,7 @@ fn check_entries(
     orphans.truncate(5);
     report.findings.push(
         Finding::fault(
+            Kind::LogOrphan,
             "corpus",
             format!("{total} log entries are about an entity this corpus does not hold"),
         )
@@ -4057,6 +4403,7 @@ fn check_prose_identifiers(
         .collect();
     report.findings.push(
         Finding::signal(
+            Kind::ProseIdentifiers,
             "corpus",
             format!(
                 // No command, and that is the honest end of it: an identifier
@@ -4101,6 +4448,7 @@ fn check_authorship(
     let authorless = considered.iter().filter(|e| author_of(e).is_none()).count();
     if authorless > 0 {
         report.findings.push(Finding::signal(
+            Kind::Authorless,
             "corpus",
             format!(
                 "{authorless} entities predate the author field: the burst and \
@@ -4124,6 +4472,7 @@ fn check_authorship(
         .count();
     if untyped > 0 {
         report.findings.push(Finding::signal(
+            Kind::UntypedAuthor,
             "corpus",
             format!(
                 "{untyped} authors predate the actor convention: the convention \
@@ -4164,6 +4513,7 @@ fn check_authorship(
         // a length §3 lets anything print, and this line had no corpus in hand
         // to measure a length against (TASK-c1f01f301d63).
         report.findings.push(Finding::signal(
+            Kind::ReadByNoHuman,
             e.id(),
             "written by an agent and read by no human",
         ));
@@ -4198,6 +4548,7 @@ fn check_authorship(
             continue;
         }
         report.findings.push(Finding::signal(
+            Kind::SelfRatified,
             e.id(),
             format!("ratified by its own author ({author})"),
         ));
@@ -4241,6 +4592,7 @@ fn check_authorship(
     bursts.sort_unstable();
     for (author, count) in bursts {
         report.findings.push(Finding::signal(
+            Kind::Burst,
             "corpus",
             format!(
                 "burst creation by {author}: {count} entities within an hour \
@@ -4282,6 +4634,7 @@ fn check_authorship(
         own.sort();
         if !own.is_empty() {
             report.findings.push(Finding::signal(
+                Kind::SelfBlocking,
                 &t.id,
                 format!(
                     "blocked by {} created by the holder ({}) after claiming",
@@ -4370,6 +4723,7 @@ fn check_cycles(entities: &[(PathBuf, Entity)], report: &mut Report) {
             key.sort();
             if reported.insert(key.join(",")) {
                 report.findings.push(Finding::fault(
+                    Kind::Cycle,
                     node,
                     format!("blocked_by cycle: {} -> {node}", ring.join(" -> ")),
                 ));
@@ -4549,6 +4903,7 @@ fn corpus_drift(repo: &Repo, branch: &str, here: &BTreeMap<String, PathBuf>, rep
         Err(_) => {
             if has_commit(&repo.corpus) {
                 report.findings.push(Finding::signal(
+                    Kind::DriftUncompared,
                     "corpus",
                     format!(
                         "{branch} names no commit here, so this corpus was not compared \
@@ -4563,6 +4918,7 @@ fn corpus_drift(repo: &Repo, branch: &str, here: &BTreeMap<String, PathBuf>, rep
         Ok(map) => map,
         Err(e) => {
             report.findings.push(Finding::signal(
+                Kind::DriftUncompared,
                 "corpus",
                 format!(
                     "this corpus was not compared against {branch}: {} \
@@ -4585,6 +4941,7 @@ fn corpus_drift(repo: &Repo, branch: &str, here: &BTreeMap<String, PathBuf>, rep
     });
     if entities > 0 {
         report.findings.push(Finding::signal(
+            Kind::Drift,
             "corpus",
             format!(
                 "{entities} entity file(s) differ from {branch}: this checkout does not \
@@ -4650,6 +5007,7 @@ fn rewritten_entries(
         let about = about.as_deref().unwrap_or("<id>");
         let path = entity_rel_paths(repo, &parsed).swap_remove(0);
         report.findings.push(Finding::signal(
+            Kind::LogChanged,
             id,
             format!(
                 "an entry the default branch holds was changed in this checkout, and an \
@@ -4942,9 +5300,11 @@ fn maintain(
                         claim::delete(&repo.corpus, id)?;
                         report.pruned.push(claim::claim_ref(id));
                     } else {
-                        report
-                            .findings
-                            .push(Finding::signal(id, "orphan ref: no such task"));
+                        report.findings.push(Finding::signal(
+                            Kind::OrphanRef,
+                            id,
+                            "orphan ref: no such task",
+                        ));
                     }
                 }
                 // Unable to ask is not permission to delete: report once and
@@ -4983,6 +5343,7 @@ fn maintain(
         } else if matches!(record, Record::Completed(_)) {
             // Not a corpus anomaly: a branch never merged. The answer is human.
             report.findings.push(Finding::signal(
+                Kind::Unmerged,
                 id,
                 format!("finished on another branch, {default_branch} has not caught up"),
             ));
@@ -4990,6 +5351,7 @@ fn maintain(
     }
     if let Some(branch) = unreachable_branch {
         report.findings.push(Finding::signal(
+            Kind::DefaultBranchEmpty,
             "coordination",
             format!("{branch} carries no commit yet: nothing pruned, nothing judged"),
         ));
@@ -5035,9 +5397,11 @@ fn maintain_proofs(
                     claim::delete_at(&repo.corpus, &claim::proof_ref(id))?;
                     report.pruned.push(claim::proof_ref(id));
                 } else {
-                    report
-                        .findings
-                        .push(Finding::signal(id, "orphan proof ref: no such task"));
+                    report.findings.push(Finding::signal(
+                        Kind::OrphanRef,
+                        id,
+                        "orphan proof ref: no such task",
+                    ));
                 }
             }
             continue;
@@ -5232,6 +5596,7 @@ fn render(report: &Report, inv: &Invocation, out: &mut dyn Write) {
                 };
                 Obj::new()
                     .str("level", level)
+                    .str("kind", f.kind.as_str())
                     .str("subject", &f.subject.to_string())
                     .str("message", &f.message)
                     .strings("note", &f.note)
@@ -5392,6 +5757,10 @@ pub fn review(
 
     let mut dead: Vec<String> = dead.into_iter().collect();
     dead.sort();
+    // Counted as `check` prints them, a folded kind as the one signal it is
+    // (ADR-df1035934387), and only once the dead scopes above were read one
+    // by one: a fold names five, and this section names every one.
+    let report = report.folded();
 
     if inv.json() {
         let items: Vec<String> = live
@@ -9307,6 +9676,71 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // the fold (ADR-df1035934387)
+    // -----------------------------------------------------------------------
+
+    /// `n` findings of one kind, one per task, on a corpus of `hot` files.
+    fn firing(level: Level, n: usize, hot: usize) -> Report {
+        let findings = (0..n)
+            .map(|i| {
+                let id = format!("TASK-{i:012x}");
+                match level {
+                    Level::Fault => Finding::fault(Kind::NoProof, id, "done with no proof"),
+                    Level::Signal => Finding::signal(Kind::ReadByNoHuman, id, "read by no human"),
+                }
+            })
+            .collect();
+        Report {
+            findings,
+            hot_files: hot,
+            ..Report::default()
+        }
+    }
+
+    #[test]
+    fn the_threshold_is_five_percent_capped_at_twenty_and_never_under_five() {
+        let at = |hot| firing(Level::Signal, 0, hot).fold_threshold();
+        assert_eq!(at(0), 5, "a fold names five, so five or fewer never fold");
+        assert_eq!(at(87), 5);
+        assert_eq!(at(200), 10);
+        assert_eq!(at(400), 20);
+        assert_eq!(at(1145), 20);
+    }
+
+    #[test]
+    fn five_entities_on_a_small_corpus_stay_and_six_fold() {
+        let five = firing(Level::Signal, 5, 10).folded();
+        assert_eq!(five.findings.len(), 5, "{:?}", five.findings);
+
+        let six = firing(Level::Signal, 6, 10).folded();
+        assert_eq!(six.signals(), 1, "{:?}", six.findings);
+        let f = &six.findings[0];
+        assert_eq!(
+            (f.kind, f.subject.as_str()),
+            (Kind::ReadByNoHuman, "corpus")
+        );
+        assert!(f.message.contains("6 entities"), "{}", f.message);
+        assert!(f.message.contains("TASK-000000000004 ..."), "{}", f.message);
+        assert!(!f.message.contains("TASK-000000000005"), "{}", f.message);
+        assert_eq!(
+            f.note,
+            ["ank check --kind read-by-no-human lists every one"]
+        );
+    }
+
+    #[test]
+    fn a_fault_and_a_subject_that_is_no_entity_are_never_folded() {
+        let faults = firing(Level::Fault, 30, 10).folded();
+        assert_eq!(faults.faults(), 30);
+
+        let mut r = firing(Level::Signal, 0, 10);
+        r.findings = (0..30)
+            .map(|i| Finding::signal(Kind::UnservedRef, format!("refs/ank/x{i}"), "unserved"))
+            .collect();
+        assert_eq!(r.folded().signals(), 30, "a ref name is not an entity");
+    }
+
+    // -----------------------------------------------------------------------
     // check: faults
     // -----------------------------------------------------------------------
 
@@ -11205,6 +11639,7 @@ mod tests {
         if report.unchecked_signatures > 0 {
             let n = report.unchecked_signatures;
             report.findings.push(Finding::signal(
+                Kind::SignatureUnchecked,
                 "allowed_signers",
                 format!("{n} ratification signature(s) could not be checked here"),
             ));

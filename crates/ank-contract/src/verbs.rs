@@ -389,6 +389,9 @@ const CHECK_OUT: &[Field] = &[
         "findings",
         Type::Array(&[
             f("level", Type::Str),
+            // The rule that fired, one stable word per rule (ADR-df1035934387),
+            // and the word `check --kind` takes.
+            f("kind", Type::Str),
             f("subject", Type::Str),
             f("message", Type::Str),
             f("note", Type::Strings),
@@ -1967,14 +1970,23 @@ pub const COMMANDS: &[CommandSpec] = &[
         kinds: &[],
         max_positionals: 1,
         positional_help: "[<path>]",
-        flags: &[],
+        // The command a folded signal names (ADR-df1035934387): a flag on the
+        // verb that folded, and no new surface (ADR-9a0076dd0896). Long form
+        // only: §4 gives `-k` to nothing.
+        flags: &[flag("--kind")],
         refuses: &[
             OUTSIDE_THE_REPOSITORY,
             FINDINGS,
+            refuses(
+                ExitCode::Prerequisite,
+                "--kind names a word no rule of check answers to; the refusal lists the ones it does",
+            ),
         ],
         notes: &[
             "exit 8 means findings; a signal alone leaves it 0",
             "the only verb that prunes refs/ank/claims: orphans, and completion refs whose task is done or closed on the default branch",
+            "a signal kind firing on more entities than the smaller of 20 and five percent of the hot corpus, and on more than five, is reported once for the corpus, naming five and the command that lists the rest; a fault never is",
+            "--kind <kind> lists the findings of that kind alone, one per entity and never folded; the exit code stays the whole corpus's",
         ],
         refuses_globals: &[],
         output: &[one(CHECK_OUT)],

@@ -291,7 +291,13 @@ fn the_git_process_count_is_the_same_for_one_and_for_forty_entries_changed() {
         }
     }
     let forty = r.traced_check("forty");
+    // Forty is past the fold (ADR-df1035934387): `check` reports them once for
+    // the corpus, and the command that fold names lists every one.
     let (_, out) = r.check();
+    assert!(rewritten(&out).is_empty(), "{out}");
+    assert!(out.contains("log-changed fires on 40 entities"), "{out}");
+    let out = r.ank(&["check", "--kind", "log-changed"], None);
+    let out = text(&out.stdout) + &text(&out.stderr);
     assert_eq!(rewritten(&out).len(), 40, "{out}");
 
     eprintln!(
