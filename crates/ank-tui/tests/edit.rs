@@ -617,7 +617,10 @@ fn a_form_that_names_an_entity_refuses_in_front_of_itself_and_new_still_opens() 
     let task = repo.task();
     live.send("3");
     live.until("the graph's screen, with its row", |t| {
-        t.contains(&terminal::focused("3 GRAPH")) && t.contains(&format!("> \u{25cf}  {task}"))
+        // The one task's row is open (`○`, TASK-de02dbcf9965), under the
+        // heading of the unlinked block: found by its text wherever the
+        // block puts it.
+        t.contains(&terminal::focused("3 GRAPH")) && t.contains(&format!("> \u{25cb}  {task}"))
     });
     live.send(&letter("edit"));
     live.until("the form for the graph's row to open", |t| {

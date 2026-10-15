@@ -624,8 +624,10 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
             .iter()
             .position(|(_, t)| !t.is_empty())
             .expect("a line");
+        // The first line of the panel says something: the panel's lines
+        // begin under its title, wherever on the frame that is.
         assert_eq!(
-            lines[first].0, 3,
+            first, 0,
             "a blank stands first at {columns}x{rows}:\n{frame}"
         );
         let last = lines
