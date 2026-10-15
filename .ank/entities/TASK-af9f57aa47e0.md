@@ -5,7 +5,7 @@ slug: the-documentation-says-how-to-split-a-suite-into
 title: The documentation says how to split a suite into verifiers that reuse and select
 created: 2026-10-13T12:02:36Z
 author: claude-code/2.x
-status: open
+status: in_progress
 scope:
   - docs/proof.md
   - docs/SUMMARY.md
@@ -15,7 +15,7 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 schema: 4
-version: 1
+version: 2
 ---
 
 The user-facing half of the plan: a reproducible recipe for any language, so a

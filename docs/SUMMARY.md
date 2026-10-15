@@ -5,6 +5,7 @@
 - [Install](install.md)
 - [Quickstart](quickstart.md)
 - [Proof and verifiers](proof.md)
+  - [Splitting a suite into verifiers](splitting-verifiers.md)
 - [Claims and identity](claims.md)
 - [Reading ank check](check.md)
 - [Running ank in CI](ci.md)
