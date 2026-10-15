@@ -24,9 +24,9 @@
 //! `Underline` goes out on the wire whatever the variable says, because those
 //! are attributes rather than colours to it.
 //!
-//! That is exactly why the shared table's `Retired` role is on the screen of
-//! every session driven below: [`with_a_retired_row`] closes a task, and a
-//! closed task is what this reader draws dim. So a reader that had left the
+//! That is exactly why a dim role of the shared table is on the screen of
+//! every session driven below: [`with_a_retired_row`] closes a task, and the
+//! log entry the close writes is an identifier this reader draws dim. So a reader that had left the
 //! variable to its dependency would fail here on `ESC[2m`, and what passes is a
 //! reader that decided. Honouring a variable is deciding; inheriting somebody
 //! else's decision about it is a coincidence that holds until they change their
@@ -49,7 +49,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{ids_of, Live, Repo, ONE_AT_A_TIME};
+use crate::terminal::{ids_of, printed_at_a_terminal, Live, Repo, ONE_AT_A_TIME};
 
 /// The window every session here opens on. Wide enough that the two panels in
 /// the middle both draw rows, which is where the painted fields are.
@@ -66,10 +66,12 @@ const REGION_RULE: &str = ank_tui::view::BOXES.border(true).horizontal_top;
 /// A closed task, so that a role the table renders as an *attribute* rather
 /// than as a colour is on the screen.
 ///
-/// `closed` is `Role::Retired`, which this reader draws dim -- and dim is the
-/// one register crossterm's own `NO_COLOR` handling does not suppress. Without
-/// a row in it, the assertion below would be measuring a dependency's manners
-/// instead of this crate's decision. See the header.
+/// `close` writes a log entry, and a log identifier is `Role::Record`, which
+/// this reader draws dim -- the one register crossterm's own `NO_COLOR`
+/// handling does not suppress. The closed task itself reads red since
+/// ADR-f0665c68d03d, so it is the log beside it that carries the attribute now.
+/// Without a dim row, the assertion below would be measuring a dependency's
+/// manners instead of this crate's decision. See the header.
 fn with_a_retired_row(repo: &Repo) {
     let made = repo.stdout(&[
         "new",
@@ -296,8 +298,8 @@ fn with_no_color_set_the_screen_still_says_everything_it_has_to_say() {
 /// Three claims in one drive, because they are one fact seen from three sides.
 /// The painting session sets something, so the plain one setting nothing is a
 /// difference rather than a reader that cannot paint at all. What it sets is a
-/// foreground of the terminal's own sixteen or an attribute, and never a
-/// background: the shared table says what a status *is*, and a surface
+/// foreground of the terminal's own sixteen, the one extended index
+/// ADR-f0665c68d03d names, or an attribute, and never a background: the shared table says what a status *is*, and a surface
 /// answering that with a filled cell would be deciding for the whole screen
 /// what somebody's terminal theme already decided. And what it drew is
 /// character for character what the plain session drew, which is the criterion's
@@ -334,6 +336,11 @@ fn without_no_color_it_paints_and_the_two_screens_are_the_same_characters() {
             // A foreground, spelled the way crossterm spells a named colour,
             // and one of the sixteen the terminal itself defines.
             [38, 5, index] if *index <= 15 => {}
+            // The one rung off the sixteen, and named rather than ranged: an
+            // ADR identifier's soft orange (ADR-f0665c68d03d), taken because
+            // every base colour was already spent by a status. Any other index
+            // is still a palette this reader was never given.
+            [38, 5, 173] => {}
             other => panic!(
                 "the reader sent ESC[{}m: this surface paints an attribute or \
                  one of the terminal's own foregrounds, and nothing else\n{frame}",
@@ -361,4 +368,113 @@ fn without_no_color_it_paints_and_the_two_screens_are_the_same_characters() {
         "the painted screen and the plain one are not the same characters, so \
          something on it is carried by colour alone"
     );
+}
+
+/// Each kind is painted its own way, and `closed` reads apart from the dim a
+/// replaced document keeps, on the wire of the binary (ADR-f0665c68d03d).
+///
+/// The palette's unit tests in `src/paint.rs` compare a role with its render;
+/// this is the binary at a terminal, which is where CLAUDE.md says a criterion
+/// about the binary is measured. The seeded corpus carries one task and one
+/// ADR, and [`with_a_retired_row`] adds a closed task, so the three identifiers
+/// and the status that moved are all on the opening screen.
+#[test]
+fn an_identifier_is_painted_by_its_kind_on_the_wire() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let repo = Repo::seeded();
+    with_a_retired_row(&repo);
+    let (_, raw) = driven(Live::painting(&repo, WINDOW.0, WINDOW.1));
+    let wire = String::from_utf8_lossy(&raw);
+    // crossterm spells a named foreground as `38;5;n` with the terminal's own
+    // index, and the soft orange as the one extended index the ADR names.
+    for (text, expected, what) in [
+        ("TASK-", [38, 5, 3], "a task identifier is yellow"),
+        ("ADR-", [38, 5, 173], "an ADR identifier is the soft orange"),
+        ("closed", [38, 5, 1], "a closed task reads red"),
+        ("open", [38, 5, 4], "an open task stays blue"),
+        ("proposed", [38, 5, 5], "a proposed ADR stays magenta"),
+    ] {
+        let leads = painted_before(&wire, text);
+        assert!(!leads.is_empty(), "{text} never reached the wire");
+        assert!(
+            leads.iter().all(|p| p.starts_with(&expected)),
+            "{what}: {text} was sent after {leads:?}"
+        );
+    }
+    // `close` writes a log entry, and its identifier recedes to dim.
+    let logs = painted_before(&wire, "LOG-");
+    assert!(
+        !logs.is_empty() && logs.iter().all(|p| p.as_slice() == [2]),
+        "a log identifier is dim: {logs:?}"
+    );
+}
+
+/// The CLI paints from the same table, so `ank find` at a terminal draws each
+/// kind and each status the way the reader does (ADR-f0665c68d03d).
+///
+/// Measured on the binary's own stdout at a pseudo-terminal, not on `style.rs`:
+/// the hand-written ANSI is the CLI's register, and what is asserted is what a
+/// person running `ank find` is actually sent.
+#[test]
+fn find_at_a_terminal_paints_each_kind_its_own_way() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let repo = Repo::seeded();
+    with_a_retired_row(&repo);
+    // One listing per filter, joined: what is asserted is each row's paint,
+    // and these three filters between them reach every row of the corpus.
+    let wire: String = [
+        &["find", "--type", "adr"][..],
+        &["find", "--status", "open"],
+        &["find", "--status", "closed"],
+    ]
+    .iter()
+    .map(|args| String::from_utf8_lossy(&printed_at_a_terminal(&repo, args)).into_owned())
+    .collect();
+    for (text, expected, what) in [
+        ("TASK-", vec![33], "a task identifier is yellow"),
+        (
+            "ADR-",
+            vec![38, 5, 173],
+            "an ADR identifier is the soft orange",
+        ),
+        ("[closed]", vec![31], "a closed task reads red"),
+        ("[open]", vec![34], "an open task stays blue"),
+        ("[proposed]", vec![35], "a proposed ADR stays magenta"),
+    ] {
+        let leads = painted_before(&wire, text);
+        assert!(!leads.is_empty(), "{text} never reached the wire: {wire:?}");
+        assert!(
+            leads.iter().all(|p| p == &expected),
+            "{what}: {text} was sent after {leads:?}"
+        );
+    }
+}
+
+/// The parameters of the SGR that immediately precedes each occurrence of
+/// `text` on the wire, for the occurrences that are painted at all.
+///
+/// Immediately, and not "somewhere before": a field is drawn as one sequence
+/// and then its characters, so the paint that lights `ADR-` is the one written
+/// right up against it. An occurrence with no sequence against it is prose, or
+/// the tail of a run the backend did not interrupt, and says nothing here.
+fn painted_before(wire: &str, text: &str) -> Vec<Vec<usize>> {
+    let mut found = Vec::new();
+    for (at, _) in wire.match_indices(text) {
+        let Some(head) = wire[..at].strip_suffix('m') else {
+            continue;
+        };
+        let Some(open) = head.rfind("\u{1b}[") else {
+            continue;
+        };
+        let params = &head[open + 2..];
+        if !params.chars().all(|c| c.is_ascii_digit() || c == ';') {
+            continue;
+        }
+        found.push(params.split(';').filter_map(|p| p.parse().ok()).collect());
+    }
+    found
 }

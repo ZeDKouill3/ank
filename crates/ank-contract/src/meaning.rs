@@ -72,15 +72,37 @@ pub enum Role {
     Attention,
     /// A defect in the corpus.
     Fault,
-    /// A name to address the entity by, whatever kind it names.
+    /// A decision ratified: `accepted`, and nothing else.
     ///
-    /// One row per kind, all of them landing here, and the repetition is the
-    /// point: `find` and `scope` list the kinds side by side and
-    /// SPEC-89070ce7f3b8 fixes an identifier's rendering for all of them at
-    /// once. A surface that wanted `ADR-` to read differently from `TASK-` has
-    /// to remove rows from this table to get it, rather than add a call site
-    /// nobody reviews.
-    Identifier,
+    /// Apart from [`Role::Accomplished`] on purpose (ADR-f0665c68d03d). A task
+    /// that landed has nothing left to ask of its reader and recedes; a
+    /// decision that was ratified binds every change after it, and a listing
+    /// that drew the two alike would draw a rule as finished business.
+    Ratified,
+    /// A task closed without landing: `closed`.
+    ///
+    /// Apart from [`Role::Retired`], which `superseded` keeps
+    /// (ADR-f0665c68d03d). A superseded document was replaced and its
+    /// successor carries on; a closed task is work that will not be done, and
+    /// the person reading a listing is asked to see that before anything else
+    /// on the row. It is still not [`Role::Fault`]: nothing in the corpus is
+    /// wrong, and a surface may paint the two alike without the table saying
+    /// they are one.
+    Dropped,
+    /// The identifier of a task: work, the most of any corpus.
+    ///
+    /// The four identifier roles are one per kind rather than one for every
+    /// kind (ADR-f0665c68d03d). `find` and `scope` list the kinds side by side,
+    /// and a reader looking for the decisions among fifteen hundred rows of
+    /// work should not have to read every prefix to find them. The kind is
+    /// still spelled in the prefix, so nothing rides on the rendering alone.
+    Work,
+    /// The identifier of an ADR: a decision.
+    Decision,
+    /// The identifier of a spec: reference material nobody claims.
+    Reference,
+    /// The identifier of a log entry: a record that asks for nothing.
+    Record,
 }
 
 /// One row: a name, the family it is a name in, and the part it plays.
@@ -108,9 +130,10 @@ pub const EXPIRED: &str = "expired";
 /// The table (ADR-1f70ce2c3eac).
 ///
 /// Grouped by family and written out row by row. A derivation — every kind in
-/// the registry mapped to [`Role::Identifier`] by a loop, say — would have been
-/// shorter and would have made adding a kind a decision nobody takes: the row is
-/// where the question gets asked.
+/// the registry mapped to one role by a loop, say — would have been shorter and
+/// would have made adding a kind a decision nobody takes: the row is where the
+/// question gets asked, and a kind with no row is painted nothing rather than
+/// borrowing another's role (ADR-f0665c68d03d).
 ///
 /// **`blocked` is absent, and its absence is the same decision.** It is derived
 /// from `blocked_by` at read time and no entity is ever stored carrying it
@@ -125,19 +148,19 @@ pub const MEANINGS: &[Meaning] = &[
     row(Subject::Status, "claimed", Role::Underway),
     row(Subject::Status, "done", Role::Accomplished),
     row(Subject::Status, "finished", Role::Accomplished),
-    row(Subject::Status, "closed", Role::Retired),
+    row(Subject::Status, "closed", Role::Dropped),
     row(Subject::Status, "proposed", Role::Awaiting),
-    row(Subject::Status, "accepted", Role::Accomplished),
+    row(Subject::Status, "accepted", Role::Ratified),
     row(Subject::Status, "superseded", Role::Retired),
     row(Subject::Status, EXPIRED, Role::Attention),
     // Kinds, by the `type` name the registry gives each of them. Written out
     // rather than read from the registry because this crate has no dependencies
     // and must not gain one for a palette: every surface consumes it, so
     // anything it depends on is depended on by all of them at once.
-    row(Subject::Kind, "task", Role::Identifier),
-    row(Subject::Kind, "adr", Role::Identifier),
-    row(Subject::Kind, "spec", Role::Identifier),
-    row(Subject::Kind, "log", Role::Identifier),
+    row(Subject::Kind, "task", Role::Work),
+    row(Subject::Kind, "adr", Role::Decision),
+    row(Subject::Kind, "spec", Role::Reference),
+    row(Subject::Kind, "log", Role::Record),
     // Severities, as `check` attaches them.
     row(Subject::Severity, "fault", Role::Fault),
     row(Subject::Severity, "signal", Role::Attention),
@@ -188,6 +211,21 @@ pub fn role_of_marker(marker: &str) -> Option<Role> {
 /// The role an entity kind carries, given the `type` the registry names it by.
 pub fn role_of_kind(kind: &str) -> Option<Role> {
     role_of(Subject::Kind, kind)
+}
+
+/// The role an identifier carries, read out of the kind its prefix names.
+///
+/// `TASK-4974` is a `task` in the table's spelling, so the prefix is lowered
+/// before the lookup. One function for both surfaces, so that the CLI and the
+/// reader cannot disagree about which part of `ADR-1f70` names the kind. A
+/// leading `[` is not part of the identifier: a frontmatter list prints
+/// `[ADR-1f70, ADR-0c8a]`, and its first element names a kind like the rest.
+/// A prefix the table has no row for answers `None` and is painted nothing
+/// (ADR-f0665c68d03d).
+pub fn role_of_id(id: &str) -> Option<Role> {
+    let id = id.trim_start_matches('[');
+    let kind = id.split_once('-').map_or(id, |(kind, _)| kind);
+    role_of_kind(&kind.to_ascii_lowercase())
 }
 
 /// The role a finding's severity carries: `fault`, `signal`.
@@ -300,9 +338,9 @@ mod tests {
             ("claimed", Role::Underway),
             ("done", Role::Accomplished),
             ("finished", Role::Accomplished),
-            ("closed", Role::Retired),
+            ("closed", Role::Dropped),
             ("proposed", Role::Awaiting),
-            ("accepted", Role::Accomplished),
+            ("accepted", Role::Ratified),
             ("superseded", Role::Retired),
         ] {
             assert_eq!(role_of_status(state), Some(role), "{state} moved");
@@ -356,13 +394,38 @@ mod tests {
         assert_eq!(role_of_marker("[blocked]"), None);
     }
 
-    /// Every kind reads as an identifier, which is the decision the rows carry.
+    /// Every kind reads as its own kind, which is the decision the rows carry
+    /// (ADR-f0665c68d03d), and no two kinds share a role.
     #[test]
-    fn every_kind_is_an_identifier() {
-        for kind in ["task", "adr", "spec", "log"] {
-            assert_eq!(role_of_kind(kind), Some(Role::Identifier), "{kind} moved");
+    fn every_kind_reads_as_its_own_kind() {
+        let kinds = [
+            ("task", Role::Work),
+            ("adr", Role::Decision),
+            ("spec", Role::Reference),
+            ("log", Role::Record),
+        ];
+        for (kind, role) in kinds {
+            assert_eq!(role_of_kind(kind), Some(role), "{kind} moved");
+        }
+        for (i, (kind, role)) in kinds.iter().enumerate() {
+            for (other, theirs) in &kinds[i + 1..] {
+                assert_ne!(role, theirs, "{kind} and {other} read alike");
+            }
         }
         assert_eq!(role_of_kind("adr "), None);
+    }
+
+    /// An identifier reads as the kind its prefix names, in any case, and an
+    /// unknown prefix reads as nothing rather than as somebody else's kind.
+    #[test]
+    fn an_identifier_reads_as_the_kind_it_names() {
+        assert_eq!(role_of_id("TASK-4974"), Some(Role::Work));
+        assert_eq!(role_of_id("ADR-1f70ce2c3eac"), Some(Role::Decision));
+        assert_eq!(role_of_id("SPEC-8907@peer"), Some(Role::Reference));
+        assert_eq!(role_of_id("LOG-dde5"), Some(Role::Record));
+        assert_eq!(role_of_id("[ADR-1f70"), Some(Role::Decision));
+        assert_eq!(role_of_id("NOTE-1234"), None);
+        assert_eq!(role_of_id("i"), None);
     }
 
     /// A fault is a fault, and a signal is worth a look rather than a defect —

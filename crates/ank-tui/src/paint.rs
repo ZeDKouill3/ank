@@ -137,16 +137,27 @@ impl Ink {
             // `claimed` is what the ref says. A reader who sees them in two
             // colours has to learn that they are the same fact.
             Role::Underway => Style::new().fg(Color::Cyan),
-            Role::Accomplished => Style::new().fg(Color::Green),
-            // Dim and never red: nothing here failed. A release is how the loop
-            // is meant to end when a criterion turns out to be wrong, and
-            // painting it as an error would teach an agent to avoid the honest
-            // move.
+            // Finished business recedes: grey, apart from the dim a replaced
+            // document keeps (ADR-f0665c68d03d).
+            Role::Accomplished => Style::new().fg(Color::DarkGray),
+            Role::Ratified => Style::new().fg(Color::Green),
+            // Dim and never red: nothing here failed. A supersession is how a
+            // document is meant to end when a better one replaces it.
             Role::Retired => Style::new().add_modifier(Modifier::DIM),
+            // Work that will not be done is what a person scanning the list is
+            // asked to see first (ADR-f0665c68d03d). The table keeps it apart
+            // from a fault even where the two are painted alike.
+            Role::Dropped => Style::new().fg(Color::Red),
             Role::Awaiting => Style::new().fg(Color::Magenta),
             Role::Attention => Style::new().fg(Color::Yellow),
             Role::Fault => Style::new().fg(Color::Red),
-            Role::Identifier => Style::new().fg(Color::Yellow),
+            Role::Work => Style::new().fg(Color::Yellow),
+            // Index 173 of the 256-colour palette, the CLI's `38;5;173`: every
+            // base colour is spent by a status, and a soft orange reads as a
+            // kind of its own without outshining the work around it.
+            Role::Decision => Style::new().fg(Color::Indexed(173)),
+            Role::Reference => Style::new().fg(Color::Blue),
+            Role::Record => Style::new().add_modifier(Modifier::DIM),
         }
     }
 
@@ -185,14 +196,12 @@ pub fn declared_dumb() -> bool {
 
 /// The role an identifier carries, read out of the kind it names.
 ///
-/// `TASK-4974` is a `task` in the table's spelling, so the kind is lowered
-/// before the lookup and the table answers about the family it is a name in.
-/// Every kind lands on [`Role::Identifier`] and the repetition is the shared
-/// table's decision, not this crate's: a surface wanting `ADR-` to read
-/// differently from `TASK-` would have to remove rows there to get it.
+/// The shared table's own lookup, re-exported where `view` reaches for it:
+/// each kind has a role of its own there (ADR-f0665c68d03d), and which part of
+/// `ADR-1f70` names the kind is a question the CLI answers too, so it is
+/// answered once.
 pub fn role_of_id(id: &str) -> Option<Role> {
-    let kind = id.split_once('-').map_or(id, |(kind, _)| kind);
-    meaning::role_of_kind(&kind.to_ascii_lowercase())
+    meaning::role_of_id(id)
 }
 
 /// Where the shared table had something to say, in characters of the line.
@@ -496,13 +505,26 @@ mod tests {
         );
     }
 
-    /// An identifier is painted by the kind it names, and every kind alike.
+    /// An identifier is painted by the kind it names, and no two kinds alike
+    /// (ADR-f0665c68d03d).
     #[test]
-    fn an_identifier_reads_the_same_whatever_it_names() {
-        let task = role_of_id("TASK-6cd41d23b7d1");
-        assert_eq!(task, Some(Role::Identifier));
-        for id in ["ADR-1f70ce2c3eac", "SPEC-89070ce7f3b8", "LOG-ed57116ba141"] {
-            assert_eq!(role_of_id(id), task, "{id} is painted apart");
+    fn an_identifier_reads_as_the_kind_it_names() {
+        let painted: Vec<Style> = [
+            ("TASK-6cd41d23b7d1", Role::Work),
+            ("ADR-1f70ce2c3eac", Role::Decision),
+            ("SPEC-89070ce7f3b8", Role::Reference),
+            ("LOG-ed57116ba141", Role::Record),
+        ]
+        .into_iter()
+        .map(|(id, role)| {
+            assert_eq!(role_of_id(id), Some(role), "{id} moved");
+            COLOUR.of(role_of_id(id))
+        })
+        .collect();
+        for (i, style) in painted.iter().enumerate() {
+            for other in &painted[i + 1..] {
+                assert_ne!(style, other, "two kinds are painted alike");
+            }
         }
         // Not an identifier at all: no kind the registry declares, so nothing
         // is painted rather than something being guessed.
@@ -568,7 +590,7 @@ mod tests {
         assert_eq!(
             painted,
             [
-                ("ADR-1f70".to_string(), COLOUR.role(Role::Identifier)),
+                ("ADR-1f70".to_string(), COLOUR.role(Role::Decision)),
                 ("superseded".to_string(), COLOUR.role(Role::Retired)),
             ],
             "the prose was painted, or the columns were not"
@@ -601,7 +623,7 @@ mod tests {
     /// Two composed pieces joined keep both sets of marks, in place.
     #[test]
     fn joining_two_composed_pieces_moves_the_marks_along() {
-        let left = Composed::new().named("TASK-6cd4", Some(Role::Identifier));
+        let left = Composed::new().named("TASK-6cd4", Some(Role::Work));
         let right = Composed::new()
             .plain("   ")
             .named("done", meaning::role_of_status("done"));
@@ -617,7 +639,7 @@ mod tests {
         assert_eq!(
             styled,
             [
-                ("TASK-6cd4".to_string(), COLOUR.role(Role::Identifier)),
+                ("TASK-6cd4".to_string(), COLOUR.role(Role::Work)),
                 ("done".to_string(), COLOUR.role(Role::Accomplished)),
             ]
         );

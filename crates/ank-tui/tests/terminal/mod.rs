@@ -611,6 +611,53 @@ pub static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // The terminal
 // ---------------------------------------------------------------------------
 
+/// Every byte one CLI verb wrote to a terminal it painted for
+/// (ADR-f0665c68d03d).
+///
+/// Not a [`Live`] session: a verb like `find` prints and exits, so there is no
+/// screen to settle and no key to send. stdout alone is the pseudo-terminal,
+/// which is the condition the CLI paints on, and `NO_COLOR` is removed for the
+/// reason [`Live::painting`] removes it. The run's root is the one every other
+/// child here gets, so the verb reads the corpus it was pointed at.
+pub fn printed_at_a_terminal(repo: &Repo, args: &[&str]) -> Vec<u8> {
+    use std::io::Read;
+
+    let (mut master, slave_path) = pty::open();
+    pty::resize(&slave_path, 200, 50);
+    let mut command = Command::new(ank());
+    command
+        .args(args)
+        .current_dir(&repo.0)
+        .env("ANK_AGENT", AGENT)
+        .env("TERM", TERM)
+        .env_remove("NO_COLOR");
+    in_this_runs_root(&mut command);
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(pty::stdio(pty::slave(&slave_path)))
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the binary must have been built");
+    // The parent's copy of the slave goes with the command, so the master
+    // reads end-of-stream once the child is done with its own.
+    drop(command);
+    let drain = std::thread::spawn(move || {
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match master.read(&mut buf) {
+                // Linux answers EIO once the last slave is closed; macOS
+                // answers zero. Both mean the verb is done.
+                Ok(0) | Err(_) => return raw,
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+            }
+        }
+    });
+    let status = child.wait().expect("the verb must end");
+    assert!(status.success(), "{args:?} failed at a terminal: {status}");
+    drain.join().expect("the drain must not panic")
+}
+
 mod pty {
     use std::ffi::CStr;
     use std::fs::File;
