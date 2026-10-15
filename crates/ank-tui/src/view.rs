@@ -78,7 +78,9 @@
 //!   of linked tasks, and drawn one row per task through [`compose`]. What
 //!   is shown by default is the work that is alive and every task it
 //!   directly waits on, whatever that task's status; the rest of the corpus
-//!   is history. The cell says finished, open or under way, the word beside
+//!   is history. The cell says finished, open or under way -- and under way
+//!   it pulses, a phase per tick while it is on the screen
+//!   (TASK-54bb5cddc671) -- the word beside
 //!   the identifier says ready, waits N, in progress, done or closed, and
 //!   the lanes are the layout's own alphabet, box-drawing or ASCII with the
 //!   border set. A junction row, the blank between two blocks and the
@@ -257,13 +259,26 @@
 //! puts the identifier the focused panel names in front of the verb the key
 //! composed, asks [`Ank::spelling`] for the command line that argv is, and
 //! **stops**. Nothing else here writes, and nothing runs that a person did not
-//! press twice -- nothing in this crate runs on a clock, and [`App::frame`] is
-//! a pure function of what the last command left behind. The one clock this
-//! file reads is [`App::tapped`]'s, and what it decides is whether a press is
-//! the second of a pair (TASK-42de0df951a4): it starts nothing, it wakes
-//! nothing, and no frame is drawn because time passed. `pressed` takes the
-//! instant rather than reading it, so the rule is stated to the suite instead
-//! of being waited out by it.
+//! press twice -- no verb in this crate runs on a clock, and [`App::frame`] is
+//! a pure function of what the last command left behind and of the pulse's
+//! phase.
+//!
+//! **One clock paints, and the frame reads a counter rather than the time**
+//! (TASK-54bb5cddc671). A task in progress on the graph is drawn at
+//! [`App::tick`]'s phase, `· • ● •` or `. o O o`, and a tick moves that
+//! counter by one and nothing else: it reads nothing, spawns no verb, renews
+//! nothing, and the frame after it differs from the one before in the cells
+//! of the tasks in progress alone. [`App::pulse_due`] is when it may: while
+//! an `in_progress` row stands inside the graph panel's page, so the clock
+//! stops when none is on the screen. The tick itself arrives from
+//! [`crate::term::ticker`]; nothing in this file reads the time.
+//!
+//! What [`App::tapped`] decides is whether a press is the second of a pair
+//! (TASK-42de0df951a4), and the instant it is handed is
+//! [`crate::term::Moment`]'s, read at the terminal's edge: it starts nothing,
+//! it wakes nothing, and no frame is drawn because time passed. `pressed`
+//! takes the instant rather than reading it, so the rule is stated to the
+//! suite instead of being waited out by it.
 //!
 //! # The confirmation, which is the fourth act
 //!
@@ -354,6 +369,7 @@ use crate::model::{
 };
 use crate::paint::{self, role_of_id, Composed, Ink};
 use crate::stream::Stream;
+use crate::term::Moment;
 use crate::text::{self, fit, pad, window, wrap};
 use ank_contract::meaning::{role_of_kind, role_of_status, Role};
 use ratatui::buffer::Buffer;
@@ -366,7 +382,7 @@ use ratatui::widgets::{
     Widget,
 };
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Which screen the region is showing, or which panel has the focus on a wide
 /// frame (TASK-252bf02de218, TASK-a9cd362ee5e2).
@@ -637,7 +653,7 @@ struct Chosen {
     /// The row it chose.
     row: usize,
     /// When it landed, which is the only instant this crate holds.
-    at: Instant,
+    at: Moment,
 }
 
 /// What the key list did with a key pressed over it (TASK-8a6578851244).
@@ -862,6 +878,11 @@ pub struct App {
     /// carry: which row is selected is drawn on the screen, and how it came to
     /// be selected is not.
     chosen: Option<Chosen>,
+    /// The pulse's phase (TASK-54bb5cddc671): how many ticks this screen has
+    /// answered, and the only clock a frame reads. A task in progress is
+    /// drawn at this phase taken modulo four ([`Mark::cell`]); [`App::tick`]
+    /// is what moves it, and nothing else does.
+    phase: usize,
 }
 
 impl App {
@@ -910,6 +931,7 @@ impl App {
             form: None,
             beyond: None,
             chosen: None,
+            phase: 0,
         }
     }
 
@@ -1366,6 +1388,7 @@ impl App {
                             .count();
                         let (word, role) = readiness(&task.status, waits);
                         drawn.rows.push(Lane {
+                            pulse: (row.mark == Mark::InProgress).then_some(2 * row.lane),
                             id: task.id.clone(),
                             word,
                             role,
@@ -2025,11 +2048,11 @@ impl App {
     /// test instead of waited out by one, and so this stays a function of what
     /// it was given.
     fn tapped(&mut self, first: Option<Chosen>, at: Position, ank: &Ank) -> bool {
-        self.pressed(first, at, ank, Instant::now())
+        self.pressed(first, at, ank, Moment::now())
     }
 
     /// [`App::tapped`] with the clock handed to it.
-    fn pressed(&mut self, first: Option<Chosen>, at: Position, ank: &Ank, now: Instant) -> bool {
+    fn pressed(&mut self, first: Option<Chosen>, at: Position, ank: &Ank, now: Moment) -> bool {
         // On a wide frame a press lands in a panel, and that panel takes the
         // focus before the row is chosen (ADR-ac6be1ebe9aa).
         if let Some(panel) = self.panel_at(at) {
@@ -3379,10 +3402,11 @@ impl App {
                         text::PLAIN
                     };
                     let role = lane.role;
+                    let prefix = self.pulsed(lane);
                     compose(
                         here,
                         vec![
-                            Field::word(&lane.prefix, self.drawn.width, role),
+                            Field::word(&prefix, self.drawn.width, role),
                             Field::id(&lane.id),
                             Field::word(&lane.word, STATUS, role),
                             Field::rest(&format!(
@@ -3397,6 +3421,74 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    /// A graph row's lane field as this frame draws it: the layout's, with
+    /// the cell of a task in progress at the pulse's phase
+    /// (TASK-54bb5cddc671).
+    ///
+    /// The layout is computed once per read, fold or search and holds every
+    /// cell at the first phase; the phase is the frame's to apply, so a tick
+    /// lays nothing out again and changes one character per row in progress.
+    fn pulsed(&self, lane: &Lane) -> String {
+        let Some(column) = lane.pulse else {
+            return lane.prefix.clone();
+        };
+        let glyph = self
+            .glyphs
+            .alphabet()
+            .glyph(Mark::InProgress.cell(self.phase));
+        lane.prefix
+            .chars()
+            .enumerate()
+            .map(|(at, c)| if at == column { glyph } else { c })
+            .collect()
+    }
+
+    /// Whether a pulse is due: whether a task row whose status is
+    /// `in_progress` stands inside the graph panel's page on this frame
+    /// (TASK-54bb5cddc671).
+    ///
+    /// The graph panel is on the frame where it is the region -- under
+    /// [`DASHBOARD`] with the focus on it -- or where it is the right panel,
+    /// which on a wide frame is whenever no document is open in it
+    /// ([`App::beside`]). The page is the one [`App::graph_lines`] draws, so
+    /// a row scrolled out of it pulses nobody's screen. This is what the
+    /// session tells the ticker after every frame, and what [`App::tick`]
+    /// asks again when a tick arrives.
+    pub fn pulse_due(&self) -> bool {
+        let shown = match self.wide() {
+            true => self.beside() == Focus::Graph,
+            false => self.focus == Focus::Graph,
+        };
+        if !shown || self.snapshot.is_none() || self.dag.is_none() {
+            return false;
+        }
+        let top = self.cursors[Focus::Graph.slot()].top;
+        self.drawn
+            .lines
+            .iter()
+            .skip(top)
+            .take(self.page(Focus::Graph))
+            .any(|line| match line {
+                Screen::Task(at) => self.drawn.rows[*at].pulse.is_some(),
+                _ => false,
+            })
+    }
+
+    /// One tick of the pulse (TASK-54bb5cddc671): where a pulse is due the
+    /// phase moves by one and the answer is that a frame is owed; where none
+    /// is, nothing moves and none is.
+    ///
+    /// Nothing is read, nothing is spawned and nothing but the phase
+    /// changes, so the frame drawn after it differs from the one before in
+    /// the cells of the tasks in progress and nowhere else.
+    pub fn tick(&mut self) -> bool {
+        if !self.pulse_due() {
+            return false;
+        }
+        self.phase = self.phase.wrapping_add(1);
+        true
     }
 
     /// The proposals, over the one line that says which regime the corpus is
@@ -4924,6 +5016,10 @@ struct Lane {
     role: Option<Role>,
     title: String,
     prefix: String,
+    /// The column of [`Lane::prefix`] holding the cell of a task in
+    /// progress, which is drawn at the pulse's phase rather than as laid
+    /// out (TASK-54bb5cddc671); `None` on every other row.
+    pulse: Option<usize>,
     /// How many tasks it is blocked by are not rows of this layout -- folded,
     /// hidden by the search, or named and never listed -- so the edges to
     /// them are counted here rather than drawn (TASK-67583993ef0d).
@@ -5889,7 +5985,7 @@ fn walked(rows: usize) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::Claim;
     use crate::paint;
@@ -9345,7 +9441,7 @@ mod tests {
     /// is the road a terminal drives and not a shortcut past it. The instant is
     /// stated rather than slept through -- a suite that waited out
     /// [`SECOND_PRESS`] would be asserting on the machine it ran on.
-    fn press_at(a: &mut App, ank: &Ank, at: Position, now: Instant) -> bool {
+    fn press_at(a: &mut App, ank: &Ank, at: Position, now: Moment) -> bool {
         let first = a.chosen.take();
         a.pressed(first, at, ank, now)
     }
@@ -9372,7 +9468,7 @@ mod tests {
         for size in [PHONE, (120, 40)] {
             let mut a = App::new(size, None).inked(paint::PLAIN).drawn_with(SCREEN);
             has_read(&mut a);
-            let start = Instant::now();
+            let start = Moment::now();
             let at = row_of(&a, 2);
 
             press_at(&mut a, &ank, at, start);
@@ -9407,7 +9503,7 @@ mod tests {
     fn two_presses_on_different_rows_open_nothing() {
         let ank = nowhere();
         let mut a = phone();
-        let start = Instant::now();
+        let start = Moment::now();
 
         let first = row_of(&a, 2);
         let elsewhere = row_of(&a, 1);
@@ -9444,7 +9540,7 @@ mod tests {
     fn a_press_past_the_interval_opens_nothing_and_is_counted_as_a_first() {
         let ank = nowhere();
         let mut a = phone();
-        let start = Instant::now();
+        let start = Moment::now();
         let at = row_of(&a, 2);
         let past = start + SECOND_PRESS + Duration::from_millis(1);
 
@@ -9485,7 +9581,7 @@ mod tests {
             "a session opens with no row selected, and this test is about the \
              row it opens on"
         );
-        let start = Instant::now();
+        let start = Moment::now();
         let at = row_of(&a, 0);
 
         press_at(&mut a, &ank, at, start);
@@ -9515,7 +9611,7 @@ mod tests {
     fn a_key_between_two_presses_ends_the_pair() {
         let ank = nowhere();
         let mut a = phone();
-        let start = Instant::now();
+        let start = Moment::now();
         let at = row_of(&a, 1);
 
         press_at(&mut a, &ank, at, start);
@@ -10744,7 +10840,7 @@ mod tests {
     const CLOSED_BLOCKER: &str = "TASK-c1b100000001";
     const ITS_DEPENDENT: &str = "TASK-c1b200000002";
     const LONE: &str = "TASK-a10e00000001";
-    const UNDER_WAY: &str = "TASK-b0a100000001";
+    pub(crate) const UNDER_WAY: &str = "TASK-b0a100000001";
     /// An identifier the graph document lists no task for.
     const UNLISTED: &str = "TASK-0000000000ab@peer";
     const HISTORY: &str = "TASK-d0e100000001";
@@ -10836,7 +10932,7 @@ mod tests {
 
     /// A screen on the graph with the fixture read, under the dashboard's
     /// width and tall enough that every row of it is on the frame.
-    fn graphed() -> App {
+    pub(crate) fn graphed() -> App {
         let mut a = App::new((DASHBOARD as usize - 1, 40), None)
             .inked(paint::PLAIN)
             .drawn_with(SCREEN);
@@ -10894,6 +10990,123 @@ mod tests {
             .into_iter()
             .find(|l| l.contains(&short))
             .unwrap_or_else(|| panic!("{id} is not on the frame:\n{}", a.frame()))
+    }
+
+    /// The cell the task under way is drawn with on this frame.
+    fn under_way_cell(a: &App) -> char {
+        let row = graph_row(a, UNDER_WAY);
+        let pulse = ['\u{00B7}', '\u{2022}', '\u{25CF}', '.', 'o', 'O'];
+        row.chars()
+            .find(|c| pulse.contains(c))
+            .unwrap_or_else(|| panic!("no pulse on the row under way: {row}"))
+    }
+
+    /// **The cell of the task under way reads the pulse's phase modulo four,
+    /// `· • ● •` and `. o O o` on a dumb terminal, a tick changes that cell
+    /// and nothing else, and the painted frame and the plain one are the
+    /// same characters at every phase** (TASK-54bb5cddc671,
+    /// ADR-559eebf5c6f5).
+    #[test]
+    fn a_tick_moves_the_cell_under_way_through_the_pulse_and_nothing_else() {
+        for (glyphs, pulse) in [
+            (SCREEN, ['\u{00B7}', '\u{2022}', '\u{25CF}', '\u{2022}']),
+            (ASCII, ['.', 'o', 'O', 'o']),
+        ] {
+            let mut plain = graphed().drawn_with(glyphs);
+            let mut painted = graphed().drawn_with(glyphs).inked(paint::COLOUR);
+            for phase in 0..9 {
+                let before = plain.frame();
+                assert_eq!(
+                    under_way_cell(&plain),
+                    pulse[phase % 4],
+                    "phase {phase}:\n{before}"
+                );
+                assert_eq!(
+                    painted.frame(),
+                    before,
+                    "the painted frame says something the plain one does not at phase {phase}"
+                );
+                assert!(plain.tick() && painted.tick(), "a pulse was due");
+                let after = plain.frame();
+                let moved: Vec<(&str, &str)> = before
+                    .lines()
+                    .zip(after.lines())
+                    .filter(|(b, a)| b != a)
+                    .collect();
+                assert_eq!(
+                    moved.len(),
+                    1,
+                    "a tick moved more than the row under way: {moved:?}"
+                );
+                let (b, a) = moved[0];
+                let changed: Vec<(char, char)> =
+                    b.chars().zip(a.chars()).filter(|(x, y)| x != y).collect();
+                assert_eq!(
+                    changed,
+                    [(pulse[phase % 4], pulse[(phase + 1) % 4])],
+                    "a tick changed something besides the cell: {b}\n{a}"
+                );
+            }
+        }
+    }
+
+    /// **A pulse is due only while a task in progress stands inside the
+    /// graph panel's page on the frame** (TASK-54bb5cddc671): with the focus
+    /// on the graph under the dashboard's width and not elsewhere, with the
+    /// row in the page and not scrolled out of it, and on the dashboard
+    /// while the right panel is the graph and not the document. A tick where
+    /// none is due moves nothing.
+    #[test]
+    fn a_pulse_is_due_only_while_a_task_in_progress_stands_in_the_graphs_page() {
+        let ank = nowhere();
+        let mut a = graphed();
+        assert!(
+            a.pulse_due(),
+            "the graph holds a task under way:\n{}",
+            a.frame()
+        );
+
+        // The focus on the entities: the graph is not on the frame.
+        let mut away = graphed();
+        tap(&mut away, &ank, KeyCode::Char('2'));
+        assert_eq!(away.focus, Focus::Entities);
+        let frame = away.frame();
+        assert!(!away.pulse_due(), "{frame}");
+        assert!(!away.tick(), "a tick moved a screen with no pulse on it");
+        assert_eq!(away.frame(), frame);
+
+        // Scrolled out: a window too short for the graph, the cursor paged
+        // to the last row.
+        a.resize(DASHBOARD - 1, 12);
+        for _ in 0..6 {
+            tap(&mut a, &ank, KeyCode::Char(' '));
+        }
+        let frame = a.frame();
+        assert!(
+            !frame.contains(&short_of(UNDER_WAY)),
+            "the row under way is still in the page:\n{frame}"
+        );
+        assert!(!a.pulse_due(), "{frame}");
+        assert!(!a.tick());
+        assert_eq!(a.frame(), frame, "a tick that was not due moved the frame");
+        // And paged back to it, due again.
+        tap(&mut a, &ank, KeyCode::Char('g'));
+        assert!(a.pulse_due(), "{}", a.frame());
+
+        // On the dashboard the right panel is the graph at rest, whichever
+        // listing has the focus, and the document once a row is opened.
+        let mut wide = graphed();
+        wide.resize(DASHBOARD + 20, 40);
+        tap(&mut wide, &ank, KeyCode::Char('2'));
+        assert!(wide.pulse_due(), "{}", wide.frame());
+        wide.opened(detail(UNDER_WAY, "body\n"));
+        let frame = wide.frame();
+        assert!(frame.contains("BODY"), "{frame}");
+        assert!(
+            !wide.pulse_due(),
+            "a pulse is due under a document:\n{frame}"
+        );
+        assert!(!wide.tick());
     }
 
     /// **Inside a block the rows are the layout's: a task stands above every

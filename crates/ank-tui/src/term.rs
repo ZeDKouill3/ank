@@ -1,4 +1,4 @@
-//! The engine: raw mode, the alternate screen, and the four things that wake a
+//! The engine: raw mode, the alternate screen, and the things that wake a
 //! drawn screen (ADR-559eebf5c6f5).
 //!
 //! **No `extern` block enters this workspace for any of it, and that is the
@@ -29,12 +29,19 @@
 //! own on top, because a panic message painted onto the alternate screen is a
 //! message the teardown then hides.
 //!
-//! **What the session is woken by is four things and no clock.** A key, a tap,
-//! a resize, and the change stream (`stream`). Nothing here is on a timer and
-//! there is no timer to put anything on: with nobody typing, nothing changing
-//! and the window still, this reader is a process asleep on a channel. That is
-//! what keeps ADR-0bb7ea8991bc's "a claim is renewed by working" true of a
+//! **What the session is woken by is four things and one clock that paints.**
+//! A key, a tap, a resize, and the change stream (`stream`); and, while a task
+//! in progress stands on the frame, the pulse's tick ([`ticker`],
+//! TASK-54bb5cddc671). That clock spawns no verb, so it reads nothing and
+//! renews nothing: what a tick does is move a cell. And it stops when no
+//! `in_progress` row is on the screen, parked until a frame holds one again,
+//! so with nobody typing, nothing changing, the window still and nothing in
+//! progress on the screen, this reader is a process asleep on a channel. That
+//! is what keeps ADR-0bb7ea8991bc's "a claim is renewed by working" true of a
 //! screen somebody left open and went home.
+//!
+//! The double tap's clock is here too ([`Moment`]): when a press landed, read
+//! at the terminal's edge so the session and the frame read no clock at all.
 
 use crate::view::App;
 use crate::Wake;
@@ -141,6 +148,100 @@ fn hook() {
             previous(panicked);
         }));
     });
+}
+
+/// How often a task in progress pulses: four phases a second
+/// (TASK-54bb5cddc671).
+pub const PULSE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The pulse's clock: a thread that sends [`Wake::Tick`] on the session's
+/// channel, at most once every [`PULSE`], and only while the session says a
+/// pulse is due (TASK-54bb5cddc671).
+///
+/// **It paints, and it is allowed nothing else.** A tick reads nothing,
+/// spawns no verb and so renews no claim (ADR-0bb7ea8991bc): what the session
+/// does with one is move a counter and draw. **And it stops when there is
+/// nothing to pulse.** While no task in progress stands on the frame last
+/// drawn the thread is parked, so a reader with no pulse on its screen is
+/// still a process asleep on a channel.
+///
+/// One tick in flight at most: the thread lowers the flag as it sends, and
+/// only the session's next frame raises it again. A session busy with a slow
+/// read therefore finds one tick waiting when it is done, never a queue of
+/// them to draw back to back. The precedent is [`crate::stream::follow`], a
+/// thread on a quarter-second clock that touches no corpus.
+pub struct Ticker {
+    due: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::Thread,
+}
+
+impl Ticker {
+    /// Whether the frame just drawn holds a task in progress. Raising it
+    /// wakes the thread; lowering it means no tick is sent until it is
+    /// raised again.
+    pub fn due(&self, due: bool) {
+        let was = self.due.swap(due, std::sync::atomic::Ordering::SeqCst);
+        if due && !was {
+            self.thread.unpark();
+        }
+    }
+}
+
+/// Starts the pulse's clock on `wake`, parked until [`Ticker::due`] says
+/// otherwise.
+pub fn ticker(wake: Sender<Wake>) -> Ticker {
+    use std::sync::atomic::Ordering::SeqCst;
+    let due = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let theirs = std::sync::Arc::clone(&due);
+    let thread = std::thread::spawn(move || loop {
+        if !theirs.load(SeqCst) {
+            // A spurious return from `park` is a pass round the loop.
+            std::thread::park();
+            continue;
+        }
+        std::thread::sleep(PULSE);
+        if theirs.swap(false, SeqCst) && wake.send(Wake::Tick).is_err() {
+            return;
+        }
+    });
+    Ticker {
+        due,
+        thread: thread.thread().clone(),
+    }
+}
+
+/// When a press landed (TASK-42de0df951a4), read off the machine's clock
+/// here, at the terminal's edge, and nowhere in the session or the frame
+/// (TASK-54bb5cddc671).
+///
+/// **What it decides is whether a press is the second of a pair**, and only
+/// that: it starts nothing, wakes nothing, and no frame is drawn because time
+/// passed. It lives in this file rather than in `view.rs` because the frame's
+/// one clock is the pulse's counter, and `crate::tests` reads the sources of
+/// the session and the frame to hold them to that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Moment(std::time::Instant);
+
+impl Moment {
+    /// The machine's clock, now.
+    pub fn now() -> Moment {
+        Moment(std::time::Instant::now())
+    }
+
+    /// How long after `earlier` this is, and zero where it is not after it.
+    pub fn duration_since(self, earlier: Moment) -> std::time::Duration {
+        self.0.saturating_duration_since(earlier.0)
+    }
+}
+
+impl std::ops::Add<std::time::Duration> for Moment {
+    type Output = Moment;
+
+    /// A moment `by` later: how a test states a second press without waiting
+    /// for one.
+    fn add(self, by: std::time::Duration) -> Moment {
+        Moment(self.0 + by)
+    }
 }
 
 /// Reads the terminal on a thread, so the drawn screen can be woken by
