@@ -233,6 +233,10 @@ const CONTEXT_OUT: &[Field] = &[
             // Gained within contract 1: the accepted ADRs that amend this one
             // in part, empty for a rule nothing amends (ADR-9ee76b578257).
             f("amended_by", Type::Strings),
+            // Gained within contract 1: what holds the rule, as `<path>#<symbol>`
+            // entries (ADR-25584c56c1a7). Non-empty, the rule is served by its
+            // title and `constraint` is the empty string rather than retyped.
+            f("enforced_by", Type::Strings),
         ]),
     ),
     f(
@@ -685,6 +689,10 @@ const NEW_KINDS: &[Kind] = &[
                 "--amends",
                 "a task amends nothing, it is work under a decision",
             ),
+            foreign(
+                "--enforced-by",
+                "a task is work, and only a rule is enforced",
+            ),
         ],
     },
     Kind {
@@ -696,6 +704,7 @@ const NEW_KINDS: &[Kind] = &[
             "--constraint",
             "--supersedes",
             "--amends",
+            "--enforced-by",
             "--body",
         ],
         requires: &[
@@ -733,6 +742,10 @@ const NEW_KINDS: &[Kind] = &[
             foreign(
                 "--amends",
                 "a spec describes, and only a decision amends a decision",
+            ),
+            foreign(
+                "--enforced-by",
+                "a spec describes, and only a rule is enforced",
             ),
         ],
     },
@@ -1285,6 +1298,7 @@ pub const COMMANDS: &[CommandSpec] = &[
             flag("--supersedes"),
             multi("--reference"),
             multi("--amends"),
+            multi("--enforced-by"),
             multi("--verify"),
             switch("--no-verify"),
             flag("--method"),
@@ -1300,6 +1314,7 @@ pub const COMMANDS: &[CommandSpec] = &[
             "--body - reads the body from stdin, so a long one needs no shell quoting",
             "--reference declares what a spec rests on; it takes a spec or an adr, and check resolves it",
             "--amends declares the ADRs an adr changes in part; each stays accepted and binding, and check resolves it",
+            "--enforced-by <path>#<symbol> names what holds an adr mechanically; context then serves it by its title, and check confronts the entry with the tree",
             "a new task carries the verifiers config.yml marks default: true; --verify names its own instead, and --no-verify declines them",
             "--method names the sibling skill the work calls for, by its short name (tdd, diagnose); context prints it after the claim, and done never reads it",
         ],
@@ -1566,7 +1581,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         renews: Renews::Named,
         writes: Writes::Files,
         coordinates: false,
-        summary: "changes blocked_by, references, amends, scope, and a done_criteria no live claim freezes",
+        summary: "changes blocked_by, references, amends, enforced_by, scope, and a done_criteria no live claim freezes",
         subcommands: &[],
         kinds: &[],
         max_positionals: 1,
@@ -1578,6 +1593,8 @@ pub const COMMANDS: &[CommandSpec] = &[
             multi("--drop-reference"),
             multi("--amends"),
             multi("--drop-amends"),
+            multi("--enforced-by"),
+            multi("--drop-enforced-by"),
             multi("--scope"),
             multi("--drop-scope"),
             // Offered now, and it was `refused` here for as long as the verb
@@ -1604,6 +1621,7 @@ pub const COMMANDS: &[CommandSpec] = &[
             "--method replaces a task's method outright, on a done task too: nothing anchors a recommendation",
             "--reference and --drop-reference reach a spec's citations, on an accepted one too: the anchor covers its body and scope, not what it cites",
             "--amends and --drop-amends reach what an ADR amends, on an accepted one too: the anchor covers its constraint and scope, not what it amends",
+            "--enforced-by and --drop-enforced-by reach what holds an ADR, on an accepted one too: the anchor covers its constraint and scope, not what enforces it",
         ],
         refuses_globals: &[],
         output: &[one(&[f("entity", Type::Str), f("amended", Type::Strings)])],

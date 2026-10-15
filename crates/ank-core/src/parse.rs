@@ -73,6 +73,10 @@ struct AdrFm {
     scope: Vec<String>,
     constraint: String,
     see: Option<String>,
+    // `default` for the reason `amends` is: absent and empty both say that
+    // nothing is declared to hold the rule.
+    #[serde(default)]
+    enforced_by: Vec<String>,
     // `default` rather than `Option`, as `references` on a spec: an empty list
     // and an absent one say the same thing, that this ADR amends nothing.
     #[serde(default)]
@@ -394,6 +398,9 @@ fn parse_adr_fm(fm: &str, body: &str) -> Result<Adr> {
         scope: raw.scope,
         constraint: raw.constraint,
         see: raw.see,
+        // Strings and nothing more: whether the path is tracked and holds the
+        // symbol is a `check` finding about the tree, never a parse error.
+        enforced_by: raw.enforced_by,
         amends,
         supersedes,
         ratified: raw.ratified,

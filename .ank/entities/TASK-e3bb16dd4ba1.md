@@ -5,7 +5,7 @@ slug: an-adr-carries-enforced-by-amend-writes-it-on-an
 title: An ADR carries enforced_by, amend writes it on an accepted ADR, check confronts it with the tree, and context serves the rule by its title
 created: 2026-10-14T10:17:25Z
 author: claude-code/fable-5.1+plan
-status: open
+status: done
 scope:
   - crates/ank-core/**
   - crates/ank-cli/src/commands.rs
@@ -21,8 +21,21 @@ done_criteria: |
 criteria_by: creator
 verify: [cargo-test, fmt-check]
 method: tdd
+proof:
+  - type: test
+    ref: local/e3ad7186074e@8c7bb16
+    tree: scope/089dbcb8d025
+    criteria: f5933adc91a7
+    verifier: cargo-test@fcf98015afba
+    via: verifier
+  - type: test
+    ref: local/e3b0c44298fc@8c7bb16
+    tree: scope/089dbcb8d025
+    criteria: f5933adc91a7
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 The pattern is the one amends (eb15140e) and method (a81d4bd2) followed: an opt() row in registry.rs at its canonical position, the model and parse fields, an emit arm that omits the field when empty, a golden fixture, docs/format.md, docs/entity-fields.md regenerated. The anchor covers constraint and scope only (ratification_anchor in human.rs), which is what lets amend write the field on an accepted ADR.

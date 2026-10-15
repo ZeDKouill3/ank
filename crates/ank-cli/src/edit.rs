@@ -499,6 +499,7 @@ fn changed_fields(before: &Entity, after: &Entity) -> Vec<&'static str> {
             note("scope", a.scope != b.scope);
             note("constraint", a.constraint != b.constraint);
             note("see", a.see != b.see);
+            note("enforced_by", a.enforced_by != b.enforced_by);
             note("amends", a.amends != b.amends);
             note("supersedes", a.supersedes != b.supersedes);
             note("ratified", a.ratified != b.ratified);
@@ -593,6 +594,7 @@ mod tests {
             scope: vec!["src/**".into()],
             constraint: "Do not do X.\n".into(),
             see: None,
+            enforced_by: Vec::new(),
             amends: Vec::new(),
             supersedes: None,
             ratified: None,

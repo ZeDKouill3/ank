@@ -209,6 +209,9 @@ impl Repo {
             "--reference" => self.spec.clone(),
             // What an ADR amends is another ADR (ADR-9ee76b578257).
             "--amends" => self.adr.clone(),
+            // A file and a symbol in it (ADR-25584c56c1a7): `x` is refused on
+            // its shape, which is not a refusal of the flag.
+            "--enforced-by" => "src/main.rs#main".into(),
             "--supersedes" => match kind {
                 "adr" => self.adr.clone(),
                 "spec" => self.spec.clone(),

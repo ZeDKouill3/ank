@@ -2966,6 +2966,7 @@ mod tests {
             scope: scope.iter().map(|s| s.to_string()).collect(),
             constraint: constraint.into(),
             see: None,
+            enforced_by: Vec::new(),
             amends: Vec::new(),
             supersedes: None,
             ratified: None,
