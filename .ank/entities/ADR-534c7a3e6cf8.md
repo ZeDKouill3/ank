@@ -26,13 +26,17 @@ constraint: |
   Relicensing is prospective and says so: a release already made under GPL-3.0
   stays available under GPL-3.0 to whoever received it, and nothing in the tree
   claims to withdraw that.
+enforced_by:
+  - crates/ank-cli/tests/skill.rs#every_manifest_declares_the_ratified_licence
+  - crates/ank-cli/tests/skill.rs#the_relicensing_boundary_is_stated_the_same_way_everywhere
+  - crates/ank-cli/tests/skill.rs#every_licence_text_names_its_copyright_owner
 supersedes: ADR-9f03438f5422
 ratified: 11f332dddc55
 verified:
   - by: claude-code/opus-5+ratify
     at: 2026-08-31T08:12:42Z
 schema: 4
-version: 2
+version: 3
 ---
 
 The licence is ADR-9f03438f5422's and it does not move: Apache-2.0, whole,
