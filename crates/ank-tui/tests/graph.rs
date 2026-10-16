@@ -50,6 +50,15 @@ const WIDE: (u16, u16) = (160, 45);
 /// The two windows the criterion names.
 const WINDOWS: [(u16, u16); 2] = [DESK, WIDE];
 
+/// The desk one row taller, for a graph unfolded to every task.
+///
+/// The last row of every frame is the key line since TASK-933fdb42c7d9, so at
+/// eighty by twenty-four the region holds seventeen lines -- one short of the
+/// fixture unfolded with its history, whose twelfth task would stand off the
+/// page. A row more gives the page back the line the key line took.
+#[cfg(unix)]
+const UNFOLDED_WINDOWS: [(u16, u16); 2] = [(DESK.0, DESK.1 + 1), WIDE];
+
 /// The pulse of a task under way, phase by phase (TASK-54bb5cddc671): `· • ●
 /// •` where the terminal draws box-drawing glyphs, and `. o O o` on one that
 /// declared itself dumb.
@@ -1587,7 +1596,7 @@ fn a_graph_row_says_ready_waits_n_in_progress_done_or_closed_and_never_open() {
         .unwrap_or_else(|held| held.into_inner());
     let (fixture, history) = historied();
     let key = cycle_key();
-    for (columns, rows) in WINDOWS {
+    for (columns, rows) in UNFOLDED_WINDOWS {
         let mut live = Live::open(&fixture.repo, columns, rows);
         opened(&live, columns);
         if !wide(columns) {
@@ -1841,7 +1850,7 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
     fixture.repo.warm_find();
     let key = cycle_key();
     let every = every_task(&fixture, &history);
-    for (columns, rows) in WINDOWS {
+    for (columns, rows) in UNFOLDED_WINDOWS {
         let trace_path = fixture.repo.0.join(format!("fold-{columns}.trace"));
         let (mut live, rest) = settled_on_graph(&fixture, columns, rows, &trace_path);
         let at_rest = shorts(&rest, columns);

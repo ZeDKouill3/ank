@@ -2,7 +2,7 @@
 # job (ADR-8c12a38531e3): one pool for every test of every binary, so the
 # binaries no longer wait for each other.
 
-# Six suites of ank-tui open pseudo-terminals, and under `cargo test` they take
+# Eight suites of ank-tui open pseudo-terminals, and under `cargo test` they take
 # them in turn through the in-process `terminal::ONE_AT_A_TIME` lock:
 # `ptsname(3)` answers out of a static buffer, so two sessions opened at once in
 # one process can be handed the same slave path (LOG-3b0bc419c884). Under
@@ -14,7 +14,7 @@
 pty-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(ank-tui) & binary(integration) & test(/^(bindings|colour|edit|graph|overlay|search|verbs)::/)'
+filter = 'package(ank-tui) & binary(integration) & test(/^(bindings|claims|colour|edit|graph|overlay|search|verbs)::/)'
 test-group = 'pty-serial'
 
 # CI runs every test to the end: whether a failure is one platform's or every

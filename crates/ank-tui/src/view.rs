@@ -1844,11 +1844,17 @@ impl App {
                     }
                 }
                 // A panel's title is the digit it is drawn with, pressed
-                // (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa).
+                // (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa). The document's title
+                // is drawn with no digit (TASK-a9cd362ee5e2), so a touch there
+                // presses nothing -- and is not handed on to the rows below it
+                // either, where it would choose a row nobody aimed at.
                 if let Some(focus) = self.title_at(at) {
-                    if let Some(binding) = bindings::of_command(&Command::Panel(focus)) {
-                        return self.press(KeyEvent::new(binding.key, KeyModifiers::NONE), ank);
-                    }
+                    return match bindings::of_command(&Command::Panel(focus)) {
+                        Some(binding) => {
+                            self.press(KeyEvent::new(binding.key, KeyModifiers::NONE), ank)
+                        }
+                        None => false,
+                    };
                 }
                 self.tapped(first, at, ank)
             }

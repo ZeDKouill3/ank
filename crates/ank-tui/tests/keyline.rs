@@ -11,7 +11,7 @@
 
 #![cfg(unix)]
 
-use crate::terminal::{Live, Repo};
+use crate::terminal::{Live, Repo, BODY};
 
 /// The desk, under the dashboard's declared width.
 const DESK: (u16, u16) = (80, 24);
@@ -126,7 +126,9 @@ fn the_line_is_what_the_focused_panel_offers() {
     let repo = Repo::seeded();
     let mut live = Live::open(&repo, WIDE.0, WIDE.1);
     opened(&live);
-    live.send("3");
+    // Enter on the entities' first row and not `3`: the document is what a row
+    // opens into, and `3` is the graph's (TASK-a9cd362ee5e2).
+    live.send("\r");
     let frame = live.until("the body to have the focus", |t| {
         last_row(t).contains("[b back]")
     });
@@ -260,7 +262,7 @@ fn a_tap_on_an_entry_presses_its_key() {
         } else {
             assert_eq!(middle, "[Enter open]", "the first entry the desk keeps");
             tap_entry(&mut live, &frame, &middle, rows);
-            live.until("the row to open", |t| t.contains("3 BODY"));
+            live.until("the row to open", |t| t.contains(BODY));
         }
         live.quit();
     }
@@ -287,13 +289,15 @@ fn a_tap_on_a_panel_title_presses_its_digit() {
     live.quit();
 
     // The desk: one panel at a time, so the one title on the frame names the
-    // panel already focused, and pressing its digit changes nothing -- which is
-    // what a tap on it must do too, rather than choose a row or close the
-    // document the way a tap elsewhere on the frame might.
+    // panel already focused. The document's names no digit at all
+    // (TASK-a9cd362ee5e2), so a tap on it presses nothing -- rather than choose
+    // a row or close the document the way a tap elsewhere on the frame might.
+    // The key list opened and closed behind the tap is what says the tap was
+    // read before the frame is compared.
     let mut live = Live::open(&repo, DESK.0, DESK.1);
     opened(&live);
     live.send("\r");
-    let before = live.until("the row to open", |t| t.contains("3 BODY"));
+    let before = live.until("the row to open", |t| t.contains(BODY));
     let before = {
         let _ = before;
         live.frame()
@@ -301,11 +305,18 @@ fn a_tap_on_a_panel_title_presses_its_digit() {
     let (row, line) = before
         .split('\n')
         .enumerate()
-        .find(|(_, l)| l.contains("3 BODY"))
+        .find(|(_, l)| l.contains(BODY))
         .unwrap();
-    let column = line[..line.find("3 BODY").unwrap()].chars().count();
+    let column = line[..line.find(BODY).unwrap()].chars().count();
     live.tap(column as u16 + 2, row as u16);
-    live.send("3");
-    assert_eq!(live.frame(), before, "a tap on the title is a press of 3");
+    live.send("?");
+    live.until("the key list to open", |t| t.contains("KEYS"));
+    live.send("\x1b");
+    live.until("the key list to close", |t| !t.contains("KEYS"));
+    assert_eq!(
+        live.frame(),
+        before,
+        "a tap on the document's title pressed something"
+    );
     live.quit();
 }

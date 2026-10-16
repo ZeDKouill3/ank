@@ -102,15 +102,27 @@ fn forge(repo: &Repo, id: &str, field: &str, value: &str) {
 }
 
 /// The lines of the claims panel's body: after its title and before the next
-/// panel's.
+/// panel's, and inside its columns.
+///
+/// **The panel's columns and not the frame's lines.** On the dashboard the
+/// right panel stands beside the column of listings on the very same lines,
+/// and at rest it is the graph (TASK-a9cd362ee5e2), whose rows name tasks too:
+/// a line read whole would count a graph row beside a blank claims row as a
+/// claim. Each line is cut at the claims panel's right border, the column of
+/// the corner its title line closes on.
 fn claim_rows(frame: &str) -> Vec<String> {
-    frame
-        .lines()
-        .skip_while(|l| !l.contains("1 CLAIMS"))
-        .skip(1)
+    let mut lines = frame.lines().skip_while(|l| !l.contains("1 CLAIMS"));
+    let Some(title) = lines.next() else {
+        return Vec::new();
+    };
+    let edge = title
+        .chars()
+        .position(|c| c == '\u{256e}' || c == '\u{2513}')
+        .unwrap_or(usize::MAX);
+    lines
+        .map(|l| l.chars().take(edge).collect::<String>())
         .take_while(|l| !l.contains("2 ENTITIES"))
         .filter(|l| l.contains("TASK-"))
-        .map(str::to_string)
         .collect()
 }
 
