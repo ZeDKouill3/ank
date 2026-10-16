@@ -5,7 +5,7 @@ slug: the-reader-is-one-list-and-one-document-and-what
 title: The reader is one list and one document, and what it shows first is what moved last
 created: 2026-08-27T16:32:47Z
 author: haksolot@vmi3223161
-status: accepted
+status: superseded
 scope:
   - crates/ank-tui/**
 constraint: |
@@ -30,7 +30,7 @@ verified:
   - by: haksolot@vmi3223161
     at: 2026-08-29T20:31:10Z
 schema: 4
-version: 3
+version: 4
 ---
 
 ADR-c07e2694f0e1 is one day old and this supersedes it, which needs saying
