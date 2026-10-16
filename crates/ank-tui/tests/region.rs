@@ -119,9 +119,10 @@ const FIND: char = ank_tui::keys::FIND;
 /// default it was born with. It used to be read off the trailer, which was the
 /// last row and was never blank; TASK-9a402a54886f took the trailer away, and
 /// the last row of every frame is now the note band -- one row, blank where
-/// there is nothing to say. So the assertion moved one row up, onto the
-/// region's own bottom border, and says the same thing about the same layout:
-/// the chrome under it is exactly one row, and it is the window's last.
+/// there is nothing to say. TASK-933fdb42c7d9 put the key line under it
+/// (ADR-ac6be1ebe9aa), so the last row is never blank again: it is the key
+/// line, the note band is the row over it, and the region closes on the row
+/// over that.
 #[test]
 fn no_frame_overflows_the_window_at_eighty_columns_or_at_forty() {
     let repo = Repo::seeded();
@@ -129,7 +130,7 @@ fn no_frame_overflows_the_window_at_eighty_columns_or_at_forty() {
         let live = Live::open(&repo, columns, rows);
         live.until("the session to open", |t| t.contains("ank tui"));
         let frame = live.frame();
-        // `split` and not `lines`, because the grid's last row is blank now and
+        // `split` and not `lines`, because the note band is a blank row and
         // `lines` drops the empty piece a trailing separator leaves behind.
         let grid: Vec<&str> = frame.split('\n').collect();
         assert_eq!(
@@ -145,20 +146,24 @@ fn no_frame_overflows_the_window_at_eighty_columns_or_at_forty() {
                 line.chars().count()
             );
         }
-        let last = grid
+        assert!(
+            grid[rows as usize - 1].starts_with("[? keys]"),
+            "the key line is not the last row of a {columns}x{rows} window:\n{frame}"
+        );
+        assert!(
+            grid[rows as usize - 2].trim().is_empty(),
+            "something other than the blank note band is over the key line of a \
+             {columns}x{rows} window:\n{frame}"
+        );
+        let last = grid[..rows as usize - 2]
             .iter()
             .rposition(|line| !line.trim().is_empty())
             .expect("a frame with something on it");
         assert_eq!(
             last,
-            rows as usize - 2,
-            "the region does not close on the window's second-last row \
+            rows as usize - 3,
+            "the region does not close on the row over the note band \
              of a {columns}x{rows} window:\n{frame}"
-        );
-        assert!(
-            grid[rows as usize - 1].trim().is_empty(),
-            "something other than the note band is on the last row of a \
-             {columns}x{rows} window:\n{frame}"
         );
         live.quit();
     }

@@ -64,9 +64,10 @@ fn peeled(line: &str) -> String {
 /// A window the key list fits on whole.
 ///
 /// Two hundred columns because the longest line the table generates is under
-/// that with room to spare, and fifty rows because the note band grows to hold
-/// what it is given and the panels have to survive it.
-const WIDE: (u16, u16) = (200, 50);
+/// that with room to spare, and sixty rows because the list is forty-eight
+/// rows long now that the form's keys are on it (TASK-933fdb42c7d9), and the
+/// header, the overlay's two borders and the key line come off the window.
+const WIDE: (u16, u16) = (200, 60);
 
 /// **The binary answers `?` with every binding the table declares, and with
 /// nothing it does not** (TASK-4d2eb2b4e193).

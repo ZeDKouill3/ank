@@ -5,7 +5,7 @@ slug: the-last-row-of-every-frame-is-a-line-of-keys-an
 title: The last row of every frame is a line of keys, and every entry and every panel title is a touch target
 created: 2026-10-16T08:19:02Z
 author: claude-code/opus-5.5+keyline
-status: open
+status: in_progress
 scope:
   - crates/ank-tui/src/**
   - crates/ank-tui/tests/**
@@ -17,5 +17,5 @@ criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 method: tdd
 schema: 4
-version: 1
+version: 4
 ---

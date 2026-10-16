@@ -1260,6 +1260,13 @@ impl App {
                 // somewhere else, and the row a person chose before it is not
                 // half of a gesture any more.
                 let first = self.chosen.take();
+                // The key line, before everything drawn over the panels: no
+                // overlay covers it (TASK-933fdb42c7d9), and what it names is
+                // what the screen holding it answers to, so a press of its key
+                // is the right answer on every screen, the modal ones included.
+                if let Some(key) = self.target_at(at) {
+                    return self.press(KeyEvent::new(key, KeyModifiers::NONE), ank);
+                }
                 // The list is over the region and over the bands, so it is what
                 // a press lands on while it is open: one row, one binding, and
                 // no second road to whatever is drawn underneath it.
@@ -1293,9 +1300,6 @@ impl App {
                         None => false,
                     };
                 }
-                if let Some(key) = self.target_at(at) {
-                    return self.press(KeyEvent::new(key, KeyModifiers::NONE), ank);
-                }
                 if self.pending.is_some() {
                     // Through the gate and not around it: what a tap is, is a
                     // keystroke that is not the one key that runs.
@@ -1322,6 +1326,13 @@ impl App {
                 // for the finger on the day it moved for the key.
                 if self.kind_rect(self.area()).contains(at) {
                     if let Some(binding) = cycle_binding() {
+                        return self.press(KeyEvent::new(binding.key, KeyModifiers::NONE), ank);
+                    }
+                }
+                // A panel's title is the digit it is drawn with, pressed
+                // (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa).
+                if let Some(focus) = self.title_at(at) {
+                    if let Some(binding) = bindings::of_command(&Command::Panel(focus)) {
                         return self.press(KeyEvent::new(binding.key, KeyModifiers::NONE), ank);
                     }
                 }
@@ -2152,16 +2163,15 @@ impl App {
         // wraps the offer under it, and neither reaches `page` -- which is what
         // keeps this function out of a recursion.
         let wanted_note = self.note_lines().len() as u16;
-        let wanted_offer = self.target_rows() as u16;
         let header = HEADER.min(area.height);
         let under = area.height - header;
-        // The region first, the note second, the offer last. The note is ahead
-        // of the offer because a refusal the CLI gave is the one thing on this
-        // screen a person cannot ask for again.
-        let bands = under.saturating_sub(REGION).min(wanted_note + wanted_offer);
-        let note = bands.min(wanted_note);
-        let offered = bands - note;
-        let region = under - bands;
+        // The region first, the key line second, the note last
+        // (TASK-933fdb42c7d9). The key line is one row on every frame that has
+        // a region to draw over it, and the note gets what the two leave.
+        let keys = u16::from(under > REGION);
+        let rest = under - keys;
+        let note = rest.saturating_sub(REGION).min(wanted_note);
+        let region = rest - note;
         let mut y = area.y;
         let mut band = |rows: u16| {
             let rect = Rect::new(area.x, y, area.width, rows);
@@ -2175,7 +2185,7 @@ impl App {
             region: whole,
             rects: self.divide(whole),
             note: band(note),
-            actions: band(offered),
+            keys: band(keys),
         }
     }
 
@@ -2240,6 +2250,23 @@ impl App {
         Focus::ALL
             .into_iter()
             .find(|f| panels.rects[f.number() - 1].contains(at))
+    }
+
+    /// The panel whose title a position is on: the top border between its two
+    /// corners, which is the row the title is drawn on (TASK-933fdb42c7d9).
+    ///
+    /// Every panel on a wide frame; under [`DASHBOARD`] the one on the frame,
+    /// whose title names the panel already focused.
+    fn title_at(&self, at: Position) -> Option<Focus> {
+        let rects = self.arrange(self.area()).rects;
+        let drawn: Vec<Focus> = match self.wide() {
+            true => Focus::ALL.to_vec(),
+            false => vec![self.focus],
+        };
+        drawn.into_iter().find(|f| {
+            let r = rects[f.number() - 1];
+            r.width >= 2 && at.y == r.y && at.x > r.x && at.x < r.right() - 1
+        })
     }
 
     /// Whether this window is wide enough to draw the dashboard
@@ -2374,7 +2401,7 @@ impl App {
         }
 
         paragraph(&self.note_lines()).render(panels.note, buf);
-        paragraph(&self.action_lines()).render(panels.actions, buf);
+        paragraph(&self.action_lines()).render(panels.keys, buf);
 
         // Last, and over everything the header does not carry: the key list is
         // an overlay (TASK-8a6578851244), so it is painted after the frame it
@@ -3354,59 +3381,76 @@ impl App {
         if self.needle.is_some() {
             return Holding::Narrowing;
         }
+        if self.form.is_some() {
+            return Holding::Filling;
+        }
         Holding::Panel(self.focus)
     }
 
-    /// The offer laid out on the band it is drawn in.
+    /// The key line, laid out on the row it is drawn in (TASK-933fdb42c7d9,
+    /// ADR-ac6be1ebe9aa).
     ///
     /// **One arithmetic for drawing it and for hitting it**, which is the same
     /// reason [`App::arrange`] is asked twice: a target a person can see and a
     /// target a tap resolves to are the same rectangle or they are two, and two
-    /// is a screen that answers somewhere other than where it was touched.
+    /// is a screen that answers somewhere other than where it was touched. It
+    /// reads the width and nothing else -- no page, no rectangle -- so it can
+    /// never reach back into the layout that places it.
     ///
-    /// Wrapped rather than cut, because a target cut in half is a target whose
-    /// key nobody can read. It reads the width and nothing else -- no page, no
-    /// rectangle -- so [`App::arrange`] may ask it for its height.
+    /// **What the screen holds, filtered out of the table, between the key list
+    /// and the way out.** Where `?` and `q` do what they name -- a panel has the
+    /// focus, with or without one of the two lists over it -- the line opens
+    /// on the key list's key and closes on the key that quits, and those are
+    /// the two it never drops: one is the road to every other key, the other
+    /// the answer to the first question a new user asked. Where the screen is
+    /// modal -- a command waiting, a search, a form -- those two letters are an
+    /// answer, a needle or a character of a field, and the line names the keys
+    /// that screen answers to instead.
     ///
-    /// **And it is empty unless a command is waiting** (TASK-9a402a54886f).
-    /// The band was drawn at rest on every frame and at every window, and it
-    /// was priced at four rows of the twenty-four the reader it was written for
-    /// has. What replaced it is the key list behind a permanently visible
-    /// target ([`App::help_line`]), which costs a cell rather than a band. The confirmation keeps its two, and that is the one
-    /// screen where knowing the key is not optional: a person being asked
-    /// whether to run something must be able to say no without having learnt a
-    /// letter first.
-    ///
-    /// The gate is here rather than in [`App::actions`] so that drawing the
-    /// band and hitting it stay one arithmetic: [`App::target_at`] resolves
-    /// against these very rectangles, and a band that was empty for the eye and
-    /// occupied for the finger would answer a touch nobody aimed at anything.
+    /// **Where the width cannot hold it, entries go from the middle**, one at a
+    /// time, until it fits; a target is never cut, because a target cut in half
+    /// is a target whose key nobody can read.
     fn targets(&self) -> Vec<Target> {
-        if self.pending.is_none() {
-            return Vec::new();
-        }
         let width = self.width();
+        let mut keys = self.actions();
+        if let Holding::Panel(_) = self.holding() {
+            let ends = [Command::Help, Command::Quit].map(|c| bindings::of_command(&c));
+            keys.retain(|a| !ends.iter().flatten().any(|b| b.key == a.key));
+            let [help, quit] = ends.map(|b| {
+                b.map(|b| Action {
+                    key: b.key,
+                    does: b.word,
+                })
+            });
+            keys.splice(0..0, help);
+            keys.extend(quit);
+        }
+        let cost = |keys: &[Action]| {
+            keys.iter()
+                .map(|a| a.label().chars().count())
+                .sum::<usize>()
+                + GAP * keys.len().saturating_sub(1)
+        };
+        while keys.len() > 2 && cost(&keys) > width {
+            keys.remove(keys.len() / 2);
+        }
         let mut out: Vec<Target> = Vec::new();
-        let (mut row, mut at) = (0usize, 0usize);
-        for action in self.actions() {
+        let mut at = 0usize;
+        for action in keys {
             let label = action.label();
             let len = label.chars().count();
-            if at > 0 && at + len > width {
-                row += 1;
-                at = 0;
-            }
             out.push(Target {
-                row,
+                row: 0,
                 at,
                 label,
                 key: action.key,
             });
-            at += len + 2;
+            at += len + GAP;
         }
         out
     }
 
-    /// How many rows the offer costs, which is what the layout pays for it.
+    /// How many rows the line costs, which is one.
     fn target_rows(&self) -> usize {
         self.targets().last().map_or(0, |t| t.row + 1)
     }
@@ -3434,7 +3478,7 @@ impl App {
     /// The key a tap on the offer pressed, or `None` where it landed between
     /// two targets.
     fn target_at(&self, at: Position) -> Option<KeyCode> {
-        let band = self.arrange(self.area()).actions;
+        let band = self.arrange(self.area()).keys;
         if !band.contains(at) {
             return None;
         }
@@ -3543,12 +3587,14 @@ impl App {
     /// corpus and which branch they are on, and a list of keys is not a reason
     /// to stop saying so.
     fn list_rect(&self, area: Rect) -> Rect {
-        let header = self.arrange(area).header;
+        let panels = self.arrange(area);
         Rect {
             x: area.x,
-            y: area.y + header.height,
+            y: area.y + panels.header.height,
             width: area.width,
-            height: area.height.saturating_sub(header.height),
+            height: area
+                .height
+                .saturating_sub(panels.header.height + panels.keys.height),
         }
     }
 
@@ -4062,16 +4108,15 @@ struct Panels {
     /// (TASK-cae5c8ec9a69). See [`App::divide`].
     rects: [Rect; 4],
     note: Rect,
-    /// The band the offer is drawn in, and the one band on this screen a finger
-    /// is aimed at rather than an eye (TASK-dd9747e5e305).
+    /// The key line: the last row of the frame, on every frame
+    /// (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa).
     ///
-    /// **Zero rows on every frame but one** (TASK-9a402a54886f). It is drawn
-    /// while a command is waiting to be answered and never otherwise, because
-    /// that is the one screen that still needs an offer drawn on it: a
-    /// person deciding whether to run something must not have to know a letter
-    /// to say no. Everywhere else the offer is the key list, which costs
-    /// nothing until it is asked for.
-    actions: Rect,
+    /// One row and never more. It was a band that wrapped, drawn only over a
+    /// waiting command (TASK-9a402a54886f), because the trailer before it had
+    /// cost four rows of twenty-four; the line that replaced both drops entries
+    /// from its middle rather than taking a second row, so what it costs is
+    /// one row at every window, and the overlays stop above it.
+    keys: Rect,
 }
 
 /// The corpus line, the identity line, and the rule under them.
@@ -7930,7 +7975,7 @@ mod tests {
 
     /// Where a target is drawn, by the key it carries.
     fn target_of(a: &App, key: KeyCode) -> Position {
-        let band = a.arrange(a.area()).actions;
+        let band = a.arrange(a.area()).keys;
         let target = a
             .targets()
             .into_iter()
@@ -8328,74 +8373,73 @@ mod tests {
         ]
     }
 
-    /// **The band of targets is zero rows on every screen but the
-    /// confirmation, and there it draws its own two** (TASK-9a402a54886f).
+    /// **Every screen draws its key line on its last row, and a touch on an
+    /// entry is a press of its key** (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa).
     ///
-    /// The clause it used to answer -- every action of the focused pane drawn
-    /// as a visible target at rest -- is gone, and what the band cost is four
-    /// rows of the twenty-four a phone-sized window has. The confirmation is
-    /// what stayed, because a person
-    /// being asked whether to run something must be able to say no without
-    /// having learnt a letter first.
+    /// It replaced the band that was zero rows on every screen but the
+    /// confirmation (TASK-9a402a54886f): the decision now puts the keys on the
+    /// screen at rest, at the price of one row, and the confirmation's two are
+    /// what its line names.
     ///
-    /// Both halves of what is left, as before: the target is on the frame where
-    /// a person can read it, and touching it does exactly what pressing the key
-    /// it names does. Compared as states rather than asserted one by one -- two
-    /// screens driven from the same start, one by a finger and one by the key
-    /// the finger's target names -- so a target that reached the right place by
-    /// a different road would still fail.
+    /// Compared as states rather than asserted one by one -- two screens driven
+    /// from the same start, one by a finger and one by the key the finger's
+    /// target names -- so a target that reached the right place by a different
+    /// road would still fail.
     #[test]
-    fn the_confirmation_draws_its_two_targets_and_no_other_screen_draws_any() {
+    fn every_screen_draws_its_key_line_and_a_touch_on_an_entry_is_its_key() {
         let ank = nowhere();
         for state in offering() {
             let mut start = phone();
             state(&mut start);
-            if start.pending.is_none() {
-                assert!(
-                    start.targets().is_empty(),
-                    "a screen with no command waiting is drawing targets:\n{}",
-                    start.frame()
-                );
-                assert_eq!(
-                    start.arrange(start.area()).actions.height,
-                    0,
-                    "the band is costing rows with nothing in it:\n{}",
-                    start.frame()
-                );
-                continue;
+            assert_eq!(
+                start.arrange(start.area()).keys.height,
+                1,
+                "the key line is one row:\n{}",
+                start.frame()
+            );
+            let targets = start.targets();
+            assert!(!targets.is_empty(), "no key line:\n{}", start.frame());
+            let frame = start.frame();
+            let last = frame.lines().last().unwrap_or_default().to_string();
+            if start.pending.is_some() {
+                assert_eq!(targets.len(), 2, "the confirmation offers two keys");
             }
-            let actions = start.actions();
-            assert_eq!(actions.len(), 2, "the confirmation offers two keys");
-            for action in actions {
-                // Drawn, whole, where a person can read it.
-                let label = action.label();
+            for target in targets {
+                // Drawn, whole, on the last row.
                 assert!(
-                    start.frame().contains(&label),
-                    "{label} is not on the frame:\n{}",
-                    start.frame()
+                    last.contains(&target.label),
+                    "{} is not on the last row:\n{frame}",
+                    target.label
                 );
                 // And what it carries is the key itself, spelled the way the
                 // mapping spells it: a target reading `[Ctrl-x something]`
-                // would be an offer a phone cannot take, and one naming a
-                // letter the reader does not answer to would be worse -- it
-                // reads as an offer and behaves as nothing.
+                // would be an offer a phone cannot take.
                 assert!(
-                    label.starts_with(&format!("[{} ", named(action.key))),
-                    "{label} does not carry the key it runs"
+                    target
+                        .label
+                        .starts_with(&format!("[{} ", named(target.key))),
+                    "{} does not carry the key it runs",
+                    target.label
                 );
                 // Touched, and pressed: the same screen either way.
                 let mut touched = phone();
                 state(&mut touched);
-                let at = target_of(&touched, action.key);
-                touch(&mut touched, &ank, at);
+                let at = target_of(&touched, target.key);
+                let ended = touch(&mut touched, &ank, at);
                 let mut pressed = phone();
                 state(&mut pressed);
-                pressed.press(KeyEvent::new(action.key, KeyModifiers::NONE), &ank);
+                let quit = pressed.press(KeyEvent::new(target.key, KeyModifiers::NONE), &ank);
+                assert_eq!(
+                    ended, quit,
+                    "touching {} ends what {:?} ends",
+                    target.label, target.key
+                );
                 assert_eq!(
                     touched.frame(),
                     pressed.frame(),
-                    "touching {label} is not pressing {:?}",
-                    action.key
+                    "touching {} is not pressing {:?}",
+                    target.label,
+                    target.key
                 );
             }
         }
