@@ -5,7 +5,7 @@ slug: the-painted-and-the-plain-colour-sessions-compar
 title: The painted and the plain colour sessions compare the same settled screens
 created: 2026-10-16T08:04:14Z
 author: claude-code/opus-5.5+flake
-status: open
+status: in_progress
 scope:
   - crates/ank-tui/tests/colour.rs
   - crates/ank-tui/tests/terminal/**
@@ -15,5 +15,5 @@ done_criteria: |
 criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 schema: 4
-version: 1
+version: 3
 ---

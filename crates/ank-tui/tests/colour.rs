@@ -185,7 +185,7 @@ fn sets(params: &[usize]) -> Vec<Vec<usize>> {
 /// would go unasserted. What comes back is the frames joined in the order they
 /// were drawn, which is what the four panels used to give in one rectangle.
 fn driven(mut live: Live) -> (String, Vec<u8>) {
-    live.until("the session to open", |t| t.contains("2 ENTITIES"));
+    live.until("the session to open", |t| settled(t, "2 ENTITIES all"));
     let mut seen = vec![live.frame()];
     // `s` and no longer `c`: the constraints pane moved when `claim` took the
     // letter (TASK-1a415107fd56).
@@ -198,19 +198,43 @@ fn driven(mut live: Live) -> (String, Vec<u8>) {
     // drawn at once and the comparison was made on the last frame; with one
     // region it is the difference between comparing a document with a document
     // and comparing a document with the listing it replaced.
+    //
+    // **And the screen is the focused title, not a title** (TASK-1cd651fb434b).
+    // The dashboard draws every panel at once (ADR-ac6be1ebe9aa), so `3 BODY`,
+    // `2 ENTITIES` and `4 QUEUE` are on the frame before the key that reaches
+    // them is read, and a wait on the name alone returned at once: one painted
+    // session in fifteen under load ended on the listing with the queue beside
+    // it, a keypress early. See [`settled`].
     for (key, reached) in [
-        ("\r", "3 BODY"),
-        ("s", "3 CONSTRAINTS"),
-        ("b", "2 ENTITIES"),
-        ("4", "4 QUEUE"),
+        ("\r", "3 BODY   TASK-"),
+        ("s", "3 CONSTRAINTS   TASK-"),
+        ("b", "2 ENTITIES all"),
+        ("4", "4 QUEUE all"),
     ] {
         live.send(key);
-        live.until(reached, |t| t.contains(reached));
+        live.until(reached, |t| settled(t, reached));
         seen.push(live.frame());
     }
     let raw = live.raw();
     live.quit();
     (seen.join("\n"), raw)
+}
+
+/// Whether a frame is the screen `reached` names, with every panel answered.
+///
+/// Two conditions, because a frame can be early in two ways. The title that
+/// carries the focus mark has to begin with `reached`, which is spelled with
+/// what only an answer puts there: `all` after a listing's count, an
+/// identifier after `BODY` (a body names none until `show` has replied). And no
+/// panel may still say it is waiting for its verb: the opening asks claims,
+/// entities and queue at once, and a frame drawn between two of the answers is
+/// a screen neither session would draw the same way twice.
+fn settled(frame: &str, reached: &str) -> bool {
+    let focused = format!("{}{reached}", ank_tui::view::BOXES.focus());
+    let unanswered = ["(reading)", "(not read)"]
+        .iter()
+        .any(|waiting| frame.contains(waiting));
+    !unanswered && frame.lines().any(|line| line.contains(&focused))
 }
 
 /// The parameters a session set, over every sequence it sent.
@@ -267,7 +291,7 @@ fn with_no_color_set_the_screen_still_says_everything_it_has_to_say() {
     let repo = Repo::seeded();
     with_a_retired_row(&repo);
     let live = Live::open(&repo, WINDOW.0, WINDOW.1);
-    live.until("the session to open", |t| t.contains("2 ENTITIES"));
+    live.until("the session to open", |t| settled(t, "2 ENTITIES all"));
     let frame = live.frame();
     assert!(
         frame.contains("2 ENTITIES"),
