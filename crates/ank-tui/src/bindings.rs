@@ -446,7 +446,7 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Find),
         word: "find",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Entities]),
+        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Queue]),
         verb: None,
     },
     // `u` and no longer `r`, which is `release`'s now: the corpus is a working

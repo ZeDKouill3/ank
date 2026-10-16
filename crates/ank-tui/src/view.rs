@@ -1011,7 +1011,7 @@ impl App {
             Focus::Claims | Focus::Body => Vec::new(),
         };
         let total = match focus {
-            Focus::Claims => self.held.as_ref().map_or(0, |h| h.claims.len()),
+            Focus::Claims => self.claimed().len(),
             Focus::Body => self.pane_lines().len(),
             Focus::Entities | Focus::Queue => rows.len(),
         };
@@ -1043,6 +1043,34 @@ impl App {
         }
     }
 
+    /// The claims, narrowed by the search in force (ADR-ac6be1ebe9aa: a search
+    /// narrows the focused listing, and this is one).
+    ///
+    /// The needle is matched against what the row shows -- the task, its
+    /// title, the holder -- and not the kind, which narrows the corpus's
+    /// listings and has nothing to say about who holds what.
+    fn claimed(&self) -> Vec<&model::Claim> {
+        let Some(held) = &self.held else {
+            return Vec::new();
+        };
+        let needle = self.search.as_ref().map(|s| s.to_ascii_lowercase());
+        held.claims
+            .iter()
+            .filter(|c| {
+                needle.as_ref().is_none_or(|n| {
+                    let title = self
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.row(&c.id))
+                        .map(|r| r.title.to_ascii_lowercase());
+                    c.id.to_ascii_lowercase().contains(n)
+                        || c.holder.to_ascii_lowercase().contains(n)
+                        || title.is_some_and(|t| t.contains(n))
+                })
+            })
+            .collect()
+    }
+
     fn filtered<'a>(&self, all: &'a [Row]) -> Vec<&'a Row> {
         #[cfg(test)]
         walked(all.len());
@@ -1061,7 +1089,7 @@ impl App {
     /// How many rows a listing holds.
     fn count(&self, focus: Focus) -> usize {
         match focus {
-            Focus::Claims => self.held.as_ref().map_or(0, |h| h.claims.len()),
+            Focus::Claims => self.claimed().len(),
             Focus::Entities => self.entity_rows().len(),
             Focus::Queue => self.queue_rows().len(),
             Focus::Body => 0,
@@ -1076,7 +1104,7 @@ impl App {
     fn selected_id(&self, focus: Focus) -> Option<String> {
         let at = self.cursors[focus.number() - 1].at;
         match focus {
-            Focus::Claims => self.held.as_ref()?.claims.get(at).map(|c| c.id.clone()),
+            Focus::Claims => self.claimed().get(at).map(|c| c.id.clone()),
             Focus::Entities => self.entity_rows().get(at).map(|r| r.id.clone()),
             Focus::Queue => self.queue_rows().get(at).map(|r| r.id.clone()),
             Focus::Body => self.pane_target(),
@@ -1710,6 +1738,7 @@ impl App {
             }
             Command::Search(text) => {
                 self.search = text;
+                self.cursors[Focus::Claims.number() - 1] = Cursor::default();
                 self.cursors[Focus::Entities.number() - 1] = Cursor::default();
                 self.cursors[Focus::Queue.number() - 1] = Cursor::default();
             }
@@ -2530,7 +2559,14 @@ impl App {
             // held" -- which is an answer, and the wrong one.
             Focus::Claims => match &self.held {
                 None => Composed::of(&format!("{name}   ({})", self.unasked())),
-                Some(_) => Composed::of(&format!("{name} ({})", onto.total)),
+                Some(_) => Composed::of(&format!(
+                    "{name} ({}){}",
+                    onto.total,
+                    match &self.search {
+                        Some(s) => format!("   [matching '{s}']"),
+                        None => String::new(),
+                    }
+                )),
             },
             // No count over a corpus nobody read, on the claims panel's pattern
             // just above: `(0 in the corpus)` is an answer, and it was the
@@ -2659,10 +2695,15 @@ impl App {
         if held.claims.is_empty() {
             return vec![Composed::of("  nothing is held").fitted(width)];
         }
+        let claims = self.claimed();
+        if claims.is_empty() {
+            return vec![Composed::of("  no claim matches this search").fitted(width)];
+        }
         let c = self.cursors[Focus::Claims.number() - 1];
         let page = self.page(Focus::Claims);
-        held.claims
-            .iter()
+        let now = model::now();
+        claims
+            .into_iter()
             .enumerate()
             .skip(c.top)
             .take(page)
@@ -2678,18 +2719,18 @@ impl App {
                     .map(|r| r.title.clone())
                     .unwrap_or_default();
                 // Four columns of marker and not two: the cursor, then whose
-                // claim the row is. Holder, expiry and title are one field
-                // because none of the three has an honest width -- a handle is
-                // as long as somebody's hostname -- and a row that padded them
-                // would spend the title's window on air.
+                // claim the row is. Then the two facts with an honest width,
+                // since when and how long is left (ADR-ac6be1ebe9aa), ahead of
+                // the holder and the title, which have none -- a handle is as
+                // long as somebody's hostname -- so a narrow row drops the
+                // title and the holder before it drops the time.
                 compose(
                     &format!("{here}{whose}"),
                     vec![
                         Field::id(&claim.id),
-                        Field::rest(&format!(
-                            "{}  until {}  {title}",
-                            claim.holder, claim.expires
-                        )),
+                        Field::plain(&claim.age(now).unwrap_or_default(), SPAN),
+                        Field::plain(&claim.lease(now).unwrap_or_default(), SPAN),
+                        Field::rest(&format!("{}  {title}", claim.holder)),
                     ],
                     width,
                 )
@@ -4508,6 +4549,10 @@ const ID: usize = 10;
 /// is cut here as it is cut in `find`.
 const STATUS: usize = 12;
 
+/// The column a claim's age and its lease are each drawn in: `123d ago` is
+/// eight, `2480d ago` nine, and `59m left` eight.
+const SPAN: usize = 9;
+
 /// The column the entities' row number is drawn in, right-aligned by the caller
 /// because a number read down a column is read by its last digit.
 const NUMBER: usize = 5;
@@ -5078,7 +5123,9 @@ mod tests {
             claims: vec![Claim {
                 id: "TASK-49746735127f".to_string(),
                 holder: "claude-code/opus-5+tui-verb".to_string(),
+                claimed: "2026-08-25T04:06:32Z".to_string(),
                 expires: "2026-08-25T04:36:32Z".to_string(),
+                lapsed: false,
                 mine: true,
             }],
         }

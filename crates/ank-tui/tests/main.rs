@@ -13,6 +13,7 @@ mod terminal;
 mod address;
 mod bindings;
 mod chrome;
+mod claims;
 mod colour;
 mod commands;
 mod config;
