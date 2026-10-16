@@ -1,5 +1,4 @@
-//! The kind in force, on the header of a real terminal (TASK-12bd5acbf706,
-//! ADR-559eebf5c6f5).
+//! The kind in force, on the header of a real terminal (TASK-12bd5acbf706).
 //!
 //! CLAUDE.md leaves no choice about where this is measured and the criterion
 //! ends by naming the instrument: *measured through the binary*. It is the
@@ -226,8 +225,8 @@ fn the_header_names_the_kind_in_force_through_the_whole_cycle_at_every_width() {
 ///
 /// Three, which is what it was: the corpus line, the identity line, and the
 /// rule under them. The cell is carved out of a row the reader was already
-/// drawing, which is the whole of ADR-559eebf5c6f5's argument for it -- it is
-/// information made touchable, not an offer drawn at rest, and the band of
+/// drawing, which is the whole of the argument for it -- it is information
+/// made touchable, not an offer drawn at rest, and the band of
 /// offers it replaced was removed precisely because it cost four rows of
 /// twenty-four.
 ///
@@ -280,7 +279,7 @@ fn the_header_is_three_rows_whatever_kind_is_in_force() {
 /// The whole way round rather than one press, because the step this is most
 /// about is the wrap: a finger that walked the kinds and could not get back to
 /// every kind would have left a person on a listing they cannot undo without a
-/// keyboard, which is the phone ADR-559eebf5c6f5 is answering.
+/// keyboard, which is the phone this cell is for.
 #[test]
 fn a_finger_on_the_cell_walks_the_same_cycle_as_the_key() {
     let repo = corpus();
@@ -334,8 +333,8 @@ fn a_finger_on_the_cell_walks_the_same_cycle_as_the_key() {
 /// The other half of "the cell is a target", and the one a reader gets wrong by
 /// being generous while reaching for a screen a pocket can drive: a header that
 /// answered a press anywhere on its first row would hand a person a press they
-/// aimed at nothing. ADR-559eebf5c6f5 carves the target out of the header the
-/// reader draws anyway, and a cell carved out of a row is a cell and not the
+/// aimed at nothing. The target is carved out of the header the reader draws
+/// anyway, and a cell carved out of a row is a cell and not the
 /// row. The column tested is the left end of the corpus line, which is as far
 /// from the cell as that row goes.
 #[test]

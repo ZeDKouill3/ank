@@ -1,5 +1,5 @@
 //! The wheel and the bar, through the binary (TASK-d712d7f9a326,
-//! ADR-559eebf5c6f5).
+//! ADR-ac6be1ebe9aa).
 //!
 //! CLAUDE.md leaves no choice about where this is measured and the criterion
 //! ends by naming the instrument: *measured through the binary*. It is the
@@ -61,7 +61,7 @@ const WINDOW: (u16, u16) = (99, 24);
 const CROWD: usize = 40;
 
 /// The character the bar's thumb is drawn with, read out of the reader rather
-/// than written here (ADR-559eebf5c6f5).
+/// than written here (ADR-ac6be1ebe9aa).
 ///
 /// A suite carrying its own copy of a glyph would go on asserting about a
 /// character the reader had stopped drawing, which is a test that quietly stops
@@ -224,7 +224,7 @@ fn opened(live: &Live) {
 
 /// **A wheel event over a list longer than the region changes which row is
 /// drawn first and leaves the selected row where it was**
-/// (TASK-d712d7f9a326, ADR-559eebf5c6f5).
+/// (TASK-d712d7f9a326).
 ///
 /// Both halves, because either alone is the wrong reader: one that answered the
 /// wheel with nothing would pass the second, and one that moved the cursor with
@@ -333,7 +333,7 @@ fn the_view_goes_down_and_comes_back_character_for_character() {
 
 /// **A bar saying where the view sits is drawn while the content is longer
 /// than the region and not otherwise, and it is drawn in characters**
-/// (TASK-d712d7f9a326, ADR-559eebf5c6f5).
+/// (TASK-d712d7f9a326, ADR-ac6be1ebe9aa).
 ///
 /// The negative half is measured on the corpus every other suite here uses,
 /// which carries two entities and cannot overrun any window this harness
@@ -432,7 +432,7 @@ fn the_bar_moves_with_the_view_and_reaches_the_end_of_its_track() {
 }
 
 /// **The frame with the paint and the frame without it stay identical
-/// character for character** (TASK-d712d7f9a326, ADR-559eebf5c6f5).
+/// character for character** (TASK-d712d7f9a326, ADR-ac6be1ebe9aa).
 ///
 /// `tests/colour.rs` asserts this of the reader at rest; what is added here is
 /// the fixture that overruns and the view moved off its first row, because a

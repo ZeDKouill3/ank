@@ -13,7 +13,7 @@
 //! because the reader's own trailer taught a vocabulary the reader did not have
 //! -- `?` omitted `v`, Space, every arrow, the way out and the whole of the
 //! ring -- and what the reader offers is read out of the contract's own verb
-//! table now (ADR-559eebf5c6f5). A suite that asserted the list contains
+//! table now (ADR-ac6be1ebe9aa). A suite that asserted the list contains
 //! `q quit` would have
 //! passed on that screen. So this reads the drawn rows back and holds them to
 //! the table both ways: nothing the table declares is missing, and nothing that

@@ -56,7 +56,7 @@ use crate::terminal::{ids_of, printed_at_a_terminal, Live, Repo, ONE_AT_A_TIME};
 const WINDOW: (u16, u16) = (110, 30);
 
 /// The rule the region is drawn with, read out of the reader rather than
-/// written here (ADR-559eebf5c6f5).
+/// written here (ADR-ac6be1ebe9aa).
 ///
 /// It is a *character* and that is the point of naming it in this file: the
 /// glyph set is a second field beside the ink and no `NO_COLOR` reaches it, so

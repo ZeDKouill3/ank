@@ -1782,7 +1782,7 @@ pub const COMMANDS: &[CommandSpec] = &[
             "it reaches the corpus only by running this binary with --json, and writes nothing on its own",
             // "a short word and Enter" stood here while the reader took a line,
             // and stopped being true when input became a keystroke
-            // (ADR-559eebf5c6f5); TASK-1a415107fd56 gave the writing verbs
+            // (ADR-ac6be1ebe9aa); TASK-1a415107fd56 gave the writing verbs
             // their own letters too. A help line narrower or wider than the
             // binary is read as the binary refusing, which is the failure §9
             // exists to prevent.
@@ -1795,7 +1795,7 @@ pub const COMMANDS: &[CommandSpec] = &[
             // of a list is a note the list cannot be held to, so this one is
             // stated over the whole of them: what is true of every verb the
             // reader spells is that none of them writes unconfirmed
-            // (ADR-559eebf5c6f5).
+            // (ADR-ac6be1ebe9aa).
             //
             // **The names are §4's own order, and they are measured rather
             // than remembered.** `crates/ank-tui` reads this note back through

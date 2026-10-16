@@ -6,7 +6,7 @@
 //! and every suite reaches it as `crate::terminal` -- and a pseudo-terminal in
 //! `ank-tui`'s own `src/` is not an option:
 //! `tests/dependencies.rs` forbids this crate a foreign symbol and forbids it
-//! `unsafe`, which is the whole of what ADR-559eebf5c6f5 bought by taking
+//! `unsafe`, which is the whole of what ADR-ac6be1ebe9aa bought by taking
 //! crossterm. A test may name what the crate may not, and that file's
 //! `sources()` reads only `src/`, which is exactly the exemption it is written
 //! to give. So the smallest terminal that can answer these questions lives in a
@@ -1010,7 +1010,7 @@ impl Live {
     }
 
     /// A session on a terminal that has declared it can render nothing rich
-    /// (ADR-559eebf5c6f5).
+    /// (ADR-ac6be1ebe9aa).
     ///
     /// `TERM=dumb` is the whole of the declaration, and it is what puts the
     /// reader on its ASCII border set and its plain palette at once -- one

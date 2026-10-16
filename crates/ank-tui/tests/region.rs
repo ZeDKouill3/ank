@@ -1,5 +1,5 @@
-//! One region, through the binary, across the widths the criterion names
-//! (TASK-252bf02de218, ADR-559eebf5c6f5).
+//! One region at a time below the dashboard width, through the binary, across
+//! the widths the criterion names (TASK-252bf02de218, ADR-ac6be1ebe9aa).
 //!
 //! CLAUDE.md leaves no choice about where the measurement happens: a criterion
 //! that talks about the binary is tested through the binary, and "at every
@@ -13,10 +13,9 @@
 //!
 //! **What this file measured before.** It was `tests/panels.rs`, and it
 //! asserted four panels, two of them sharing a row above a stated width and
-//! stacked below it. ADR-559eebf5c6f5 retired that arrangement: nothing on this
-//! screen is compared with anything else on it, so the panels bought nothing
-//! and were paid for in rows, in borders and in four separate answers to "how
-//! is a row drawn". The window assertions survive unchanged, because a frame
+//! stacked below it. Below [`ank_tui::view::DASHBOARD`] the panels are now
+//! reached one at a time (ADR-ac6be1ebe9aa), and every width this file opens
+//! is under it. The window assertions survive unchanged, because a frame
 //! that fits the terminal it was given is a property of any arrangement.
 //!
 //! **The terminal, the corpus and the driven session are `terminal/mod.rs`**,
@@ -34,7 +33,7 @@ use crate::terminal;
 use crate::terminal::{Live, Repo};
 
 /// The border set an ordinary terminal is drawn with, read out of the reader
-/// rather than written here (ADR-559eebf5c6f5).
+/// rather than written here (ADR-ac6be1ebe9aa).
 ///
 /// A suite carrying its own copy of a glyph would go on asserting about a
 /// character the reader had stopped drawing, which is a test that quietly
@@ -344,7 +343,7 @@ fn marked(frame: &str) -> String {
 }
 
 /// Structure is box-drawing, and ASCII where the terminal declares itself
-/// dumb (TASK-e900637aeac4, ADR-559eebf5c6f5).
+/// dumb (TASK-e900637aeac4, ADR-ac6be1ebe9aa).
 ///
 /// **Through the binary, because the probe is the environment of a process.**
 /// `src/view.rs` asserts the same property of the render function, which is
