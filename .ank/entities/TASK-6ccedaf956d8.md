@@ -5,7 +5,7 @@ slug: no-crate-cites-adr-559eebf5c6f5-so-adr-ac6be1ebe
 title: No crate cites ADR-559eebf5c6f5, so ADR-ac6be1ebe9aa can be ratified
 created: 2026-10-16T06:15:21Z
 author: claude-code/opus-5.5+sweep
-status: open
+status: in_progress
 scope:
   - crates/ank-tui/**
   - crates/ank-cli/tests/tui.rs
@@ -16,5 +16,5 @@ done_criteria: |
 criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 schema: 4
-version: 1
+version: 2
 ---
