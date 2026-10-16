@@ -143,9 +143,16 @@ fn the_line_is_what_the_focused_panel_offers() {
         !last_row(t).contains("[b back]") && last_row(t).contains("[Enter open]")
     });
     let line = last_row(&frame);
+    // A kind narrows the corpus's listings and says nothing about who holds
+    // what, but a search narrows whichever listing has the focus, the claims
+    // included (TASK-574432893e0f, ADR-ac6be1ebe9aa).
     assert!(
-        !line.contains("[f kind]") && !line.contains("[/ find]"),
-        "the claims are not narrowed by kind or by a search: {line}"
+        !line.contains("[f kind]"),
+        "the claims are not narrowed by kind: {line}"
+    );
+    assert!(
+        line.contains("[/ find]"),
+        "the claims are narrowed by a search, and say so: {line}"
     );
     live.quit();
 }
