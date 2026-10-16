@@ -5,7 +5,7 @@ slug: the-reader-is-a-dashboard-the-listings-beside-th
 title: "The reader is a dashboard: the listings beside the detail, the work in progress on the frame, and the keys always shown"
 created: 2026-10-09T12:19:09Z
 author: clausse@macbook-air-de-clausse
-status: proposed
+status: accepted
 scope:
   - crates/ank-tui/**
 constraint: |
@@ -27,8 +27,12 @@ constraint: |
   
   What ADR-8bd76e8d7c4e fixed is untouched and this restates none of it: the reader reaches the corpus only by running the CLI with --json, it writes nothing the person at the keyboard did not ask for, it renews no claim on its own, and accept stays a signed human act it may drive and never perform. No browser reader, nothing under a viewer/ directory, no HTML page.
 supersedes: ADR-559eebf5c6f5
+ratified: 7bd5d7c3e67e
+verified:
+  - by: haksolot@vmi3223161
+    at: 2026-10-16T07:13:40Z
 schema: 4
-version: 1
+version: 2
 ---
 
 ADR-559eebf5c6f5 took the panels away, and its argument was sound for the
