@@ -772,9 +772,10 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
             BOXES_PULSE.iter().copied().collect(),
             "the painting session did not walk the pulse at {columns}x{rows}"
         );
+        let without: Vec<String> = without.iter().map(|f| timeless(f)).collect();
         for frame in &with {
             assert!(
-                without.contains(frame),
+                without.contains(&timeless(frame)),
                 "the painting session painted a frame the plain one never did at \
                  {columns}x{rows}:\n{frame}"
             );
@@ -786,6 +787,41 @@ fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
             with[0]
         );
     }
+}
+
+/// A frame with the claims' clock taken out of it (TASK-574432893e0f).
+///
+/// A claims row says how long ago its claim was taken and how long its lease
+/// has left, read off the wall clock when the frame is drawn; two sessions
+/// opened seconds apart say two different ages of the one claim, and on the
+/// dashboard that panel is beside the graph. Every count in front of an `ago`
+/// or a `left` is spelled `#`, and every run of blanks one blank, so a frame
+/// is compared by everything but the clock -- the graph's every character
+/// included.
+#[cfg(unix)]
+fn timeless(frame: &str) -> String {
+    frame
+        .lines()
+        .map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words
+                .iter()
+                .enumerate()
+                .map(|(at, word)| {
+                    let clocked = matches!(words.get(at + 1), Some(&"ago") | Some(&"left"))
+                        && word.len() > 1
+                        && word[..word.len() - 1].chars().all(|c| c.is_ascii_digit())
+                        && word.ends_with(['s', 'm', 'h', 'd']);
+                    match clocked {
+                        true => "#",
+                        false => word,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// How long a session is left pulsing where the pulse is measured.

@@ -11473,7 +11473,7 @@ pub(crate) mod tests {
             claims: vec![Claim {
                 id: DIAMOND_TOP.to_string(),
                 holder: "somebody@elsewhere".to_string(),
-                claimed: "2026-10-14T23:00:00Z".to_string(),
+                claimed: String::new(),
                 expires: "2026-10-15T00:00:00Z".to_string(),
                 lapsed: false,
                 mine: false,
@@ -11781,7 +11781,10 @@ pub(crate) mod tests {
     fn the_cursor_walks_the_graphs_task_rows_only() {
         let ank = nowhere();
         let mut a = graphed();
-        a.resize(DASHBOARD - 1, 12);
+        // Thirteen rows and not twelve: the last row of every frame is the
+        // key line (TASK-933fdb42c7d9), and the page this walks is the six
+        // lines the region held before it.
+        a.resize(DASHBOARD - 1, 13);
         let on = |a: &App| {
             let id = a.selected_id(Focus::Graph).expect("a row under the cursor");
             // The marker stands on the row of that task and on nothing else.
