@@ -19844,6 +19844,69 @@ fn check_names_a_corpus_behind_the_default_branch_and_status_says_how_far() {
     );
 }
 
+/// **A revision's corpus is listed by one git process, not one per layout
+/// directory** (TASK-5395fef418b7, ADR-cc65f1388a71).
+///
+/// Before, the entity files a revision carries were read with one `cat-file -p
+/// <rev>:<dir>` per directory the layout has ever used -- `.ank/entities`, then
+/// the previous `.ank/tasks` and `.ank/adr` -- three processes for one question,
+/// paid whether those directories exist or not. `check` asks it of two
+/// revisions when HEAD and the default branch differ, so it paid six.
+///
+/// Counted with `GIT_TRACE` at an absolute path, which prints one `trace:
+/// built-in:` line per git process, never timed. The count is exact: at
+/// 409bb93c this corpus cost `check --json` 18 processes, six of them listings,
+/// and one listing per revision brings it to 14.
+#[test]
+fn a_revisions_corpus_is_listed_by_one_git_process() {
+    let r = drifting_repo();
+    r.seed_task("TASK-bbbbbbbbbbbb", Some("A criterion only main carries."));
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-qm", "main moves"]);
+    r.git(&["checkout", "-q", "feature"]);
+
+    let trace = r.0.join("trace.txt");
+    let out = ank_command()
+        .args(["check", "--json", "--repo"])
+        .arg(&r.0)
+        .env("ANK_AGENT", AGENT)
+        .env("GIT_TRACE", &trace)
+        .current_dir(std::env::temp_dir())
+        .output()
+        .expect("the binary must have been built");
+    assert!(code(&out) <= 8, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("differ from main"),
+        "the fixture must put HEAD and the default branch apart, or it \
+         measures one revision: {}",
+        stdout(&out)
+    );
+    let text = std::fs::read_to_string(&trace).expect("git must have written the trace");
+    let starts: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("trace: built-in: git "))
+        .collect();
+    let per_directory: Vec<&&str> = starts
+        .iter()
+        .filter(|l| {
+            l.contains("cat-file -p ")
+                && [":.ank/entities", ":.ank/tasks", ":.ank/adr"]
+                    .iter()
+                    .any(|dir| l.ends_with(dir))
+        })
+        .collect();
+    assert!(
+        per_directory.is_empty(),
+        "a layout directory is still listed by a process of its own: {per_directory:#?}"
+    );
+    assert_eq!(
+        starts.len(),
+        14,
+        "check --json on two differing revisions starts this many git processes: \
+         {starts:#?}"
+    );
+}
+
 /// Ahead is drift too, and level is silence in `check` and a line in `status`.
 ///
 /// The corpus is a comparison and not an ordering: a checkout carrying an entity
