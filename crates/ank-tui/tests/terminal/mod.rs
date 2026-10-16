@@ -1267,6 +1267,37 @@ impl Live {
         self.send(&format!("\x1b[<0;{};{}m", column + 1, row + 1));
     }
 
+    /// The session, waited for until it ends by itself, and how it ended
+    /// (TASK-933fdb42c7d9).
+    ///
+    /// For a session something other than `q` on the keyboard is meant to end
+    /// -- a tap on the key line's quit -- so nothing is sent: a keystroke here
+    /// would be the very press the test is asking whether the tap made.
+    pub fn exited(mut self) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .expect("the session can be waited for")
+            {
+                drop(self.writer);
+                if let Some(drain) = self.drain.take() {
+                    drain.join().expect("the drain must not panic");
+                }
+                return status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = self.child.kill();
+                panic!(
+                    "the session never ended by itself:\n{}",
+                    self.screen.lock().unwrap().text()
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
     /// Every byte the session wrote, sequences included.
     pub fn raw(&self) -> Vec<u8> {
         self.screen.lock().unwrap().raw.clone()

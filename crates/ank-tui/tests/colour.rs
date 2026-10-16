@@ -53,7 +53,13 @@ use crate::terminal::{ids_of, printed_at_a_terminal, Live, Repo, ONE_AT_A_TIME};
 
 /// The window every session here opens on. Wide enough that the two panels in
 /// the middle both draw rows, which is where the painted fields are.
-const WINDOW: (u16, u16) = (110, 30);
+///
+/// Tall enough that the opened task is drawn whole: its last rows are the
+/// `EDITS` section, whose `LOG-` identifier is the dim row the assertions below
+/// rest on. Thirty rows held it until the key line took the frame's last row
+/// (TASK-933fdb42c7d9); the body then read `rows 1-23 of 25` and the log fell
+/// off the page.
+const WINDOW: (u16, u16) = (110, 32);
 
 /// The rule the region is drawn with, read out of the reader rather than
 /// written here (ADR-ac6be1ebe9aa).

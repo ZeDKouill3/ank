@@ -1391,7 +1391,7 @@ fn the_frames_carry_no_identifier_the_corpus_does_not() {
 /// changed on the master side, exactly as a terminal emulator changes it, and
 /// the session is told the way a terminal tells one. What has to follow is a
 /// frame in the new shape: a row whose title no longer fits is cut and says so,
-/// no line runs past the new right edge, and the trailer sits on the last row
+/// no line runs past the new right edge, and the key line sits on the last row
 /// of the new height rather than off the bottom of it. Widened again, the title
 /// comes back whole -- so what happened was a fit and never a loss.
 ///
@@ -1419,8 +1419,8 @@ fn a_terminal_resized_redraws_to_its_new_size_with_nothing_typed() {
         s.contains(LONG)
     });
     let wide = live.frame();
-    // `split` and not `lines`, for the reason given further down: the last row
-    // of every frame is the note band, and it is blank at rest.
+    // `split` and not `lines`, for the reason given further down: the note band
+    // is a blank row at rest.
     assert_eq!(wide.split('\n').count(), WINDOW.1 as usize, "{wide}");
 
     live.resize(60, 20);
@@ -1442,20 +1442,19 @@ fn a_terminal_resized_redraws_to_its_new_size_with_nothing_typed() {
     // The bottom of the window is reached, which is what says the layout used
     // the new height rather than the old one.
     //
-    // **Read off the last panel's own bottom border since TASK-9a402a54886f.**
-    // It was read off the trailer, which was the last row and was never blank;
-    // the trailer is gone and what is there now is the note band -- one row,
-    // blank where there is nothing to say. So the count is taken with `split`,
-    // which keeps the empty piece a trailing separator leaves behind, and the
-    // bottom is the second-last row.
+    // **Read off the key line since TASK-933fdb42c7d9** (ADR-ac6be1ebe9aa).
+    // It was the trailer's row, then the note band's, blank at rest
+    // (TASK-9a402a54886f); the last row of every frame is the key line now, so
+    // the new height is reached when the key line is on its last row, with the
+    // blank note band over it and the panel's bottom border over that.
     let rows: Vec<&str> = narrow.split('\n').collect();
     assert_eq!(rows.len(), 20, "{narrow}");
     assert!(
-        rows[19].trim().is_empty(),
-        "something other than the note band is on the last row:\n{narrow}"
+        rows[19].starts_with("[? keys]") && rows[19].trim_end().ends_with("[q quit]"),
+        "the key line is not on the last row of the new window:\n{narrow}"
     );
     assert!(
-        !rows[18].trim().is_empty(),
+        rows[18].trim().is_empty() && !rows[17].trim().is_empty(),
         "the layout did not reach the bottom of the new window:\n{narrow}"
     );
 

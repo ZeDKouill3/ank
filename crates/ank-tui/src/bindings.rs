@@ -161,6 +161,11 @@ pub enum Runs {
     Keep,
     /// The open search, ended, and the list given back unnarrowed.
     Undo,
+    /// The open form, composed into the command it spells, which goes on to
+    /// the confirmation like every other (TASK-933fdb42c7d9).
+    Submit,
+    /// The open form, closed, and nothing composed.
+    Close,
 }
 
 /// Which half of the reader a binding belongs to.
@@ -232,6 +237,10 @@ pub enum Offered {
     /// is open every letter is a needle, so the two rows this offers are the
     /// two ways out of it (TASK-c94d086682f3).
     Narrowing,
+    /// Only over an open form, which is modal for the search's reason: every
+    /// letter is typed into a field, so what it offers is how it is left
+    /// (TASK-933fdb42c7d9).
+    Filling,
     /// Only on a document `accept` would take: a proposal, open in the body
     /// panel. A trailer that carried the word over every open entity would be
     /// offering what the verb turns down.
@@ -316,6 +325,8 @@ pub enum Holding {
     Waiting,
     /// An open search.
     Narrowing,
+    /// An open form.
+    Filling,
     /// Neither, with this panel focused.
     Panel(Focus),
 }
@@ -804,6 +815,28 @@ pub static BINDINGS: &[Binding] = &[
         offered: Offered::Narrowing,
         verb: None,
     },
+    // The form's two ways out (TASK-933fdb42c7d9). Its whole grammar is
+    // `Form::press`, which reads every letter as text; these are what the key
+    // line puts in front of a person typing, because `q` and `?` are letters
+    // there and a line naming them would be naming two characters of a title.
+    Binding {
+        key: KeyCode::Enter,
+        aliases: &[],
+        runs: Runs::Submit,
+        word: "compose",
+        group: Group::Answer,
+        offered: Offered::Filling,
+        verb: None,
+    },
+    Binding {
+        key: KeyCode::Esc,
+        aliases: &[],
+        runs: Runs::Close,
+        word: "close",
+        group: Group::Answer,
+        offered: Offered::Filling,
+        verb: None,
+    },
 ];
 
 impl Binding {
@@ -852,6 +885,7 @@ impl Binding {
         match (self.offered, holding) {
             (Offered::Waiting, Holding::Waiting) => true,
             (Offered::Narrowing, Holding::Narrowing) => true,
+            (Offered::Filling, Holding::Filling) => true,
             (Offered::Anywhere, Holding::Panel(_)) => true,
             (Offered::Panels(panels), Holding::Panel(focus)) => panels.contains(&focus),
             // The ratification offer is the line the trailer draws over a
@@ -1054,6 +1088,10 @@ const WAITING_NOTE: &str = "   (over a command waiting -- every other key dismis
 /// two keys is pressed, and what they choose is whether it stays that way.
 const NARROWING_NOTE: &str = "   (the list narrows as it is typed -- there is nothing to submit)";
 
+/// What it says after the form's two.
+const FILLING_NOTE: &str =
+    "   (every other key is typed into the field -- Tab and the arrows move between them)";
+
 /// One line of the key list: the bindings it names, and how they are drawn.
 ///
 /// **A line is a list of rows and never a sentence with keys in it.** That is
@@ -1245,6 +1283,17 @@ fn narrowed() -> Line {
     }
 }
 
+/// What an open form offers (TASK-933fdb42c7d9).
+fn filled() -> Line {
+    Line {
+        title: "form",
+        bindings: answering(Offered::Filling),
+        lead: String::new(),
+        between: "  ",
+        note: FILLING_NOTE.to_string(),
+    }
+}
+
 /// The key list, line by line.
 ///
 /// **Every binding of the table is on exactly one of these, and nothing else
@@ -1263,6 +1312,7 @@ fn lines() -> Vec<Line> {
         ratify(),
         waiting(),
         narrowed(),
+        filled(),
     ]
 }
 
@@ -1695,10 +1745,22 @@ mod tests {
                         "{binding:?}"
                     );
                 }
+                // The form's two, held to `Form::press` the same way
+                // (TASK-933fdb42c7d9): a key line offering `[Enter compose]`
+                // over a form that read Enter as text would be the target
+                // that reads as an offer and behaves as nothing.
+                Runs::Submit | Runs::Close => {
+                    let mut form = crate::form::Form::open("new").expect("new opens a form");
+                    let expected = match binding.runs {
+                        Runs::Submit => crate::form::Filled::Compose,
+                        _ => crate::form::Filled::Close,
+                    };
+                    assert_eq!(form.press(key), expected, "{binding:?}");
+                }
                 ref other => panic!("{other:?} is not something a modal state answers with"),
             }
         }
-        assert_eq!(answered, 4, "two states, two keys each");
+        assert_eq!(answered, 6, "three states, two keys each");
     }
 
     /// A digit reaches the panel whose title carries it, and the table and

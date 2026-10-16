@@ -266,7 +266,17 @@ fn the_key_list_is_a_bordered_overlay_over_the_panels_at_both_windows() {
             (title as usize) + 2 < rows.len(),
             "the key list has no rows under its title at {window:?}:\n{frame}"
         );
-        for row in &rows[title as usize..] {
+        // Every row down to the key line, which the list stops above
+        // (TASK-933fdb42c7d9): it is the last row of every frame, this one
+        // included, and it says the list's own way out.
+        let (keys, list) = rows[title as usize..]
+            .split_last()
+            .expect("the frame has rows under the title");
+        assert!(
+            keys.starts_with("[? keys]") && keys.trim_end().ends_with("[q quit]"),
+            "the key line is not under the key list at {window:?}: {keys}\n{frame}"
+        );
+        for row in list {
             let ends = row.trim_end();
             let (first, last) = (
                 ends.chars().next().expect("a drawn row has characters"),
