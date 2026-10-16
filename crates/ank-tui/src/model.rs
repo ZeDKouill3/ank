@@ -28,19 +28,19 @@
 //!
 //! **What is ordered here is ordered here and nowhere else.** [`alive_first`]
 //! is the whole of the decision about what a person sees first
-//! (ADR-559eebf5c6f5): the rows arrive from `find` in the CLI's own order and
+//! (ADR-ac6be1ebe9aa): the rows arrive from `find` in the CLI's own order and
 //! leave this file in the reader's, so no renderer downstream has an opinion
 //! about it to keep in step. That is a presentation and not a derived fact --
 //! nothing is invented, dropped or rewritten, and every field is still the
 //! CLI's.
 //!
 //! **What is a row at all is decided here too, and it is a different question**
-//! (ADR-559eebf5c6f5, TASK-3fa4892f17c0). [`listed`] drops the annotations
+//! (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0). [`listed`] drops the annotations
 //! before [`alive_first`] is asked to order anything: a log entry is read under
 //! the entity it annotates, so it is never a row of the list under any filter,
 //! and [`annotates`] is the one rule the filter reads to know which kinds it
 //! may offer. `find` hands this project's own corpus 1550 rows and 1096 of them
-//! are log entries, which is the measurement the decision was taken on.
+//! are log entries.
 //!
 //! [`Detail`] is the other half of the same clause: `show --json` already
 //! carries the entries about an entity, so folding them under it is a field
@@ -281,7 +281,7 @@ impl Snapshot {
 pub const ANNOTATION: &str = "log";
 
 /// Whether a kind annotates an entity rather than being one a list shows
-/// (ADR-559eebf5c6f5, TASK-3fa4892f17c0).
+/// (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0).
 ///
 /// **One predicate and every surface asks it.** A log entry is read under the
 /// entity it annotates, which makes "is this a row" a question with one answer
@@ -294,7 +294,7 @@ pub fn annotates(kind: &str) -> bool {
 }
 
 /// The rows of `find` that a list may show: everything that is not an
-/// annotation (ADR-559eebf5c6f5, TASK-3fa4892f17c0).
+/// annotation (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0).
 ///
 /// **Dropped here rather than filtered downstream**, which is the difference
 /// between a row that is hidden and a row that does not exist. Every listing
@@ -314,7 +314,7 @@ fn listed(results: &[ank::Value]) -> impl Iterator<Item = &ank::Value> {
 }
 
 /// Where a row stands in the order the reader opens on
-/// (ADR-559eebf5c6f5, TASK-b5185df7aa44).
+/// (ADR-ac6be1ebe9aa, TASK-b5185df7aa44).
 ///
 /// Three bands and they are the decision itself: the work that is alive, then
 /// what waits for a ratification, then everything else. Declared in that order
@@ -367,7 +367,7 @@ impl Band {
 }
 
 /// The rows of `find`, in the order the reader shows them
-/// (ADR-559eebf5c6f5, TASK-b5185df7aa44).
+/// (ADR-ac6be1ebe9aa, TASK-b5185df7aa44).
 ///
 /// **What is shown first is chosen here and inherited nowhere.** `find` orders
 /// by identifier -- `ank-cli/src/index.rs`, `ORDER BY id` -- and an identifier
@@ -541,7 +541,7 @@ impl Settings {
     }
 }
 
-/// One log entry, under the entity it annotates (ADR-559eebf5c6f5,
+/// One log entry, under the entity it annotates (ADR-ac6be1ebe9aa,
 /// TASK-3fa4892f17c0).
 ///
 /// The four fields `show --json` gives one, and nothing derived from them. It
@@ -588,7 +588,7 @@ pub struct Detail {
     /// the one wrong answer a reader would act on.
     pub unresolved: Vec<String>,
     /// What has been logged about this entity, in the order it was written
-    /// (ADR-559eebf5c6f5, TASK-3fa4892f17c0).
+    /// (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0).
     ///
     /// **The order is `show`'s and is not re-derived here.** The verb hands the
     /// entries oldest first, which is the order they were written in, and a
@@ -935,7 +935,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // The order the reader opens on (TASK-b5185df7aa44, ADR-559eebf5c6f5)
+    // The order the reader opens on (TASK-b5185df7aa44, ADR-ac6be1ebe9aa)
     // -----------------------------------------------------------------------
 
     /// One row of `find --json`, with the four fields the order is read from.
@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // What is a row at all (TASK-3fa4892f17c0, ADR-559eebf5c6f5)
+    // What is a row at all (TASK-3fa4892f17c0, ADR-ac6be1ebe9aa)
     // -----------------------------------------------------------------------
 
     /// **No entity of kind log is a row**, whatever band its status would have

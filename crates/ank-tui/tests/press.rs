@@ -1,5 +1,5 @@
 //! One press chooses a row and two presses open it, through the binary, on a
-//! real terminal (TASK-42de0df951a4, ADR-559eebf5c6f5).
+//! real terminal (TASK-42de0df951a4).
 //!
 //! CLAUDE.md leaves no choice about where this is measured and the criterion
 //! opens by naming the instrument: *the pseudo-terminal harness shows*. It is
@@ -83,7 +83,7 @@ fn inside(line: &str) -> &str {
 ///
 /// Read off the grid a person would have been looking at, which is the whole
 /// point of driving a terminal: the marker is `> ` at the head of the row's own
-/// content (ADR-559eebf5c6f5 -- where a person is standing is a character), so
+/// content (ADR-ac6be1ebe9aa -- where a person is standing is a character), so
 /// finding it is trimming the border and looking.
 fn rows(frame: &str) -> Vec<(u16, String, bool)> {
     frame
@@ -154,7 +154,7 @@ fn still_listing(frame: &str, what: &str) {
 // ---------------------------------------------------------------------------
 
 /// **One press selects the row under the pointer**, and opens nothing
-/// (TASK-42de0df951a4, ADR-559eebf5c6f5).
+/// (TASK-42de0df951a4).
 ///
 /// Both rows a single press can land on, because they used to be two different
 /// readers. A press on a row the cursor is not on has always chosen it. A press
@@ -208,7 +208,7 @@ fn one_press_chooses_the_row_under_the_pointer_and_opens_no_document() {
 // ---------------------------------------------------------------------------
 
 /// **Two presses on one row inside the interval open its document**
-/// (TASK-42de0df951a4, ADR-559eebf5c6f5).
+/// (TASK-42de0df951a4).
 ///
 /// Sent back to back, which is both what a person does and what keeps this
 /// suite off the clock: the two are two writes down a pseudo-terminal and the

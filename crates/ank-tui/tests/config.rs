@@ -84,7 +84,7 @@ fn digit_of_body() -> String {
 /// contract's own constant, which is what the reader's pane reads and what
 /// `ank-cli`'s closed key set is. A suite carrying its own copy of the eight
 /// would agree with a pane that had drifted, which is the drift
-/// ADR-559eebf5c6f5 forbids by reading what the reader offers out of the
+/// ADR-ac6be1ebe9aa forbids by reading what the reader offers out of the
 /// contract's own table.
 fn declared(repo: &Repo) -> Vec<String> {
     let page = String::from_utf8_lossy(&repo.ank(&["help", "config"]).stdout).to_string();

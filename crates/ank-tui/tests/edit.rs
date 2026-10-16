@@ -511,11 +511,11 @@ fn the_three_verbs_the_list_opens_reach_the_confirmation_and_dismissing_writes_n
 }
 
 /// **A row of that list is a target a thumb reaches, and confirming one runs
-/// the verb** (TASK-e8da6a00564a, ADR-559eebf5c6f5).
+/// the verb** (TASK-e8da6a00564a).
 ///
-/// Two halves that belong together. The touch, because the decision asks that
-/// every action the reader offers be reachable by a finger and this list is
-/// where three verbs now live; and the confirmation answered `yes`, because a
+/// Two halves that belong together. The touch, because this list is where
+/// three verbs now live and a person holding a phone reaches them with a
+/// finger; and the confirmation answered `yes`, because a
 /// list every row of which stopped at a refusal would satisfy the test above
 /// and be a reader nobody can read an entity with.
 ///

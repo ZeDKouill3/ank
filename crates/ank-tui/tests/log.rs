@@ -1,5 +1,5 @@
 //! Where a log entry is read, through the binary (TASK-3fa4892f17c0,
-//! ADR-559eebf5c6f5).
+//! ADR-ac6be1ebe9aa).
 //!
 //! CLAUDE.md leaves no choice about where this is measured, and the criterion
 //! ends by naming the instrument: *measured through the binary*. Both halves of
