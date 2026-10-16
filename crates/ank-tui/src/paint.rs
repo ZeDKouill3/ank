@@ -43,7 +43,7 @@
 //! probe. `NO_COLOR` reaches the ink alone, so the frame drawn with the paint
 //! and the frame drawn without it are the same characters -- which is the only
 //! way "nothing is carried by colour alone" can be measured at all
-//! (ADR-559eebf5c6f5).
+//! (ADR-ac6be1ebe9aa).
 //!
 //! # Composing a row, and what is deliberately left alone
 //!
@@ -178,7 +178,7 @@ impl Ink {
 /// The terminal's own declaration that it can render nothing rich.
 ///
 /// **One probe, read by two fields, which is the whole of what makes the
-/// degradation honest** (ADR-559eebf5c6f5). A terminal that says `dumb` is
+/// degradation honest** (ADR-ac6be1ebe9aa). A terminal that says `dumb` is
 /// saying it can draw neither the colours [`Ink`] would paint nor the
 /// box-drawing glyphs `view`'s borders are made of, and it gets one answer to
 /// that rather than two: the plain palette *and* the ASCII rules, from this

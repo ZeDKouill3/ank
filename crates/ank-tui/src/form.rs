@@ -1,5 +1,5 @@
 //! The form a verb with flags is filled in on, and the whole of why it cannot
-//! open an editor (TASK-d832452630d2, TASK-e8da6a00564a, ADR-559eebf5c6f5).
+//! open an editor (TASK-d832452630d2, TASK-e8da6a00564a, ADR-ac6be1ebe9aa).
 //!
 //! **Five verbs and one form.** It arrived carrying `ank new` alone,
 //! TASK-e8da6a00564a put `ank edit`, `ank close` and `ank attest` on it, and
@@ -27,7 +27,7 @@
 //! declaration lives, and [`Form::fields`] is that list read in its own order.
 //! Nothing here writes a flag name down: this crate has already been burned
 //! once by five parallel key tables, and a parallel flag table would be the
-//! same mistake one surface further along -- the drift ADR-559eebf5c6f5 forbids
+//! same mistake one surface further along -- the drift ADR-ac6be1ebe9aa forbids
 //! by reading what the reader offers out of the contract's own table. A flag `new` gains is a row of this form the day it is declared, and
 //! a flag it loses is a row that goes.
 //!
@@ -597,7 +597,7 @@ impl Form {
     /// [`crate::keys::narrowing`] gives: a field being typed into cannot also
     /// be a key table.
     ///
-    /// **No command here is a chord** (ADR-559eebf5c6f5). Control-C is the way
+    /// **No command here is a chord** (ADR-ac6be1ebe9aa). Control-C is the way
     /// out of a program that took the terminal and it closes the form, and
     /// Control-U clears the field, which is what the search does with it.
     ///
@@ -1110,12 +1110,12 @@ mod tests {
     }
 
     /// **The fields are the flags the contract declares and no others**
-    /// (TASK-d832452630d2, ADR-559eebf5c6f5).
+    /// (TASK-d832452630d2, ADR-ac6be1ebe9aa).
     ///
     /// Both halves, over every kind. A form short of a flag is a form that
     /// cannot say what the shell can, and a form carrying one the verb does not
     /// declare is this reader teaching a command line the binary refuses --
-    /// which is the drift ADR-559eebf5c6f5 forbids, one surface along from the
+    /// which is the drift ADR-ac6be1ebe9aa forbids, one surface along from the
     /// key tables.
     ///
     /// The contract declares one flag set for `ank new` and not one per
@@ -1514,7 +1514,7 @@ mod tests {
     }
 
     /// **Every printable key is a character here and no printable key is a
-    /// command** (TASK-1a415107fd56, ADR-559eebf5c6f5).
+    /// command** (TASK-1a415107fd56, ADR-ac6be1ebe9aa).
     ///
     /// A form is where words are typed, so a letter that closed it or composed
     /// it would be a letter nobody could put in a title. The whole of the

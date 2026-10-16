@@ -169,8 +169,7 @@ fn the_help_page_names_exactly_the_verbs_the_reader_spells() {
     assert_eq!(named, spelled, "the note and the table disagree:\n{page}");
 }
 
-/// **The sentence the note ends on is stated over the whole of them**
-/// (ADR-559eebf5c6f5).
+/// **The sentence the note ends on is stated over the whole of them.**
 ///
 /// This is the half a list alone cannot carry, and it is the half that made
 /// this task: the note used to say the verbs *act on the entity the focused

@@ -1,7 +1,8 @@
 //! The search, through the binary, on a real terminal (TASK-c94d086682f3).
 //!
-//! ADR-559eebf5c6f5: *a search narrows the list as it is typed and is not a
-//! line to compose and submit*. Every word of that is about a running process.
+//! ADR-ac6be1ebe9aa: *a search narrows the focused listing as it is typed and
+//! is not a line to compose and submit*. Every word of that is about a
+//! running process.
 //! A unit test can show that [`ank_tui::keys::narrowing`] answers a character
 //! with `Narrowed` and that `App::press` turns it into a `Command::Search` --
 //! and ones beside both do -- but neither is the claim. The claim is that a
@@ -65,7 +66,7 @@ fn an_identifier(repo: &Repo) -> String {
 }
 
 /// **The list narrows on every keystroke, there is nothing to submit, and
-/// Escape gives it back unnarrowed** (TASK-c94d086682f3, ADR-559eebf5c6f5).
+/// Escape gives it back unnarrowed** (TASK-c94d086682f3, ADR-ac6be1ebe9aa).
 ///
 /// The criterion, whole, measured where it is claimed. The three clauses are
 /// three assertions and they are separate on purpose: a reader that narrowed

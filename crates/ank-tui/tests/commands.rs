@@ -1,6 +1,6 @@
 //! Every command this reader has is a key of its table (TASK-c94d086682f3).
 //!
-//! ADR-559eebf5c6f5: *input is a keystroke and no longer a line*, and *every
+//! ADR-ac6be1ebe9aa: *input is a keystroke and never a line*, and *every
 //! command that only moves the screen is one key*. Until this wave that was
 //! true of most of the vocabulary and not of all of it: `ank_tui::input`
 //! carried a grammar, and two of its commands -- a row number and an identifier
@@ -152,7 +152,7 @@ fn the_domain_names_every_command_there_is() {
 }
 
 /// **Every movement that survives the grammar is a key in the binding table**
-/// (TASK-c94d086682f3, ADR-559eebf5c6f5).
+/// (TASK-c94d086682f3, ADR-ac6be1ebe9aa).
 ///
 /// Stated over the whole enumeration rather than over the two variants this
 /// wave removed. `Row` and `Select` were the commands no key reached, and a
