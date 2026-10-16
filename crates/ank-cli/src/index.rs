@@ -27,6 +27,7 @@ use crate::cli::{CliError, Result};
 use crate::store::Store;
 use ank_contract::ExitCode;
 use ank_core::{parse_entity, Entity, EntityId, EntityKind};
+use rusqlite::config::DbConfig;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -610,6 +611,25 @@ pub struct Index {
     archive: bool,
 }
 
+/// The checkpoint a closing connection owes, and only the one that wrote owes
+/// it (TASK-ccce7b24350c).
+///
+/// A reader leaves the WAL as it found it, which is what keeps it from locking
+/// out the readers opening while it closes. A connection that changed a row
+/// checkpoints on close as every connection did before, so what it wrote is
+/// applied to the database file by the last one out rather than left in a WAL
+/// that a binary of a later schema, reading this file immutable for its
+/// archived digests (ADR-3db9735a7036), would not see.
+impl Drop for Index {
+    fn drop(&mut self) {
+        if self.db.is_some() && self.conn.total_changes() > 0 {
+            let _ = self
+                .conn
+                .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false);
+        }
+    }
+}
+
 impl Index {
     /// Opens the index for `ank` (the `.ank/` directory) and brings it up to
     /// date before returning. There is no way to obtain a stale one: that is
@@ -716,6 +736,17 @@ impl Index {
     fn try_open(ank: &Path, path: &Path) -> Result<Index> {
         crate::store::trace_read("index", path);
         let conn = Connection::open(path).map_err(|e| db_error(e, ank))?;
+        // **A reader closes without checkpointing** (TASK-ccce7b24350c). The
+        // last connection out of a WAL database checkpoints it on close, and
+        // does so under an exclusive lock on the file: every reader opening
+        // meanwhile is answered plain `SQLITE_BUSY`, extended code 5, which is
+        // neither a writer to wait for nor the recovery waited out below.
+        // Staged with one reader closing over an 18 MB WAL and four starting
+        // during its close: 72 late readers in 96 refused, none with this off.
+        // Turned back on in `Drop` for a connection that changed something, so
+        // what was written still reaches the database file.
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .map_err(|e| db_error(e, ank))?;
         // Before any statement, including the schema probe below: under the
         // rollback journal that probe is a read, a read takes a shared lock,
         // and a shared lock is contended by the writer another process is in

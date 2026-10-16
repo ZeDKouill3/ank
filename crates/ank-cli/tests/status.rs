@@ -47,16 +47,6 @@ const SPARE: usize = 90_000;
 /// and past any corpus a fixture builds, so not one of them names a task.
 const FOREIGN: usize = 200_000;
 
-/// The wall the verb answers inside, on a warm index. The criterion's number.
-///
-/// **Still an order of magnitude under what it replaces**, which is the margin
-/// that makes it a wall and not a stopwatch: the same fixture cost about two
-/// seconds before this change, measured with an *optimised* build against the
-/// unoptimised one the suite runs. Observed at 84ms on the macOS runner, 156ms
-/// on Linux, and 154-213ms on a four-core machine already carrying other
-/// builds, taking the floor of nine runs.
-const WALL: u128 = 250;
-
 /// The plane the criterion is measured over: five hundred coordination refs.
 const REFS: usize = 500;
 
@@ -509,6 +499,33 @@ impl Corpus {
         (started, String::from_utf8_lossy(&out.stdout).to_string())
     }
 
+    /// One line per refresh the invocation ran, `key=count` pairs, as the
+    /// binary writes them to the file `ANK_INDEX_REFRESHED` names.
+    fn refreshes(&self, args: &[&str]) -> Vec<String> {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let log = scratch::root().join(format!(
+            "ank-status-refreshed-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let out = spawn(ANK)
+            .args(args)
+            .current_dir(&self.0)
+            .env("ANK_AGENT", "reader@fixture")
+            .env("ANK_INDEX_REFRESHED", &log)
+            .output()
+            .expect("the binary under test must run");
+        let code = out.status.code().expect("the process exits, not signals");
+        assert!(
+            code == 0 || code == 8,
+            "ank {args:?} exited {code}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_file(&log);
+        text.lines().map(str::to_string).collect()
+    }
+
     fn delete_claim(&self, id: &str) {
         self.git(&["update-ref", "-d", &format!("refs/ank/claims/{id}")]);
     }
@@ -669,7 +686,7 @@ fn fastest(corpus: &Corpus, args: &[&str], runs: usize) -> u128 {
 /// Both cost claims, over one corpus, because building a thousand entities is
 /// the expensive part of asking either of them.
 #[test]
-fn status_answers_a_thousand_entities_in_under_a_quarter_second() {
+fn status_over_a_thousand_entities_does_the_work_it_does_over_eight() {
     let c = Corpus::of(ENTITIES);
     // Warm, which is the state the criterion measures: the index exists and
     // agrees with the files. A cold index pays for its own construction once,
@@ -690,29 +707,50 @@ fn status_answers_a_thousand_entities_in_under_a_quarter_second() {
         "status took {status}ms and check {check}ms: status is still reading the corpus"
     );
 
-    // **The criterion's number, where that number measures the verb rather than
-    // the runner.** It is not asserted on Windows, and the reason is measured
-    // rather than assumed. `ank status --json` spawned thirteen git processes
-    // when this test was written — two `git --version`, two `rev-parse
-    // --git-common-dir`, two `rev-parse --show-toplevel`, three `for-each-ref
-    // refs/ank/`, and one each of `symbolic-ref HEAD`, `symbolic-ref
-    // refs/remotes/origin/HEAD`, `rev-parse <branch>^{commit}` and `rev-list
-    // --max-parents=0` — and process creation costs roughly 25ms on a Windows
-    // runner against 2-3ms on Linux, which put about 325ms in front of the verb
-    // before it read anything. TASK-5690eae1e008 took eleven of those thirteen
-    // out; what is left is asserted below, by counting rather than by timing.
-    //
-    // And the floor is not only high there, it moves: the same commit measured
-    // 376ms and then 612ms on two runs of the same runner image. A wall set
-    // above that would report the scheduler, and a test that reports the
-    // scheduler is one nobody can act on. The ratio above is asserted on
-    // Windows in its place, and it is the stronger claim.
-    if !cfg!(windows) {
-        assert!(
-            status < WALL,
-            "status --json over {ENTITIES} entities took {status}ms, wall is {WALL}ms"
-        );
-    }
+    // **Then the work, counted, where a wall of 250ms used to stand**
+    // (TASK-134265bd5f90). The wall measured the runner: macos-15-intel took
+    // 361ms on the v0.9.2 release rehearsal, where this test shares one binary
+    // with some seven hundred others, while the ratio above held; Windows was
+    // already exempt for the same reason. What a warm status over a thousand
+    // entities must not do is hash a file, index one, or run the `inspect`
+    // pass its memoised verdict stands in for -- and each of those is a number.
+    let refreshes = c.refreshes(&["status", "--json"]);
+    let counted = |key: &str| -> Vec<u64> {
+        refreshes
+            .iter()
+            .map(|r| number(r, &format!("{key}=")))
+            .collect()
+    };
+    assert!(
+        !refreshes.is_empty(),
+        "status refreshed no index: the measurement did not happen"
+    );
+    assert!(
+        counted("hashed").iter().all(|n| *n == 0) && counted("indexed").iter().all(|n| *n == 0),
+        "a warm status read files over {ENTITIES} entities: {refreshes:#?}"
+    );
+    let (thousand, _) = c.git_processes(&["status", "--json"]);
+    let few = Corpus::new();
+    few.json(&["status", "--json"]);
+    let (eight, _) = few.git_processes(&["status", "--json"]);
+    assert_eq!(
+        thousand, eight,
+        "{ENTITIES} entities start other git than {FEW} do"
+    );
+    // **And the count can see what it is there to see.** A verdict whose key
+    // moved is computed by `inspect`, which asks git questions a hit does not;
+    // a comment in `config.yml` moves the key and nothing else.
+    let config = c.0.join(".ank/config.yml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("# the verdict key moves\n");
+    std::fs::write(&config, text).unwrap();
+    let (missed, _) = c.git_processes(&["status", "--json"]);
+    assert!(
+        missed.len() > thousand.len(),
+        "a status that recomputed its verdict started no more git than one that \
+         served it, so the count above cannot tell them apart: hit {thousand:#?}, \
+         miss {missed:#?}"
+    );
 }
 
 /// `cat-file -p <object name>`, which is a record read one process at a time.
