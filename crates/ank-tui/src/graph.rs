@@ -5,7 +5,7 @@
 //! corpus and no screen: its input is a list of [`Node`]s the caller built,
 //! its output a [`JunctionLayout`] of plain strings. What is shown, in which order the
 //! ties break, and what colour any of it is painted belong to the view
-//! (ADR-559eebf5c6f5); a module that only emits characters cannot make the
+//! (ADR-ac6be1ebe9aa); a module that only emits characters cannot make the
 //! frame with paint and without it differ.
 //!
 //! # The walk
@@ -92,7 +92,7 @@ pub struct Row {
     pub unknown: usize,
 }
 
-/// The two alphabets a layout is drawn in (ADR-559eebf5c6f5): box-drawing
+/// The two alphabets a layout is drawn in (ADR-ac6be1ebe9aa): box-drawing
 /// where the terminal can, ASCII where it has declared it cannot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alphabet {

@@ -1190,7 +1190,7 @@ impl App {
     /// order, and from nothing that moves between two frames.
     ///
     /// **Shown by default: the work that is alive, and what it directly
-    /// waits on** (TASK-643611645dea, ADR-559eebf5c6f5). Every task whose
+    /// waits on** (TASK-643611645dea, ADR-ac6be1ebe9aa). Every task whose
     /// status is neither `done` nor `closed`, together with every task one of
     /// those names in `blocked_by`, whatever that task's status is: a finished
     /// blocker is what makes a task ready, and a person who reads `Ready`
@@ -1228,7 +1228,7 @@ impl App {
     /// a person reads edges between things that have none.
     ///
     /// **The blocks stand alive first, then bigger first, then newest
-    /// first**, which is ADR-559eebf5c6f5's order applied to groups: a block
+    /// first**, which is ADR-ac6be1ebe9aa's order applied to groups: a block
     /// holding a task neither done nor closed before one holding none; more
     /// tasks before fewer, because the largest structure is the one a person
     /// is orienting in; then the block whose most recently created task is
@@ -3398,7 +3398,7 @@ impl App {
     ///
     /// The lane field is painted in the status' own role, which repeats what
     /// the word beside it already says and carries nothing alone
-    /// (ADR-559eebf5c6f5): the frame drawn with the paint and the frame drawn
+    /// (ADR-ac6be1ebe9aa): the frame drawn with the paint and the frame drawn
     /// without it are the same characters, and what the node *means* is its
     /// character. The heading is a row of text and never a border around
     /// nothing, and it is English, as everything the reader draws is
@@ -11067,7 +11067,7 @@ pub(crate) mod tests {
     /// `· • ● •` and `. o O o` on a dumb terminal, a tick changes that cell
     /// and nothing else, and the painted frame and the plain one are the
     /// same characters at every phase** (TASK-54bb5cddc671,
-    /// ADR-559eebf5c6f5).
+    /// ADR-ac6be1ebe9aa).
     #[test]
     fn a_tick_moves_the_cell_under_way_through_the_pulse_and_nothing_else() {
         for (glyphs, pulse) in [
@@ -11694,7 +11694,7 @@ pub(crate) mod tests {
 
     /// **On a terminal declaring `TERM=dumb` the lanes and nodes are the
     /// ASCII alphabet the layout module declares** (TASK-643611645dea,
-    /// ADR-559eebf5c6f5).
+    /// ADR-ac6be1ebe9aa).
     #[test]
     fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
         let mut a = graphed().drawn_with(ASCII);
@@ -11892,7 +11892,7 @@ pub(crate) mod tests {
     }
 
     /// **A tap selects the row under it and a second tap on it opens it**
-    /// (TASK-643611645dea, ADR-559eebf5c6f5).
+    /// (TASK-643611645dea, ADR-ac6be1ebe9aa).
     #[test]
     fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
         let ank = nowhere();
@@ -12219,7 +12219,7 @@ pub(crate) mod tests {
     }
 
     /// **A finger reaches the fold where it already reaches the kind**
-    /// (TASK-67583993ef0d, ADR-559eebf5c6f5): a touch on the header's cell
+    /// (TASK-67583993ef0d, ADR-ac6be1ebe9aa): a touch on the header's cell
     /// on GRAPH is the key pressed, at every window the cell is drawn on.
     #[test]
     fn touching_the_cell_on_the_graph_walks_the_fold() {

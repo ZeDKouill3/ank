@@ -1,6 +1,6 @@
 //! Screen 3 is GRAPH, and it draws the `blocked_by` DAG as lanes, through
 //! the binary, at the desk and on the dashboard (TASK-a9cd362ee5e2,
-//! TASK-643611645dea, ADR-559eebf5c6f5, ADR-ac6be1ebe9aa).
+//! TASK-643611645dea, ADR-ac6be1ebe9aa).
 //!
 //! The digit, the ring and the title moved first: `3` reaches the graph,
 //! `Tab` walks claims, entities, graph and queue, and the document is what a
@@ -879,7 +879,7 @@ fn a_task_under_way_pulses_through_its_four_phases_and_the_pulse_reads_nothing()
 }
 
 /// **On a terminal declaring `TERM=dumb` the pulse is `. o O o`**
-/// (TASK-54bb5cddc671, ADR-559eebf5c6f5), at both windows.
+/// (TASK-54bb5cddc671, ADR-ac6be1ebe9aa), at both windows.
 #[cfg(unix)]
 #[test]
 fn a_dumb_terminal_pulses_in_the_ascii_alphabet() {
@@ -1037,7 +1037,7 @@ fn a_screen_whose_only_motion_is_the_pulse_is_settled() {
 /// **On a terminal declaring `TERM=dumb` the same frame carries `@`, `o`,
 /// `.` and the ASCII connectors: every cell, lane and junction glyph is the
 /// ASCII alphabet the layout module declares** (TASK-643611645dea,
-/// TASK-de02dbcf9965, ADR-559eebf5c6f5), at both windows.
+/// TASK-de02dbcf9965, ADR-ac6be1ebe9aa), at both windows.
 #[cfg(unix)]
 #[test]
 fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
@@ -1370,7 +1370,7 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
 }
 
 /// **A tap selects the row under it and a second tap on it opens it**
-/// (TASK-643611645dea, ADR-559eebf5c6f5), at both windows.
+/// (TASK-643611645dea, ADR-ac6be1ebe9aa), at both windows.
 #[cfg(unix)]
 #[test]
 fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {

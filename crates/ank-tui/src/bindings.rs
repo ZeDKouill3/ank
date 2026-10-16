@@ -941,7 +941,7 @@ impl Binding {
 /// kind elsewhere cycles on GRAPH (TASK-67583993ef0d).
 ///
 /// **The key is the kind's and not a letter of its own**, because
-/// ADR-559eebf5c6f5 gives a verb's initial to the verb and the letters left
+/// ADR-ac6be1ebe9aa gives a verb's initial to the verb and the letters left
 /// over are few. On a listing of tasks only, the next thing to narrow by is
 /// time rather than kind, and the cell that says which kind is in force says
 /// which fold is, on the one screen where that is the question.
