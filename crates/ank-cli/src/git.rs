@@ -1445,12 +1445,109 @@ fn preloaded(cwd: &Path, rev: &str, path: &str) -> Option<Option<String>> {
         .cloned()
 }
 
+/// One file a tree holds: its mode, its object name and its name in the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    pub mode: String,
+    pub object: String,
+    pub name: String,
+}
+
+impl TreeEntry {
+    /// What `cat-file -p` prints as `blob`: a file or a symlink, and neither a
+    /// subtree (`40000`) nor a submodule (`160000`).
+    pub fn is_blob(&self) -> bool {
+        self.mode != "40000" && self.mode != "160000"
+    }
+}
+
+/// The directories `paths` name at `rev`, listed in **one** process.
+///
+/// **One `cat-file --batch` where there was one `cat-file -p` per directory**
+/// (TASK-5395fef418b7). The corpus of a revision lives in the directory the
+/// layout names and in the two it used to, and listing them one at a time paid
+/// three processes per revision whether those directories existed or not.
+///
+/// Aligned with `paths` on the rule [`preload_at`] states. A path the revision
+/// does not carry, or carries as something other than a directory, answers
+/// `None`. An unresolvable `rev` is the environment error [`file_at`] raises.
+///
+/// `--batch` prints a tree in git's raw object format and not as `-p` does:
+/// `<mode> SP <name> NUL <hash>` per entry, the hash in binary. Its length is
+/// the one the header's own object name states in hex, which keeps a SHA-256
+/// repository read as correctly as a SHA-1 one.
+pub fn trees_at(cwd: &Path, rev: &str, paths: &[String]) -> Result<Vec<Option<Vec<TreeEntry>>>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !resolves(cwd, rev)? {
+        return Err(CliError::new(
+            ExitCode::Environment,
+            format!("branch {rev} not found in this repository"),
+        )
+        .with_hint(format!("git fetch origin {rev}")));
+    }
+    let names: Vec<String> = paths.iter().map(|p| format!("{rev}:{p}")).collect();
+    let answers = cat_file_batch_raw(cwd, &names)?;
+    Ok(answers
+        .into_iter()
+        .map(|answer| match answer {
+            Some((object, kind, body)) if kind == "tree" => {
+                Some(tree_entries(&body, object.len() / 2))
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+/// The entries of a raw tree object whose hashes are `hash_len` bytes long.
+fn tree_entries(body: &[u8], hash_len: usize) -> Vec<TreeEntry> {
+    let mut entries = Vec::new();
+    let mut at = 0usize;
+    while at < body.len() {
+        let Some(nul) = body[at..].iter().position(|b| *b == 0) else {
+            break;
+        };
+        let head = String::from_utf8_lossy(&body[at..at + nul]).to_string();
+        at += nul + 1;
+        if hash_len == 0 || at + hash_len > body.len() {
+            break;
+        }
+        let object: String = body[at..at + hash_len]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        at += hash_len;
+        let Some((mode, name)) = head.split_once(' ') else {
+            continue;
+        };
+        entries.push(TreeEntry {
+            mode: mode.to_string(),
+            object,
+            name: name.to_string(),
+        });
+    }
+    entries
+}
+
 /// The same batch as [`cat_file_batch`], answered in the order it was asked.
 ///
 /// Split out rather than folded in, because the two callers key differently and
 /// the difference is not cosmetic: a caller naming objects by sha reads the
 /// answer back by name, and a caller naming `<rev>:<path>` cannot.
 fn cat_file_batch_ordered(cwd: &Path, names: &[String]) -> Result<Vec<Option<String>>> {
+    Ok(cat_file_batch_raw(cwd, names)?
+        .into_iter()
+        .map(|answer| answer.map(|(_, _, body)| String::from_utf8_lossy(&body).to_string()))
+        .collect())
+}
+
+/// The ordered batch, each answer left as git framed it: the object name and
+/// type from the header, and the bytes undecoded, because a tree is not text.
+fn cat_file_batch_raw(
+    cwd: &Path,
+    names: &[String],
+) -> Result<Vec<Option<(String, String, Vec<u8>)>>> {
     let mut out = Vec::with_capacity(names.len());
     if names.is_empty() {
         return Ok(out);
@@ -1473,8 +1570,8 @@ fn cat_file_batch_ordered(cwd: &Path, names: &[String]) -> Result<Vec<Option<Str
         let header = String::from_utf8_lossy(&body[at..at + eol]).to_string();
         at += eol + 1;
         let mut parts = header.split_whitespace();
-        let _name = parts.next();
-        let (Some(_kind), Some(size)) = (parts.next(), parts.next()) else {
+        let name = parts.next().unwrap_or_default().to_string();
+        let (Some(kind), Some(size)) = (parts.next(), parts.next()) else {
             // `<input> missing`, which is a response and keeps the alignment.
             out.push(None);
             continue;
@@ -1485,9 +1582,7 @@ fn cat_file_batch_ordered(cwd: &Path, names: &[String]) -> Result<Vec<Option<Str
         if at + size > body.len() {
             break;
         }
-        out.push(Some(
-            String::from_utf8_lossy(&body[at..at + size]).to_string(),
-        ));
+        out.push(Some((name, kind.to_string(), body[at..at + size].to_vec())));
         at += size + 1;
     }
     Ok(out)
@@ -2912,6 +3007,61 @@ mod tests {
             "an unresolvable branch must not read as an absent file"
         );
         assert!(err.hint.is_some());
+    }
+
+    /// Several directories of one revision are listed in one batch, answered in
+    /// the order asked, with an absent path and a file each answering `None`.
+    #[test]
+    fn trees_are_listed_in_the_order_asked_and_what_is_no_directory_is_none() {
+        let t = Temp::new_repo();
+        t.commit(".ank/entities/TASK-000000000001.md", "status: done\n");
+        t.commit(".ank/entities/nested/kept.md", "deeper\n");
+        t.commit(".ank/adr/ADR-000000000001.md", "a decision\n");
+        let blob = |text: &str| {
+            let out =
+                output_with_stdin(&t.0, &["hash-object", "--stdin"], text.as_bytes()).unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+
+        let asked = [
+            ".ank/entities".to_string(),
+            ".ank/tasks".to_string(),
+            ".ank/adr".to_string(),
+            ".ank/adr/ADR-000000000001.md".to_string(),
+        ];
+        let listed = trees_at(&t.0, "main", &asked).unwrap();
+        assert_eq!(listed.len(), 4, "one answer per path asked: {listed:?}");
+
+        let entities = listed[0]
+            .as_ref()
+            .expect(".ank/entities is a directory at main");
+        let files: Vec<(&str, &str)> = entities
+            .iter()
+            .filter(|e| e.is_blob())
+            .map(|e| (e.name.as_str(), e.object.as_str()))
+            .collect();
+        let done = blob("status: done\n");
+        assert_eq!(files, vec![("TASK-000000000001.md", done.as_str())]);
+        assert!(
+            entities.iter().any(|e| e.name == "nested" && !e.is_blob()),
+            "a subdirectory is listed and is not a blob: {entities:?}"
+        );
+        assert_eq!(listed[1], None, "a directory the revision lacks is None");
+        let decision = blob("a decision\n");
+        assert_eq!(
+            listed[2].as_deref(),
+            Some(
+                &[TreeEntry {
+                    mode: "100644".to_string(),
+                    object: decision,
+                    name: "ADR-000000000001.md".to_string(),
+                }][..]
+            )
+        );
+        assert_eq!(listed[3], None, "a file is not a directory to list");
+
+        let err = trees_at(&t.0, "no-such-branch", &asked).unwrap_err();
+        assert_eq!(err.code, ExitCode::Environment);
     }
 
     #[test]

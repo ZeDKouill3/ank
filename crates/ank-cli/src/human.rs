@@ -5102,10 +5102,11 @@ fn branch_entries(
 /// The entity files `branch` carries, keyed by id, with the blob each name
 /// points at.
 ///
-/// One `cat-file` per layout directory and never one per entity: `file_at` on a
-/// directory reads the tree at that revision, which already carries the content
+/// One `cat-file --batch` for every layout directory, and never one process per
+/// directory or per entity: the tree of a directory already carries the content
 /// hash of every file in it. Asking per entity would be one process per entity
-/// on a corpus of two hundred, for an answer the tree states in one line each.
+/// on a corpus of two hundred, for an answer the tree states in one line each;
+/// asking per directory paid three processes a revision (TASK-5395fef418b7).
 ///
 /// The canonical layout wins over the previous one, exactly as [`file_at_branch`]
 /// resolves a single entity: the branch and the working tree need not agree on
@@ -5141,32 +5142,24 @@ fn corpus_at_uncached(repo: &Repo, branch: &str) -> Result<BTreeMap<String, Stri
         }
     }
     let mut found: BTreeMap<String, String> = BTreeMap::new();
-    for dir in dirs {
-        let Some(listing) = git::file_at(&repo.corpus, branch, &dir)? else {
-            continue;
-        };
-        // `<mode> SP <type> SP <object>TAB<name>`, git's tree format, which has
-        // carried that shape since `cat-file -p` printed trees.
-        for line in listing.lines() {
-            let Some((meta, name)) = line.split_once('\t') else {
-                continue;
-            };
-            let mut fields = meta.split_whitespace().skip(1);
-            if fields.next() != Some("blob") {
+    // Every layout directory in one process: the order of `dirs` is the order
+    // of precedence, and the batch answers in the order it was asked.
+    for entries in git::trees_at(&repo.corpus, branch, &dirs)?
+        .into_iter()
+        .flatten()
+    {
+        for entry in entries {
+            if !entry.is_blob() {
                 continue;
             }
-            let Some(object) = fields.next() else {
-                continue;
-            };
-            let Some(id) = name
+            let Some(id) = entry
+                .name
                 .strip_suffix(".md")
                 .filter(|stem| EntityId::parse(stem).is_ok())
             else {
                 continue;
             };
-            found
-                .entry(id.to_string())
-                .or_insert_with(|| object.to_string());
+            found.entry(id.to_string()).or_insert(entry.object);
         }
     }
     Ok(found)
@@ -5480,7 +5473,8 @@ fn archived_against_head(repo: &Repo, paths: &[String]) -> (BTreeSet<String>, BT
     let Ok(Some(listing)) = git::file_at(&repo.corpus, "HEAD", &dir) else {
         return none;
     };
-    // `<mode> SP <type> SP <object>TAB<name>`, as [`corpus_at`] reads it.
+    // `<mode> SP <type> SP <object>TAB<name>`, git's tree format as `cat-file
+    // -p` prints it.
     let mut at_head: HashMap<String, String> = HashMap::new();
     for line in listing.lines() {
         let Some((meta, name)) = line.split_once('\t') else {
