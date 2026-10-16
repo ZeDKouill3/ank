@@ -16,7 +16,7 @@ criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 method: tdd
 schema: 4
-version: 2
+version: 3
 ---
 
 Release rehearsal v0.9.2 (run 38897015410, macos-15-intel, two attempts): warm_readers::readers_meeting_a_wal_recovery_are_not_refused refused readers #8-#11 with 'database is locked'. Since #580 the test shares one binary with ~720 others, so the last readers spawn after the first ones exit; the last reader out checkpoints the 18 MB WAL under an exclusive lock and the late readers meet plain SQLITE_BUSY, which TASK-f0dd3c98a6bf's 261 wait does not cover.
