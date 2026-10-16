@@ -1066,8 +1066,23 @@ pub fn inspect_with(
     // store would be moving the corpus to answer a question about hashes. On a
     // checkout level with the default branch that is every entity, and the
     // batch reads nothing.
+    //
+    // **And every task the plane names, carried here or not** (TASK-9cc3719ce9d6).
+    // The pruning predicate asks the default branch about each ref's task, and a
+    // ref on a task this checkout does not carry -- another worktree's claim on a
+    // task it has not merged -- used to fall outside the batch and cost one
+    // `cat-file -p` per layout: 1007 processes for a cold `status` over five
+    // hundred such refs, against 23 over one.
     if let (true, Some(Ok(branch))) = (has_git, default_branch.as_ref()) {
-        let entries = branch_entries(repo, branch, &here, &entities);
+        let mut entries = branch_entries(repo, branch, &here, &entities);
+        let foreign: BTreeSet<&EntityId> = coord
+            .keys()
+            .chain(detached.keys())
+            .filter(|id| !statuses.contains_key(*id))
+            .collect();
+        for id in foreign {
+            entries.extend(entity_rel_paths(repo, id).into_iter().map(|p| (p, None)));
+        }
         let _ = git::preload_at(&repo.corpus, branch, &entries);
     }
 
