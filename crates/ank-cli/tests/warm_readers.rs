@@ -170,3 +170,73 @@ fn readers_meeting_a_wal_recovery_are_not_refused() {
         refused.join("\n")
     );
 }
+
+/// The byte counts of the index and of its WAL, `None` for a file that is not
+/// there.
+fn sizes(ank: &Path) -> (Option<u64>, Option<u64>) {
+    let len = |p: PathBuf| fs::metadata(p).ok().map(|m| m.len());
+    (
+        len(index_file::path(ank)),
+        len(ank.join(format!("{}-wal", index_file::name()))),
+    )
+}
+
+/// A reader that wrote nothing leaves the WAL it found (TASK-ccce7b24350c).
+///
+/// Measured on the macos-15-intel release rehearsal and then staged locally:
+/// the last reader out of the index checkpointed an 18 MB WAL on close, under
+/// the exclusive lock that takes, and every reader starting during that close
+/// was refused with plain `SQLITE_BUSY` (extended code 5, not the 261 the
+/// recovery wait covers) -- 72 late readers of 96, none with the checkpoint
+/// off. The window is a scheduler's, so it is not raced here: the close that
+/// opened it is what is counted, in bytes. A checkpoint applies the WAL into
+/// the database and deletes the WAL; a reader that took no lock leaves both as
+/// it found them.
+#[test]
+fn a_reader_closes_without_checkpointing_the_wal_it_found() {
+    let dir = warm_corpus();
+    let ank = dir.join(".ank");
+    leave_a_wal_to_recover(&ank);
+    let before = sizes(&ank);
+
+    run(ANK, &dir, &["find", "Task"]);
+
+    assert_eq!(
+        sizes(&ank),
+        before,
+        "a reader changed the index or its WAL on close (database, WAL bytes): it \
+         checkpointed, which locks out every reader starting meanwhile"
+    );
+}
+
+/// A verb that wrote still checkpoints on close, as it did before
+/// (TASK-ccce7b24350c): what the reader leaves is applied by the next writer,
+/// so the database file other binaries may read immutable keeps up.
+#[test]
+fn a_writer_still_checkpoints_the_wal_on_close() {
+    let dir = warm_corpus();
+    let ank = dir.join(".ank");
+    leave_a_wal_to_recover(&ank);
+    let (db_before, _) = sizes(&ank);
+
+    run(
+        ANK,
+        &dir,
+        &[
+            "new",
+            "task",
+            "--title",
+            "Task written",
+            "--scope",
+            "src/**",
+            "--no-verify",
+        ],
+    );
+
+    let (db_after, wal_after) = sizes(&ank);
+    assert!(
+        wal_after.is_none_or(|w| w == 0) && db_after > db_before,
+        "a writer left its WAL unapplied on close: database {db_before:?} -> \
+         {db_after:?} bytes, WAL {wal_after:?}"
+    );
+}
