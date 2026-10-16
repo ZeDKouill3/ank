@@ -5,7 +5,7 @@ slug: the-last-row-of-every-frame-is-a-line-of-keys-an
 title: The last row of every frame is a line of keys, and every entry and every panel title is a touch target
 created: 2026-10-16T08:19:02Z
 author: claude-code/opus-5.5+keyline
-status: in_progress
+status: done
 scope:
   - crates/ank-tui/src/**
   - crates/ank-tui/tests/**
@@ -16,6 +16,55 @@ done_criteria: |
 criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 method: tdd
+proof:
+  - type: test
+    ref: local/e3b0c44298fc@a54ee46
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
+  - type: test
+    ref: local/0bcf55fb921a@88e97b3
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: test-ank-core@11c0192e3520
+    via: verifier
+    reused: local
+    by: claude-code/opus-5.5+sweep
+  - type: test
+    ref: local/dd4784f6149e@88e97b3
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: test-ank-contract@60b1ecdf7b92
+    via: verifier
+    reused: local
+    by: claude-code/opus-5.5+sweep
+  - type: test
+    ref: local/5c56ca7525e5@88e97b3
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: test-ank-daemon@c8f40b42bd7b
+    via: verifier
+    reused: local
+    by: claude-code/opus-5.5+sweep
+  - type: test
+    ref: local/d73c9932437a@a54ee46
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: test-ank-mcp@23a803416bc4
+    via: verifier
+  - type: test
+    ref: local/9f391134b3b2@a54ee46
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: test-ank-tui@06060d7e7df5
+    via: verifier
+  - type: test
+    ref: local/0031447706e1@a54ee46
+    tree: scope/63f56a6edcec
+    criteria: 9a5b93047dac
+    verifier: test-ank-cli@b817bb082d2d
+    via: verifier
 schema: 4
-version: 5
+version: 7
 ---
