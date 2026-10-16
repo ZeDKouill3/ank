@@ -228,10 +228,11 @@ fn driven(mut live: Live) -> (String, Vec<u8>) {
 /// identifier after `BODY` (a body names none until `show` has replied). And no
 /// panel may still say it is waiting for its verb: the opening asks claims,
 /// entities and queue at once, and a frame drawn between two of the answers is
-/// a screen neither session would draw the same way twice.
+/// a screen neither session would draw the same way twice. The header waits on
+/// the claims' answer too, and says so as `(not asked)`.
 fn settled(frame: &str, reached: &str) -> bool {
     let focused = format!("{}{reached}", ank_tui::view::BOXES.focus());
-    let unanswered = ["(reading)", "(not read)"]
+    let unanswered = ["(reading)", "(not read)", "(not asked)"]
         .iter()
         .any(|waiting| frame.contains(waiting));
     !unanswered && frame.lines().any(|line| line.contains(&focused))
