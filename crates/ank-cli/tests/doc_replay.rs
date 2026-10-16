@@ -82,6 +82,7 @@ const PAGES: &[&str] = &[
     "docs/releasing.md",
     "docs/signing.md",
     "docs/specification.md",
+    "docs/splitting-verifiers.md",
     "docs/watch.md",
 ];
 
@@ -862,6 +863,11 @@ fn quickstart_replays() {
 #[test]
 fn proof_replays() {
     replay_page("docs/proof.md");
+}
+
+#[test]
+fn splitting_verifiers_replays() {
+    replay_page("docs/splitting-verifiers.md");
 }
 
 #[test]

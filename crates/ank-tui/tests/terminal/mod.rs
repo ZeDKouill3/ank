@@ -6,7 +6,7 @@
 //! and every suite reaches it as `crate::terminal` -- and a pseudo-terminal in
 //! `ank-tui`'s own `src/` is not an option:
 //! `tests/dependencies.rs` forbids this crate a foreign symbol and forbids it
-//! `unsafe`, which is the whole of what ADR-559eebf5c6f5 bought by taking
+//! `unsafe`, which is the whole of what ADR-ac6be1ebe9aa bought by taking
 //! crossterm. A test may name what the crate may not, and that file's
 //! `sources()` reads only `src/`, which is exactly the exemption it is written
 //! to give. So the smallest terminal that can answer these questions lives in a
@@ -768,6 +768,53 @@ pub static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // The terminal
 // ---------------------------------------------------------------------------
 
+/// Every byte one CLI verb wrote to a terminal it painted for
+/// (ADR-f0665c68d03d).
+///
+/// Not a [`Live`] session: a verb like `find` prints and exits, so there is no
+/// screen to settle and no key to send. stdout alone is the pseudo-terminal,
+/// which is the condition the CLI paints on, and `NO_COLOR` is removed for the
+/// reason [`Live::painting`] removes it. The run's root is the one every other
+/// child here gets, so the verb reads the corpus it was pointed at.
+pub fn printed_at_a_terminal(repo: &Repo, args: &[&str]) -> Vec<u8> {
+    use std::io::Read;
+
+    let (mut master, slave_path) = pty::open();
+    pty::resize(&slave_path, 200, 50);
+    let mut command = Command::new(ank());
+    command
+        .args(args)
+        .current_dir(&repo.0)
+        .env("ANK_AGENT", AGENT)
+        .env("TERM", TERM)
+        .env_remove("NO_COLOR");
+    in_this_runs_root(&mut command);
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(pty::stdio(pty::slave(&slave_path)))
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the binary must have been built");
+    // The parent's copy of the slave goes with the command, so the master
+    // reads end-of-stream once the child is done with its own.
+    drop(command);
+    let drain = std::thread::spawn(move || {
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match master.read(&mut buf) {
+                // Linux answers EIO once the last slave is closed; macOS
+                // answers zero. Both mean the verb is done.
+                Ok(0) | Err(_) => return raw,
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+            }
+        }
+    });
+    let status = child.wait().expect("the verb must end");
+    assert!(status.success(), "{args:?} failed at a terminal: {status}");
+    drain.join().expect("the drain must not panic")
+}
+
 mod pty {
     use std::ffi::CStr;
     use std::fs::File;
@@ -1173,7 +1220,7 @@ impl Live {
     }
 
     /// A session on a terminal that has declared it can render nothing rich
-    /// (ADR-559eebf5c6f5).
+    /// (ADR-ac6be1ebe9aa).
     ///
     /// `TERM=dumb` is the whole of the declaration, and it is what puts the
     /// reader on its ASCII border set and its plain palette at once -- one
@@ -1462,6 +1509,37 @@ impl Live {
     /// reads, before and after the interval it measures.
     pub fn painted(&self) -> Vec<String> {
         self.seen.lock().unwrap().clone()
+    }
+
+    /// The session, waited for until it ends by itself, and how it ended
+    /// (TASK-933fdb42c7d9).
+    ///
+    /// For a session something other than `q` on the keyboard is meant to end
+    /// -- a tap on the key line's quit -- so nothing is sent: a keystroke here
+    /// would be the very press the test is asking whether the tap made.
+    pub fn exited(mut self) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .expect("the session can be waited for")
+            {
+                drop(self.writer);
+                if let Some(drain) = self.drain.take() {
+                    drain.join().expect("the drain must not panic");
+                }
+                return status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = self.child.kill();
+                panic!(
+                    "the session never ended by itself:\n{}",
+                    self.screen.lock().unwrap().text()
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     /// Every byte the session wrote, sequences included.

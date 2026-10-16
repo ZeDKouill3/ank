@@ -11,16 +11,21 @@ rather than restating it.
 The development plan lives in `.ank/`, and it is worked with the same loop
 [the quickstart](quickstart.md) teaches: `ank context`, `ank claim`, `ank log`,
 `ank done`. The corpus is reached through the CLI and never by opening its files
-(ADR-e45e1a29fe91): `ank show <id>` gives an entity whole, `ank find` lists,
+(ADR-3c8d94a0bbe0): `ank show <id>` gives an entity whole, `ank find` lists,
 `ank context` binds, and `scope`, `graph`, `status`, `review`, `check` and the
-read form of `log` answer the rest. That ADR enumerates every route on each
-side, because a short list gets read as the whole one. It constrains agents, not
+read form of `log` answer the rest. Which verbs write is not a list that ADR
+keeps, because a list went stale once per new route: every verb declares it, and
+`ank help --json` carries it as `writes`, one of `nothing`, `files`, `refs` or
+`both`, held by a test to what the verb leaves on disk. It constrains agents, not
 people: a human with an editor keeps every power they had, and `ank check`
 remains what notices.
 
 A task here declares its verifiers when it is written, and a plain `ank new
-task` already carries `cargo-test` and `fmt-check`, which `.ank/config.yml`
-marks default ([Proof and verifiers](proof.md#the-default-list)).
+task` already carries one test verifier per workspace crate, `test-ank-cli`,
+`test-ank-core` and the rest, with `fmt-check`, which `.ank/config.yml` marks
+default ([Proof and verifiers](proof.md#the-default-list)). Each declares the
+files it reads, so `done` reruns the crates a change reaches and reuses the
+others.
 
 ## Changing the format
 

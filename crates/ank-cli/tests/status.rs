@@ -43,6 +43,10 @@ const FEW: usize = 8;
 /// An identifier outside any fixture, for the tests that add one.
 const SPARE: usize = 90_000;
 
+/// Where the claims on tasks no branch carries start numbering: past [`SPARE`]
+/// and past any corpus a fixture builds, so not one of them names a task.
+const FOREIGN: usize = 200_000;
+
 /// The wall the verb answers inside, on a warm index. The criterion's number.
 ///
 /// **Still an order of magnitude under what it replaces**, which is the margin
@@ -283,7 +287,17 @@ impl Corpus {
     ///
     /// [`seed_claim`]: Corpus::seed_claim
     fn seed_claims(&self, count: usize) {
-        self.seed_records("refs/ank/claims/", count, |id| {
+        self.seed_claims_from(0, count);
+    }
+
+    /// `count` claims on tasks neither the corpus nor any branch carries: the
+    /// refs another worktree holds on tasks it created and has not merged.
+    fn seed_foreign_claims(&self, count: usize) {
+        self.seed_claims_from(FOREIGN, count);
+    }
+
+    fn seed_claims_from(&self, first: usize, count: usize) {
+        self.seed_records_from("refs/ank/claims/", first, count, |id| {
             format!(
                 "state: claim\nholder: someone@elsewhere\ntask: {id}\n\
                  claimed: 2026-07-28T00:00:00Z\nexpires: {LIVE}\ncriteria: abcdefabcdefabcd\n\
@@ -309,11 +323,22 @@ impl Corpus {
     /// One record per seeded id under `namespace`, every blob in one process and
     /// every ref in one transaction.
     fn seed_records(&self, namespace: &str, count: usize, record: impl Fn(&str) -> String) {
+        self.seed_records_from(namespace, 0, count, record);
+    }
+
+    /// The same records, for the ids numbered from `first`.
+    fn seed_records_from(
+        &self,
+        namespace: &str,
+        first: usize,
+        count: usize,
+        record: impl Fn(&str) -> String,
+    ) {
         let dir = self.0.join("records");
         std::fs::create_dir_all(&dir).unwrap();
         let mut paths = String::new();
         let mut ids = Vec::new();
-        for n in 0..count {
+        for n in first..first + count {
             let id = id(n);
             let path = dir.join(&id);
             std::fs::write(&path, record(&id)).unwrap();
@@ -357,12 +382,16 @@ impl Corpus {
         // fixture means neither.
         std::fs::create_dir_all(self.0.join("doc")).unwrap();
         std::fs::write(self.0.join("doc/note.md"), "// seed\n").unwrap();
-        // Declared, or every verdict is `None`: with no key in the file, §8's
-        // advisory mode is what `signature_state` answers, and it answers it
-        // before it ever asks about a commit.
+        // Declared, or every verdict is `None`: with no key under `signers:`,
+        // §8's advisory mode is what `signature_state` answers, and it answers
+        // it before it ever asks about a commit.
+        let config = std::fs::read_to_string(self.0.join(".ank/config.yml")).unwrap();
         std::fs::write(
-            self.0.join(".ank/allowed_signers"),
-            "marie@example.org gpg 0123456789ABCDEF0123456789ABCDEF01234567\n",
+            self.0.join(".ank/config.yml"),
+            format!(
+                "{config}signers:\n  marie@example.org:\n    keys:\n      \
+                 - key: gpg 0123456789ABCDEF0123456789ABCDEF01234567\n"
+            ),
         )
         .unwrap();
         for n in 0..count {
@@ -765,6 +794,46 @@ fn status_asks_git_no_question_twice_and_reads_the_plane_in_one_batch() {
     assert_eq!(
         started, single,
         "{REFS} coordination refs cost more git than one does"
+    );
+}
+
+/// A cold status reads the default branch for every claim ref in one batch
+/// (TASK-9cc3719ce9d6).
+///
+/// **Cold, which the test above leaves out on purpose and which is where the
+/// defect was.** No index and no memoised verdict, so the pruning predicate
+/// runs: for a claim on a task the checkout does not carry, it asks whether the
+/// default branch carries it, and it used to ask with one `cat-file -p
+/// main:<path>` per layout, per ref -- 1007 processes over five hundred refs
+/// against 23 over one, at 409bb93c. The refs here name tasks no branch
+/// carries, which is the case that missed the preload: another worktree's
+/// claims on tasks it created and has not merged.
+#[test]
+fn a_cold_status_over_five_hundred_foreign_claims_starts_the_git_one_starts() {
+    let many = Corpus::new();
+    many.seed_foreign_claims(REFS);
+    let (started, _) = many.git_processes(&["status", "--json"]);
+    let one = Corpus::new();
+    one.seed_foreign_claims(1);
+    let (single, _) = one.git_processes(&["status", "--json"]);
+
+    let per_entity = |a: &&String| {
+        a.strip_prefix("cat-file -p ")
+            .is_some_and(|name| name.contains(':') && name.ends_with(".md"))
+    };
+    for (list, plane) in [(&started, REFS), (&single, 1)] {
+        let named: Vec<&String> = list.iter().filter(per_entity).collect();
+        assert!(
+            named.is_empty(),
+            "a cold status over {plane} claim ref(s) read entity files one at a time: {named:#?}"
+        );
+    }
+    assert!(
+        started.len() <= single.len(),
+        "a cold status over {REFS} foreign claims started {} git processes against {} over one: \
+         {started:#?}",
+        started.len(),
+        single.len()
     );
 }
 

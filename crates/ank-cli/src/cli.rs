@@ -754,6 +754,7 @@ fn verb_json(spec: &CommandSpec, kind: Option<&Kind>) -> String {
         .str("usage", &usage)
         .str("summary", spec.summary)
         .str("group", spec.group)
+        .str("writes", spec.writes.as_str())
         .array("flags", flags)
         .strings("notes", notes)
         .array("refuses", refusals)
@@ -761,6 +762,9 @@ fn verb_json(spec: &CommandSpec, kind: Option<&Kind>) -> String {
         .array("returns", returns)
         .finish()
 }
+
+/// The widest usage the listing lines its summaries up after (§9).
+const USAGE_COLUMN: usize = 30;
 
 /// `ank help` and `ank help <verb>` (§9).
 ///
@@ -906,7 +910,17 @@ pub fn help(inv: &Invocation, out: &mut dyn Write) -> Result<ExitCode> {
     // (ADR-e4a5a8873fe3). Five widths would stop the columns lining up between
     // sections, and the listing would read as five tables rather than one thing
     // with five parts — which is the opposite of what the grouping is for.
-    let width = COMMANDS.iter().map(|c| usage(c).len()).max().unwrap_or(0);
+    //
+    // **One long usage does not narrow every summary.** A usage wider than
+    // [`USAGE_COLUMN`] -- `signers` names four subcommands -- is printed alone
+    // and its summary starts on the next line, so the column stays the width
+    // of the verbs that fit it.
+    let width = COMMANDS
+        .iter()
+        .map(|c| usage(c).len())
+        .filter(|&n| n <= USAGE_COLUMN)
+        .max()
+        .unwrap_or(USAGE_COLUMN);
     let indent = width + 2;
     for (n, group) in GROUPS.iter().enumerate() {
         // A blank line between groups, and none before the first: the heading
@@ -925,7 +939,10 @@ pub fn help(inv: &Invocation, out: &mut dyn Write) -> Result<ExitCode> {
                 .into_iter()
                 .enumerate()
             {
-                if i == 0 {
+                if i == 0 && usage(spec).len() > width {
+                    let _ = writeln!(out, "{}", usage(spec));
+                    let _ = writeln!(out, "{:indent$}{}", "", line.trim_start());
+                } else if i == 0 {
                     let _ = writeln!(out, "{:width$}  {line}", usage(spec));
                 } else {
                     let _ = writeln!(out, "{line}");
@@ -1472,6 +1489,7 @@ fn dispatch(
     let code = match inv.command {
         "context" => crate::context::run(&inv, &s.repo, &s.config, &s.identity, out),
         "done" => crate::done::run(&inv, &s.repo, &s.config, &s.identity, out),
+        "verify" => crate::verify::run_verb(&inv, &s.repo, &s.config, &s.identity, out),
         "claim" => crate::claim::run(&inv, &s.repo, &s.config, &s.identity, out),
         "new" => crate::commands::new(&inv, &s.repo, &s.config, &s.identity, out),
         "find" => crate::commands::find(&inv, &s.repo, &s.config, &s.identity, out),
@@ -1489,6 +1507,7 @@ fn dispatch(
         "release" => crate::commands::release(&inv, &s.repo, &s.identity, out),
         "check" => crate::human::check(&inv, &s.repo, &s.config, out),
         "migrate" => crate::migrate::run(&inv, &s.repo, out),
+        "signers" => crate::config::run_signers(&inv, &s.repo, out),
         "archive" => crate::archive::run(&inv, &s.repo, &s.config, out),
         "review" => crate::human::review(&inv, &s.repo, &s.config, out),
         "accept" => crate::human::accept(&inv, &s.repo, &s.config, &s.identity, out),
@@ -1640,7 +1659,7 @@ mod tests {
         // counting.
         assert_eq!(
             COMMANDS.len(),
-            29,
+            31,
             "every verb of §4, plus init and help from §9. The surface is \
              complete, so this number moves only when §4 does"
         );
@@ -1716,9 +1735,9 @@ mod tests {
         // opposite direction: `init`, `claim` and `context` are the verbs
         // routed today, and all must be clear of it.
         for routed in [
-            "init", "help", "config", "claim", "context", "done", "log", "release", "new", "find",
-            "attest", "amend", "show", "edit", "migrate", "tui", "mcp", "watch", "skills",
-            "update",
+            "init", "help", "config", "claim", "context", "verify", "done", "log", "release",
+            "new", "find", "attest", "amend", "show", "edit", "migrate", "tui", "mcp", "watch",
+            "skills", "update",
         ] {
             assert_eq!(
                 spec_of(routed).unwrap().owner_task,

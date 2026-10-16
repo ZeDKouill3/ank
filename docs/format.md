@@ -22,8 +22,8 @@ run against.
 ## Layout
 
     .ank/
-      config.yml             repository settings and named verifiers
-      allowed_signers        public keys allowed to ratify (§8), versioned
+      config.yml             repository settings, named verifiers, and under signers:
+                             the keys allowed to ratify (§8)
       entities/TASK-<hex>.md
       entities/ADR-<hex>.md
       entities/SPEC-<hex>.md
@@ -144,10 +144,13 @@ refusals answer different questions: `priorty:` in a `task` is a typo, and
 ### Task
 
 A `proof` entry emits its own keys in order: `type`, `ref`, then `tree`,
-`criteria`, `verifier` and `via`, each omitted when absent. The values `type`
-and `via` take are listed [with the fields](entity-fields.md#proof-type). `via`
+`criteria`, `verifier`, `via`, `reused` and `by`, each omitted when absent. The
+values `type` and `via` take are listed [with the fields](entity-fields.md#proof-type). `via`
 is the route by which the entry arrived, and its absence means the entry was
-written before the field existed, never a fourth route.
+written before the field existed, never a fourth route. `reused` and `by` mark
+an entry `done` took from a recorded run rather than from an execution for this
+task: `reused` says where from, `local` for the run registry, and `by` names the
+identity that ran it. Their absence means the entry was run for its task.
 
 A `verified` entry emits `by`, then `at`. Both are required in an entry that
 exists at all, an entry missing either being rejected, while the list itself is
@@ -163,6 +166,20 @@ the whole of one (ADR-9ee76b578257). A reader resolves each entry as it resolves
 reference, following the succession to its end; an entry naming an absent
 entity, a kind other than `adr`, or an ADR that is not accepted is a finding
 there rather than a parse error here.
+
+`enforced_by` names what holds the rule mechanically, between `see` and
+`amends` (ADR-25584c56c1a7). It is a block sequence of `<path>#<symbol>`
+entries, each a file the tree counts and a symbol that file contains -- a test
+function, a verifier name in a workflow, a check rule -- and it is **omitted
+when empty**, so an ADR nothing is declared to hold is byte-identical to one
+written before the field existed. It sits outside the ratification anchor,
+which hashes `constraint` and `scope` alone, so it is written on an accepted
+ADR as on a proposed one, by `ank new adr --enforced-by` and by `ank amend
+--enforced-by` and `--drop-enforced-by`. A reader takes each entry as a string:
+a path no tracked file matches, or a symbol the file does not contain, is a
+signal naming the entry rather than a parse error here. `context` serves an
+ADR carrying the field by its title, with its entries, in both modes, and the
+field confers nothing: the rule binds whether or not something enforces it.
 
 ### Spec
 

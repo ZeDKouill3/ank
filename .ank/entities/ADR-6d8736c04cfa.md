@@ -25,10 +25,14 @@ constraint: |
   asymmetry with done is the decision and not an omission: done earns a
   repository-wide refusal with a frozen criterion, declared verifiers and a
   proof, and close is gated by a reason alone.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#close_leaves_no_completion_ref_where_done_leaves_one
+  - crates/ank-cli/src/claim.rs#a_completion_ref_refuses_the_claim_with_its_own_message
+  - crates/ank-cli/src/human.rs#check_prunes_only_once_the_default_branch_agrees
 supersedes: ADR-bcf222a31525
 ratified: 8a9232f4fbf5
 schema: 2
-version: 3
+version: 4
 ---
 
 ## Context

@@ -19,13 +19,13 @@ The file declares `schema: 1`, the only version this build reads. A duration is 
 | `verifiers.<name>.timeout` | duration | `10m` | how long `done` lets the command run |
 | `verifiers.<name>.default` | boolean | `false` | `true` writes the verifier into every task `ank new task` creates |
 | `verifiers.<name>.inputs` | list of globs | none | the files whose content can change the result, relative to the root; absent, the whole tree; written as one flow sequence, never empty |
-| `verifiers.<name>.env.image` | string | none | the OCI image the verifier is meant to run in, pinned as `<name>@sha256:<digest>`; a tag is refused; ank never runs it |
-| `verifiers.<name>.env.platform` | string | none | `os/arch`, required with `env.image` |
-| `verifiers.<name>.env.network` | `none` or `open` | none | absent, `none` under an image and the host's network without one |
-| `verifiers.<name>.env.vars.<var>` | string | none | a variable with a fixed value; nothing is passed through from the caller |
+| `proof.reuse_max_age` | duration | `24h` | how old a passing run recorded under `<git-common-dir>/ank/runs/` may be for `done` to reuse it rather than run the verifier again; `done --fresh` reuses nothing |
 | `verifier_jobs` | integer | none | how many verifiers one `done` runs at once, at least 1; absent, the machine's available parallelism |
 | `roles.<name>.can` | list of strings | `[]` | what the role may do, declared |
 | `roles.<name>.cannot` | list of strings | `[]` | what the role may not do, declared |
 | `identities.<identity>` | string | none | the role of an identity; one absent from the table is an `agent` |
 | `weight.hot_files` | integer | `3000` | `check` signals a hot corpus holding more entity files |
 | `weight.plane_bytes` | integer | `4000000` | `check` signals claim and proof records weighing more bytes |
+| `signers.<principal>.keys[].key` | string | required | a key allowed to ratify, `gpg <fingerprint>` or `<ssh key type> <base64>`; the block is written by `ank signers`, never by `ank config` (ADR-5c6db7a161b8) |
+| `signers.<principal>.keys[].note` | string | none | what the key is, for the reader; `ank signers migrate` puts the comments of a former `.ank/allowed_signers` here |
+| `signers.<principal>.keys[].valid_before` | date | none | `YYYY-MM-DD`: the key ratifies nothing committed from that day on, UTC, and what it signed before stays verified; absent, the key has no end |

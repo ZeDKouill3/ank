@@ -1274,9 +1274,14 @@ fn an_edited_constraint_is_reported_altered_and_stops_being_injected() {
 /// this test exists to refuse.
 fn declare_signing_key(r: &Repo) {
     let pub_key = std::fs::read_to_string(r.0.join("signing-key.pub")).unwrap();
+    let key: Vec<&str> = pub_key.split_whitespace().take(2).collect();
+    let config = std::fs::read_to_string(r.0.join(".ank/config.yml")).unwrap();
     std::fs::write(
-        r.0.join(".ank/allowed_signers"),
-        format!("test@ank.local {}", pub_key.trim()),
+        r.0.join(".ank/config.yml"),
+        format!(
+            "{config}signers:\n  test@ank.local:\n    keys:\n      - key: {}\n",
+            key.join(" ")
+        ),
     )
     .unwrap();
 }
@@ -1458,7 +1463,7 @@ fn a_ratification_by_a_human_is_recorded_as_a_human_reading() {
 /// that says so, and it does not pass for a human one.
 ///
 /// This is the case that was invisible. The commit is signed, `check` verifies
-/// it against `.ank/allowed_signers`, and the corpus used to read back as a
+/// it against `signers:`, and the corpus used to read back as a
 /// decision a human stood behind — because the only thing recorded was the
 /// signature, and the key is not the hand that typed.
 ///
@@ -7193,11 +7198,15 @@ fn the_over_constrained_signal_charges_each_constraint_and_names_an_act() {
         said.contains(&format!("ank amend {ID} --drop-scope \"<glob>\"")),
         "the finding names no act the reader can perform:\n{said}"
     );
-    // And never on the one that is not. `amend` exits 6 on an accepted ADR, so
-    // naming it would teach the reader the tool is wrong rather than that the
-    // decision is settled.
+    // And never on the one that is not. `amend` exits 6 on an accepted ADR's
+    // scope, so naming it would teach the reader the tool is wrong rather than
+    // that the decision is settled. What it does name is the one amend an
+    // accepted ADR takes, `--enforced-by`, which sits outside the anchor
+    // (ADR-25584c56c1a7).
     assert!(
-        !said.contains("ank amend ADR-"),
+        said.lines()
+            .filter(|l| l.contains("ank amend ADR-"))
+            .all(|l| l.contains("ank amend ADR-0000000000ef --enforced-by \"<path>#<symbol>\"")),
         "the finding names a command that would refuse:\n{said}"
     );
     assert!(
@@ -7538,7 +7547,11 @@ fn the_listing_describes_each_verb_as_its_own_help_does() {
                 let (_, desc) = described
                     .last_mut()
                     .expect("a continuation before any verb");
-                desc.push(' ');
+                // A usage wider than the column stands alone, and its whole
+                // description is continuation.
+                if !desc.is_empty() {
+                    desc.push(' ');
+                }
                 desc.push_str(line.trim());
             }
         }
@@ -10278,14 +10291,17 @@ fn done_never_falls_back_on_the_configured_default() {
     );
 }
 
-/// **This repository marks `cargo-test` and `fmt-check`, and nothing else.**
+/// **This repository marks `fmt-check` and one test verifier per crate.**
 ///
 /// The dogfooding half of ADR-443590981e41: the mechanism above is reachable
 /// everywhere and in effect nowhere until a `config.yml` marks something. Read
 /// through the binary and off this repository's own file, because the claim is
-/// about the corpus and not about a fixture.
+/// about the corpus and not about a fixture. Which crates, and what each
+/// verifier reads, is `verifiers_per_crate.rs`'s to hold against cargo
+/// (TASK-e9f5c4e8922a); `cargo-test` stays declared for the tasks that name it,
+/// and no longer seeds a new one, which would run the whole workspace again.
 #[test]
-fn this_repository_marks_the_two_verifiers_a_task_here_is_born_with() {
+fn this_repository_marks_the_verifiers_a_task_here_is_born_with() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |key: &str| {
         let out = ank_command()
@@ -10298,8 +10314,9 @@ fn this_repository_marks_the_two_verifiers_a_task_here_is_born_with() {
         assert_eq!(code(&out), 0, "{key}: {}", stderr(&out));
         stdout(&out).trim().to_string()
     };
-    assert_eq!(read("verifiers.cargo-test.default"), "true");
+    assert_eq!(read("verifiers.cargo-test.default"), "false");
     assert_eq!(read("verifiers.fmt-check.default"), "true");
+    assert_eq!(read("verifiers.test-ank-cli.default"), "true");
     // `check-repo` runs this binary against this corpus, so seeding it into
     // every task would make each `done` here build ank to check ank.
     assert_eq!(read("verifiers.check-repo.default"), "false (default)");
@@ -11678,7 +11695,7 @@ fn json_number(text: &str, name: &str) -> u64 {
 }
 
 /// The identifiers of every superseded document in a corpus, asked of the
-/// binary (ADR-e45e1a29fe91: `.ank/` is reached only through the CLI).
+/// binary (ADR-3c8d94a0bbe0: `.ank/` is reached only through the CLI).
 ///
 /// **Derived and never transcribed.** A list in this file protects the cases
 /// somebody remembered and no fourth: superseding an entity does not add to it,
@@ -12398,7 +12415,7 @@ fn a_spec_is_ratified_amended_and_checked_like_an_adr() {
     assert!(!message.contains("constraint+scope"), "{message}");
 
     // Ratified and untouched. Exit 0 here is also what says the signature was
-    // judged and trusted: `.ank/allowed_signers` declares the key, so an
+    // judged and trusted: `signers:` declares the key, so an
     // unsigned or undeclared ratification would be a fault rather than silence.
     let out = r.ank("claude-code@ank", &["check"]);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
@@ -12901,10 +12918,16 @@ fn valid_value(flag: &str) -> &'static str {
         // Whole, for the same reason: `--drop-amends` matches what the ADR
         // stores, so an amends naming a lost ADR can still be dropped.
         "--amends" | "--drop-amends" => "ADR-000000000001",
+        // `<path>#<symbol>`, the shape `new` and `amend` refuse anything else
+        // on (ADR-25584c56c1a7).
+        "--enforced-by" | "--drop-enforced-by" => "src/main.rs#main",
         "--verify" => "cargo-test",
         // A sibling this binary carries: any other name is the verb correctly
         // refusing the value, which is not a refusal of the flag.
         "--method" => "tdd",
+        // A kind `check` declares: any other word is the verb refusing the
+        // value, which is not a refusal of the flag (ADR-df1035934387).
+        "--kind" => "read-by-no-human",
         "--criteria" => "A measurable thing.",
         "--reason" => "a reason",
         "--title" => "A title",
@@ -13209,12 +13232,29 @@ fn a_refusal_is_plain_in_a_pipe_too() {
 /// This is what catches a wiring inversion. `NO_COLOR` implemented backwards,
 /// or a Windows allowlist consulted instead of the terminal check, would leave
 /// every assertion above green and change the bytes here.
+///
+/// The rule is decided once, in `main`, before any verb is dispatched, so it is
+/// proved on two verbs and not on the whole styled surface: `context` under a
+/// live claim, the richest painter that reads a corpus, and `help`, which reads
+/// none. Every verb re-proving the same function was 92 spawns of the binary;
+/// this is 13, the claim included (TASK-8ad3edcbd0fb).
 #[test]
 fn no_environment_makes_a_pipe_colored() {
     let r = color_fixture();
+    // Every variable the rule reads removed, the whole Windows allowlist
+    // included: one inherited from the shell running the suite would otherwise
+    // decide what the reference proves.
+    let clean: &[(&str, Option<&str>)] = &[
+        ("NO_COLOR", None),
+        ("TERM", None),
+        ("TERM_PROGRAM", None),
+        ("ConEmuANSI", None),
+        ("WT_SESSION", None),
+        ("ANSICON", None),
+    ];
 
-    let environments: [&[(&str, Option<&str>)]; 6] = [
-        &[("NO_COLOR", None), ("TERM", None), ("WT_SESSION", None)],
+    // Each one laid over `clean`, so it is the only variable the run sees.
+    let environments: [&[(&str, Option<&str>)]; 5] = [
         &[("NO_COLOR", Some("1"))],
         &[("NO_COLOR", Some(""))],
         &[("TERM", Some("dumb"))],
@@ -13224,14 +13264,14 @@ fn no_environment_makes_a_pipe_colored() {
         &[("WT_SESSION", Some("1")), ("ANSICON", Some("1"))],
     ];
 
-    for base in styled_surface() {
-        let reference = r.ank_env(
-            "claude-code@ank",
-            &base,
-            &[("NO_COLOR", None), ("TERM", None), ("WT_SESSION", None)],
+    for base in [&["context"][..], &["help"][..]] {
+        let reference = r.ank_env("claude-code@ank", base, clean);
+        assert!(
+            !reference.stdout.contains(&0x1b),
+            "{base:?} coloured a pipe with no variable set"
         );
         for env in environments {
-            let out = r.ank_env("claude-code@ank", &base, env);
+            let out = r.ank_env("claude-code@ank", base, &[clean, env].concat());
             assert!(
                 !out.stdout.contains(&0x1b),
                 "{base:?} under {env:?} coloured a pipe"
@@ -13810,9 +13850,9 @@ fn config_is_the_one_verb_a_config_that_does_not_parse_does_not_stop() {
 fn the_errors_that_named_the_file_now_name_the_command() {
     // Closing `.ank/` to agents stopped at the configuration, which left
     // these telling their caller to open a file the same tool forbids them to
-    // open (ADR-e64dfaafd578). ADR-e45e1a29fe91 is where the gap closes in the
-    // rule as well: it lists `config` among the writing routes, on the reading
-    // that the sentence governs `.ank/` and not only the entities in it.
+    // open (ADR-e64dfaafd578). ADR-3c8d94a0bbe0 is where the gap closes in the
+    // rule as well: `config` declares `writes: files` in the contract, on the
+    // reading that the rule governs `.ank/` and not only the entities in it.
     let r = Repo::new();
 
     // `new`, on a --verify that matches nothing. The criterion calls the two
@@ -13948,18 +13988,26 @@ const PATH_POSITIONALS: [&str; 5] = ["context", "review", "graph", "scope", "che
 const MACHINE_POSITIONALS: [&str; 1] = ["init"];
 
 /// Flag values matched against scopes, or stored as one.
-const PATH_FLAGS: [(&str, &str); 1] = [("find", "--scope")];
+const PATH_FLAGS: [(&str, &str); 4] = [
+    ("find", "--scope"),
+    // The path half of `<path>#<symbol>`, normalised before it is stored or
+    // matched against what is stored (ADR-25584c56c1a7).
+    ("new", "--enforced-by"),
+    ("amend", "--enforced-by"),
+    ("amend", "--drop-enforced-by"),
+];
 
 /// The flags naming a path that must **not** be normalised against this
 /// repository, because being outside it is the whole of what they mean.
 ///
-/// A third category rather than a hole in the first two, and there is exactly
-/// one member: `ank init --at` names where a corpus goes for a tree that must
-/// stay untouched (ADR-96174f1ac2b7). `context::normalised` refuses a path
-/// outside the repository, which is the correct answer for a scope and the
-/// wrong one here — running it would refuse the only value this flag is ever
-/// given.
-const OUTSIDE_THE_REPOSITORY: [(&str, &str); 1] = [("init", "--at")];
+/// A third category rather than a hole in the first two. `ank init --at`
+/// names where a corpus goes for a tree that must stay untouched
+/// (ADR-96174f1ac2b7), and `ank signers --key` a public key file, which lives
+/// in `~/.ssh` and not in the repository (ADR-5c6db7a161b8).
+/// `context::normalised` refuses a path outside the repository, which is the
+/// correct answer for a scope and the wrong one here — running it would refuse
+/// the only value these flags are ever given.
+const OUTSIDE_THE_REPOSITORY: [(&str, &str); 2] = [("init", "--at"), ("signers", "--key")];
 const GLOB_FLAGS: [(&str, &str); 3] = [
     ("new", "--scope"),
     ("amend", "--scope"),
@@ -13972,7 +14020,17 @@ const GLOB_FLAGS: [(&str, &str); 3] = [
 /// path if it is called `--scope`" — is exactly what would let the next
 /// `--under <glob>` through in silence, which is the failure this whole task is
 /// a correction of.
-const NOT_A_PATH: [&str; 39] = [
+const NOT_A_PATH: [&str; 44] = [
+    // Who may ratify, what a reviewer should know of the key, and the date it
+    // stops ratifying: an email, prose and a day (ADR-5c6db7a161b8).
+    "--principal",
+    "--note",
+    "--date",
+    // A word naming a rule of `check`, and never a file (ADR-df1035934387).
+    "--kind",
+    // Carries no value at all: `done --fresh` reuses no recorded run
+    // (ADR-a2faf59f6ce0).
+    "--fresh",
     // Carries no value at all: `accept --pr` names nothing, it carries the
     // ratifications to a pull request (ADR-2a63c0c87691).
     "--pr",
@@ -17555,7 +17613,7 @@ fn a_repository_with_no_signing_key_ratifies_and_says_it_was_unsigned() {
             )
         })
         .trim()
-        .trim_start_matches("signal: allowed_signers:")
+        .trim_start_matches("signal: signers:")
         .trim()
         .to_string();
     let reviewed = stdout(&r.ank(AGENT, &["review"]));
@@ -17575,10 +17633,9 @@ review:
 
 /// **`review` names who may ratify, and nothing else can** (TASK-8a80b590b356).
 ///
-/// ADR-e45e1a29fe91 closes `.ank/` to a direct read by an agent, and
-/// `allowed_signers` is not an entity, so `show`, `find` and `config` all pass
-/// over it: before this, the one file the format asks a human to edit by hand
-/// was the one file no command could show. `review` is where the answer belongs
+/// ADR-3c8d94a0bbe0 closes `.ank/` to a direct read by an agent, and
+/// `signers:` is not an entity and not a key `config` reads, so `show`, `find`
+/// and `config` all pass over it. `review` is where the answer belongs
 /// -- §4 calls it the ratification queue, and who may ratify is the standing
 /// half of that question.
 ///
@@ -17591,12 +17648,15 @@ review:
 fn review_names_the_signers_no_other_verb_serves() {
     let r = Repo::new();
     r.seed_docs();
+    let config = std::fs::read_to_string(r.0.join(".ank/config.yml")).unwrap();
     std::fs::write(
-        r.0.join(".ank/allowed_signers"),
-        "# a comment, which is not a signer
-         marie@laptop gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A
-         marie@laptop ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample
-",
+        r.0.join(".ank/config.yml"),
+        format!(
+            "{config}signers:\n  marie@laptop:\n    keys:\n      \
+             # a comment, which is not a signer\n      \
+             - key: gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n      \
+             - key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
+        ),
     )
     .unwrap();
     r.git(&["add", "-A"]);
@@ -17656,7 +17716,7 @@ fn no_declared_key_is_said_in_words_and_never_as_an_empty_section() {
             )
         })
         .trim()
-        .trim_start_matches("signal: allowed_signers:")
+        .trim_start_matches("signal: signers:")
         .trim()
         .to_string();
 
@@ -19784,6 +19844,69 @@ fn check_names_a_corpus_behind_the_default_branch_and_status_says_how_far() {
     );
 }
 
+/// **A revision's corpus is listed by one git process, not one per layout
+/// directory** (TASK-5395fef418b7, ADR-cc65f1388a71).
+///
+/// Before, the entity files a revision carries were read with one `cat-file -p
+/// <rev>:<dir>` per directory the layout has ever used -- `.ank/entities`, then
+/// the previous `.ank/tasks` and `.ank/adr` -- three processes for one question,
+/// paid whether those directories exist or not. `check` asks it of two
+/// revisions when HEAD and the default branch differ, so it paid six.
+///
+/// Counted with `GIT_TRACE` at an absolute path, which prints one `trace:
+/// built-in:` line per git process, never timed. The count is exact: at
+/// 409bb93c this corpus cost `check --json` 18 processes, six of them listings,
+/// and one listing per revision brings it to 14.
+#[test]
+fn a_revisions_corpus_is_listed_by_one_git_process() {
+    let r = drifting_repo();
+    r.seed_task("TASK-bbbbbbbbbbbb", Some("A criterion only main carries."));
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-qm", "main moves"]);
+    r.git(&["checkout", "-q", "feature"]);
+
+    let trace = r.0.join("trace.txt");
+    let out = ank_command()
+        .args(["check", "--json", "--repo"])
+        .arg(&r.0)
+        .env("ANK_AGENT", AGENT)
+        .env("GIT_TRACE", &trace)
+        .current_dir(std::env::temp_dir())
+        .output()
+        .expect("the binary must have been built");
+    assert!(code(&out) <= 8, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("differ from main"),
+        "the fixture must put HEAD and the default branch apart, or it \
+         measures one revision: {}",
+        stdout(&out)
+    );
+    let text = std::fs::read_to_string(&trace).expect("git must have written the trace");
+    let starts: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("trace: built-in: git "))
+        .collect();
+    let per_directory: Vec<&&str> = starts
+        .iter()
+        .filter(|l| {
+            l.contains("cat-file -p ")
+                && [":.ank/entities", ":.ank/tasks", ":.ank/adr"]
+                    .iter()
+                    .any(|dir| l.ends_with(dir))
+        })
+        .collect();
+    assert!(
+        per_directory.is_empty(),
+        "a layout directory is still listed by a process of its own: {per_directory:#?}"
+    );
+    assert_eq!(
+        starts.len(),
+        14,
+        "check --json on two differing revisions starts this many git processes: \
+         {starts:#?}"
+    );
+}
+
 /// Ahead is drift too, and level is silence in `check` and a line in `status`.
 ///
 /// The corpus is a comparison and not an ordering: a checkout carrying an entity
@@ -20462,6 +20585,19 @@ fn json_golden_writing_verbs() {
     );
     fixture::pin("attest", &stdout(&out));
 
+    // verify, over a corpus declaring one verifier a change touches and one
+    // it does not, so both `ran` and `skipped` carry a row
+    let r = golden_repo();
+    let config = r.0.join(".ank/config.yml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "verifiers:\n  whole:\n    run: \"true\"\n  docs:\n    run: \"true\"\n    inputs: [\"docs/**\"]\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    let out = r.ank(AGENT, &["verify", "--json"]);
+    assert_eq!(code(&out), 0, "verify: {}", stderr(&out));
+    fixture::pin("verify", &stdout(&out));
+
     // amend and close, on a corpus that never claimed. A fourth task, because
     // the corpus already blocks ID on GOLDEN_BLOCKER: a blocker the task
     // already carries is nothing to amend, and the fixture would pin an empty
@@ -20514,6 +20650,17 @@ fn json_golden_verbs_needing_their_own_environment() {
     let out = r.ank(AGENT, &["migrate", "--json"]);
     assert_eq!(code(&out), 0, "migrate: {}", stderr(&out));
     fixture::pin("migrate", &stdout(&out));
+
+    // signers migrate, over a former allowed_signers (ADR-5c6db7a161b8)
+    let r = Repo::new();
+    std::fs::write(
+        r.0.join(".ank/allowed_signers"),
+        "# the release key\nmarie@laptop gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n",
+    )
+    .unwrap();
+    let out = r.ank(AGENT, &["signers", "migrate", "--json"]);
+    assert_eq!(code(&out), 0, "signers: {}", stderr(&out));
+    fixture::pin("signers", &stdout(&out));
 
     // archive, over a corpus holding what is cold, and without moving it: the
     // list is the document (TASK-97fd1992567a)
@@ -20670,8 +20817,10 @@ fn every_golden_conforms_to_the_shape_its_verb_declares() {
     // since TASK-161c402c27fb, which gave `update --check` one, pinned in
     // `tests/update.rs` against a bare repository standing in for the releases,
     // and thirty-two since TASK-53a8f5ca2539, which gave `context --since` one,
-    // pinned in `tests/context_since.rs` across two worktrees.
-    assert_eq!(checked, 32, "one fixture per document the surface returns");
+    // pinned in `tests/context_since.rs` across two worktrees, and thirty-three
+    // since TASK-15b59a393a38, which gave `verify` one, and thirty-four since
+    // TASK-3a7a73ccf2b7, which gave `signers migrate` one.
+    assert_eq!(checked, 34, "one fixture per document the surface returns");
     // **A declaration is unexercised when no instance of it anywhere carries a
     // row**, which is the reading this list is about (TASK-fbdf25e30058). It
     // used to be one instance at a time: a path went on the list every time the
@@ -21856,7 +22005,7 @@ fn an_entity_that_cannot_account_for_a_version_is_reported_with_both_counts() {
 
     let checked = r.ank("claude-code/1.0", &["check"]);
     // A signal and never a fault: an entity written outside the CLI is legal,
-    // and exiting 8 over it would redden a pipeline on an act ADR-e45e1a29fe91
+    // and exiting 8 over it would redden a pipeline on an act ADR-3c8d94a0bbe0
     // permits a human outright.
     assert_eq!(
         code(&checked),
@@ -23011,7 +23160,11 @@ const REVIEW_PAGE: &str = concat!(
     "  ADR-00000000aa10\n",
     "  ADR-00000000aa11\n",
     "\n",
-    "12 fault(s), 14 signal(s)\n",
+    // 14 signals at ed72f51; twelve of them one kind on the twelve decisions,
+    // which `review` counts as the one signal `check` folds them into
+    // (ADR-df1035934387). The dead scopes above stay listed one by one: they
+    // are faults, and a fault is never folded.
+    "12 fault(s), 3 signal(s)\n",
 );
 
 /// What `scope src/` printed on this fixture before the change, whole.
@@ -24538,7 +24691,10 @@ fn a_ref_in_a_namespace_no_reader_serves_is_one_signal_naming_it_and_its_deletio
     // The existing shape, field for field and type for type.
     let map = f.as_mapping().expect("a finding is an object");
     let keys: Vec<&str> = map.keys().filter_map(|k| k.as_str()).collect();
-    assert_eq!(keys, ["level", "subject", "message", "note", "charge"]);
+    assert_eq!(
+        keys,
+        ["level", "kind", "subject", "message", "note", "charge"]
+    );
     assert!(
         f["subject"].is_string() && f["message"].is_string(),
         "{f:#?}"

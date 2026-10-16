@@ -52,15 +52,13 @@ fn claim() -> String {
 
 /// A phone in portrait, as this suite states one.
 ///
-/// Forty columns, and it is no longer read out of a threshold constant because
-/// there is no threshold (TASK-252bf02de218, ADR-559eebf5c6f5): one region is
-/// drawable at every width, so there is no arrangement to be on the narrow side
-/// of and this is simply the narrowest window the criterion names. Thirty rows,
-/// because a phone is tall.
+/// Forty columns, the narrowest window the criterion names (TASK-252bf02de218)
+/// and well under [`ank_tui::view::DASHBOARD`], so the panels are reached one
+/// at a time (ADR-ac6be1ebe9aa). Thirty rows, because a phone is tall.
 const PHONE: (u16, u16) = (40, 30);
 
 /// The region's vertical border, at either weight, as characters
-/// (ADR-559eebf5c6f5).
+/// (ADR-ac6be1ebe9aa).
 ///
 /// Both weights, though the reader draws one: a second bordered region arriving
 /// in the lighter set is exactly what [`shared`] counts, and a suite that only
@@ -173,7 +171,7 @@ fn at_a_phone_sized_window_the_frame_is_one_region_and_every_screen_is_reachable
 }
 
 /// **A press on a row selects it, and a press on the row already selected
-/// opens it** (TASK-dd9747e5e305, TASK-9a402a54886f, ADR-559eebf5c6f5),
+/// opens it** (TASK-dd9747e5e305, TASK-9a402a54886f),
 /// through the binary at a phone-sized window.
 ///
 /// The criterion's own sentence, driven: a tap lands on a row of the listing
@@ -185,9 +183,9 @@ fn at_a_phone_sized_window_the_frame_is_one_region_and_every_screen_is_reachable
 /// **The second half used to be a tap on the target reading `[Enter open]`**,
 /// and that band is gone (TASK-9a402a54886f): four rows of standing targets on
 /// the twenty-four-row screen the clause was written to protect were priced and
-/// taken away, and what ADR-559eebf5c6f5 asks for instead is exactly this --
-/// the commonest act on a phone, read this document, reached with no button to
-/// press. So the suite asks for it the way the decision states it.
+/// taken away, and what replaced them is exactly this -- the commonest act on
+/// a phone, read this document, reached with no button to press. So the suite
+/// asks for it the way the criterion states it.
 #[test]
 fn a_tap_selects_a_row_and_a_second_tap_on_it_opens_it() {
     let repo = Repo::seeded();

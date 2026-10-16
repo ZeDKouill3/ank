@@ -119,6 +119,7 @@ fn each_kind_is_printed_with_its_fields_in_canonical_order() {
             "scope",
             "constraint",
             "see",
+            "enforced_by",
             "amends",
             "supersedes",
             "ratified",
@@ -275,16 +276,16 @@ fn every_config_key_is_printed_with_its_type_and_default() {
             ("`verifiers.<name>.timeout`", "duration", "`10m`"),
             ("`verifiers.<name>.default`", "boolean", "`false`"),
             ("`verifiers.<name>.inputs`", "list of globs", "none"),
-            ("`verifiers.<name>.env.image`", "string", "none"),
-            ("`verifiers.<name>.env.platform`", "string", "none"),
-            ("`verifiers.<name>.env.network`", "`none` or `open`", "none"),
-            ("`verifiers.<name>.env.vars.<var>`", "string", "none"),
+            ("`proof.reuse_max_age`", "duration", "`24h`"),
             ("`verifier_jobs`", "integer", "none"),
             ("`roles.<name>.can`", "list of strings", "`[]`"),
             ("`roles.<name>.cannot`", "list of strings", "`[]`"),
             ("`identities.<identity>`", "string", "none"),
             ("`weight.hot_files`", "integer", "`3000`"),
             ("`weight.plane_bytes`", "integer", "`4000000`"),
+            ("`signers.<principal>.keys[].key`", "string", "required"),
+            ("`signers.<principal>.keys[].note`", "string", "none"),
+            ("`signers.<principal>.keys[].valid_before`", "date", "none"),
         ]
     );
     assert!(page.contains("`schema: 1`"), "{page}");

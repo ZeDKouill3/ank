@@ -123,13 +123,16 @@ impl Style {
 
     /// `TASK-8ebd`, `ADR-962c`. The register `git log` uses for a sha.
     ///
-    /// Painted from the role every kind carries rather than from a colour
-    /// picked here: the shared table declares one row per kind and lands them
-    /// all on [`Role::Identifier`], which is what makes "an identifier reads the
-    /// same whatever it names" a decision a surface can be held to instead of a
-    /// coincidence of two call sites.
+    /// Painted from the role its kind carries rather than from a colour picked
+    /// here: the shared table declares one row per kind, each on a role of its
+    /// own (ADR-f0665c68d03d), which is what makes "a decision reads as a
+    /// decision" a rule a surface can be held to instead of a coincidence of
+    /// two call sites. A prefix the table has no row for is left unpainted.
     pub fn id(&self, s: &str) -> String {
-        self.role(Role::Identifier, s)
+        match meaning::role_of_id(s) {
+            Some(role) => self.role(role, s),
+            None => s.to_string(),
+        }
     }
 
     /// The trailing `> ank claim … to start` every output ends on.
@@ -215,12 +218,23 @@ impl Style {
                 // colours has to learn that they are the same fact; a reader who
                 // sees one colour does not.
                 Role::Underway => "36",
-                Role::Accomplished => "32",
+                // Bright black: done is finished business and recedes, apart
+                // from the dim `superseded` keeps (ADR-f0665c68d03d).
+                Role::Accomplished => "90",
+                Role::Ratified => "32",
                 Role::Retired => "2",
+                Role::Dropped => "31",
                 Role::Awaiting => "35",
                 Role::Attention => "33",
                 Role::Fault => "31",
-                Role::Identifier => "33",
+                Role::Work => "33",
+                // The one rung off the eight base colours: every one of them is
+                // already spent by a status, and 173 is a soft orange that
+                // reads as a kind of its own without outshining the yellow of
+                // the work around it.
+                Role::Decision => "38;5;173",
+                Role::Reference => "34",
+                Role::Record => "2",
             },
             s,
         )
@@ -363,7 +377,7 @@ mod tests {
         // Every sequence closes. An unreset attribute bleeds into the prompt.
         for painted in [
             s.header("h"),
-            s.id("i"),
+            s.id("TASK-i"),
             s.next("n"),
             s.status("[done]"),
             s.landed("done"),
@@ -418,6 +432,13 @@ mod tests {
         }
     }
 
+    /// Bright black, the register finished business recedes to
+    /// (ADR-f0665c68d03d). No accessor carries it outside this table's render,
+    /// so the test spells it through the one primitive every accessor uses.
+    fn grey(s: &Style, x: &str) -> String {
+        s.paint("90", x)
+    }
+
     /// The table of §4, enumerated rather than sampled.
     ///
     /// Expectations are built from the raw accessors, never from an escape
@@ -430,9 +451,9 @@ mod tests {
             ("open", Style::blue),
             ("in_progress", Style::cyan),
             ("claimed:who@host", Style::cyan),
-            ("done", Style::green),
-            ("finished:abc1234 on main", Style::green),
-            ("closed", Style::dim),
+            ("done", grey),
+            ("finished:abc1234 on main", grey),
+            ("closed", Style::red),
             ("proposed", Style::magenta),
             ("accepted", Style::green),
             ("superseded", Style::dim),
@@ -555,12 +576,17 @@ mod tests {
         for (role, bytes) in [
             (Role::Available, "\x1b[34mx\x1b[0m"),
             (Role::Underway, "\x1b[36mx\x1b[0m"),
-            (Role::Accomplished, "\x1b[32mx\x1b[0m"),
+            (Role::Accomplished, "\x1b[90mx\x1b[0m"),
+            (Role::Ratified, "\x1b[32mx\x1b[0m"),
             (Role::Retired, "\x1b[2mx\x1b[0m"),
+            (Role::Dropped, "\x1b[31mx\x1b[0m"),
             (Role::Awaiting, "\x1b[35mx\x1b[0m"),
             (Role::Attention, "\x1b[33mx\x1b[0m"),
             (Role::Fault, "\x1b[31mx\x1b[0m"),
-            (Role::Identifier, "\x1b[33mx\x1b[0m"),
+            (Role::Work, "\x1b[33mx\x1b[0m"),
+            (Role::Decision, "\x1b[38;5;173mx\x1b[0m"),
+            (Role::Reference, "\x1b[34mx\x1b[0m"),
+            (Role::Record, "\x1b[2mx\x1b[0m"),
         ] {
             assert_eq!(
                 s.role(role, "x"),

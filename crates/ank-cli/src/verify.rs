@@ -17,7 +17,9 @@
 //! command to run. Code 5 stays reserved for a verifier that ran and said no —
 //! confusing the two sends an agent to fix code that was never wrong.
 //!
-//! Dispatch routes to no verifier: `done` calls this module.
+//! Dispatch routes no verifier by name: `done` calls this module for the
+//! task's list, and `verify` for the verifiers a change touches
+//! (ADR-c621cb9c6739).
 
 use crate::cli::CliError;
 use crate::config::Verifier;
@@ -75,10 +77,10 @@ pub fn definition_hash(v: &Verifier) -> String {
     h.update(v.run.trim().as_bytes());
     h.update([0]);
     h.update(v.timeout.as_secs().to_string().as_bytes());
-    // `inputs` and `env` are appended only when declared (ADR-d8a328e311b9),
-    // so a verifier declaring neither keeps the hash every proof recorded
-    // before they existed. Each string goes in length-prefixed: two fields
-    // can never trade bytes and produce one hash.
+    // `inputs` is appended only when declared (ADR-d8a328e311b9), so a
+    // verifier declaring none keeps the hash every proof recorded before it
+    // existed. Each glob goes in length-prefixed: two globs can never trade
+    // bytes and produce one hash. `env` is no field (ADR-7224dea611c1).
     if let Some(inputs) = &v.inputs {
         // A set, not a sequence: the order globs are listed in changes
         // nothing about which files can change the result.
@@ -86,26 +88,6 @@ pub fn definition_hash(v: &Verifier) -> String {
         h.update(b"\0inputs");
         for g in globs {
             put(&mut h, g);
-        }
-    }
-    if let Some(env) = &v.env {
-        h.update(b"\0env");
-        for (field, value) in [
-            ("image", env.image.as_deref()),
-            ("platform", env.platform.as_deref()),
-            // Resolved by the parser: `network: none` written out and left to
-            // its default under an image are one environment.
-            ("network", env.network.map(crate::config::Network::as_str)),
-        ] {
-            if let Some(value) = value {
-                put(&mut h, field);
-                put(&mut h, value);
-            }
-        }
-        for (name, value) in &env.vars {
-            put(&mut h, "var");
-            put(&mut h, name);
-            put(&mut h, value);
         }
     }
     hex::encode(h.finalize())[..12].to_string()
@@ -118,6 +100,495 @@ fn put(h: &mut Sha256, s: &str) {
 
 pub fn definition_ref(name: &str, v: &Verifier) -> String {
     format!("{name}@{}", definition_hash(v))
+}
+
+// ---------------------------------------------------------------------------
+// The run registry (ADR-a2faf59f6ce0, ADR-7224dea611c1)
+// ---------------------------------------------------------------------------
+//
+// **What a result is keyed on.** `name@hash`, the definition that ran, and a
+// digest of the content on disk when it ran: every file git counts as the work
+// tree -- tracked, or untracked and not ignored -- that matches the verifier's
+// `inputs`, or every such file when it declares none. Content on disk and not
+// a commit, because `done` runs on an uncommitted tree and a key built on HEAD
+// would name a state nobody tested.
+//
+// **Where it lives.** `<git-common-dir>/ank/runs/`, one file per key, never
+// versioned: sibling worktrees of one repository share it with no
+// coordination, and no other machine ever reads it.
+//
+// **What may be reused.** A passing entry with the same key, no older than
+// `proof.reuse_max_age`, and nothing else: never a failure, which would forbid
+// a plain retry and hide a flaky test, and never an attestation on
+// `refs/ank/proof`, which nothing here reads.
+
+/// The content key of one verifier, `name@hash` and the inputs digest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunKey {
+    pub verifier: String,
+    pub inputs: String,
+}
+
+impl RunKey {
+    /// The registry file the key is recorded under.
+    fn file_name(&self) -> String {
+        let mut h = Sha256::new();
+        put(&mut h, &self.verifier);
+        put(&mut h, &self.inputs);
+        hex::encode(h.finalize())[..32].to_string()
+    }
+}
+
+/// The keys of `names`, in order, computed over the work tree as it stands.
+///
+/// **Two git processes for the whole list, whatever it holds**
+/// (ADR-cc65f1388a71): one listing of the work tree, and one `hash-object
+/// --stdin-paths` over the union of the files any verifier reads. `None` where
+/// a key cannot be established -- git refusing, a path it cannot hash -- and
+/// then nothing is reused and nothing recorded: a verb that cannot name its key
+/// pays the full cost rather than guessing.
+pub fn keys(worktree: &Path, names: &[(&str, &Verifier)]) -> Option<Vec<RunKey>> {
+    let files = crate::git::worktree_files(worktree)?.counted;
+    let mut selected: Vec<Vec<usize>> = Vec::with_capacity(names.len());
+    let mut wanted = vec![false; files.len()];
+    for (_, v) in names {
+        let picked: Vec<usize> = match &v.inputs {
+            Some(globs) => {
+                let set = ank_core::ScopeSet::new(globs).ok()?;
+                (0..files.len())
+                    .filter(|&i| set.matches(&files[i]))
+                    .collect()
+            }
+            None => (0..files.len()).collect(),
+        };
+        for &i in &picked {
+            wanted[i] = true;
+        }
+        selected.push(picked);
+    }
+
+    let union: Vec<usize> = (0..files.len()).filter(|&i| wanted[i]).collect();
+    let mut blob: Vec<Option<String>> = vec![None; files.len()];
+    if !union.is_empty() {
+        let mut input = String::new();
+        for &i in &union {
+            input.push_str(&files[i]);
+            input.push('\n');
+        }
+        let args = ["hash-object", "--stdin-paths"];
+        let out = crate::git::output_with_stdin(worktree, &args, input.as_bytes()).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let ids: Vec<&str> = text.lines().collect();
+        if ids.len() != union.len() {
+            return None;
+        }
+        for (&i, id) in union.iter().zip(ids) {
+            blob[i] = Some(id.to_string());
+        }
+    }
+
+    let mut out = Vec::with_capacity(names.len());
+    for ((name, v), picked) in names.iter().zip(selected) {
+        let mut paths: Vec<(&str, &str)> = picked
+            .iter()
+            .map(|&i| (files[i].as_str(), blob[i].as_deref().unwrap_or("")))
+            .collect();
+        paths.sort();
+        let mut h = Sha256::new();
+        for (path, id) in paths {
+            put(&mut h, path);
+            put(&mut h, id);
+        }
+        out.push(RunKey {
+            verifier: definition_ref(name, v),
+            inputs: hex::encode(h.finalize())[..16].to_string(),
+        });
+    }
+    Some(out)
+}
+
+/// One recorded run: what it was keyed on, what it answered, who ran it and
+/// when, and the reference its proof entry carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Run {
+    pub key: RunKey,
+    pub ok: bool,
+    /// The exit code, `None` for a run killed by a signal or by its timeout.
+    pub code: Option<i32>,
+    pub by: String,
+    /// Seconds since the epoch.
+    pub at: i64,
+    pub reference: String,
+}
+
+/// The registry directory of the repository `worktree` belongs to.
+pub fn registry(worktree: &Path) -> Option<PathBuf> {
+    crate::git::common_dir(worktree).map(|d| d.join("ank").join("runs"))
+}
+
+/// Records `run` under `dir`, replacing whatever the same key held: the latest
+/// answer for a key is the one that counts, so a failure after a pass forbids
+/// the reuse the pass allowed.
+///
+/// Written to a temporary file and renamed into place, so a sibling worktree
+/// reading at the same moment sees the old entry or the new one, never half.
+pub fn record(dir: &Path, run: &Run) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let text = format!(
+        "verifier: {}\ninputs: {}\nok: {}\nexit: {}\nby: {}\nat: {}\nref: {}\n",
+        run.key.verifier,
+        run.key.inputs,
+        run.ok,
+        run.code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "none".into()),
+        run.by,
+        run.at,
+        run.reference,
+    );
+    let name = run.key.file_name();
+    let tmp = dir.join(format!(".{name}.{}", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, dir.join(name))
+}
+
+/// The entry recorded under `key`, if any and if it reads whole.
+pub fn lookup(dir: &Path, key: &RunKey) -> Option<Run> {
+    let text = std::fs::read_to_string(dir.join(key.file_name())).ok()?;
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(name)?.strip_prefix(": "))
+            .map(str::to_string)
+    };
+    let run = Run {
+        key: RunKey {
+            verifier: field("verifier")?,
+            inputs: field("inputs")?,
+        },
+        ok: field("ok")? == "true",
+        code: field("exit")?.parse().ok(),
+        by: field("by")?,
+        at: field("at")?.parse().ok()?,
+        reference: field("ref")?,
+    };
+    // The file name is a digest of the key, so this only ever disagrees on a
+    // file somebody wrote by hand, and then it is not this key's entry.
+    (run.key == *key).then_some(run)
+}
+
+/// The entry `done` may reuse for `key` at `now`: passing, and no older than
+/// `max_age`. Anything else, absent included, means run the verifier.
+pub fn reusable(dir: &Path, key: &RunKey, now: i64, max_age: Duration) -> Option<Run> {
+    let run = lookup(dir, key)?;
+    let age = now.saturating_sub(run.at);
+    (run.ok && run.code == Some(0) && age >= 0 && (age as u64) <= max_age.as_secs()).then_some(run)
+}
+
+/// Records one entry per verifier in `ran` that finished, pass or fail, at the
+/// instant this is called. `ran` and `outcomes` are aligned: the keys of the
+/// verifiers started, in the order they were handed to the runner.
+///
+/// Shared by `done` and `verify`, so that a run either verb started is recorded
+/// on one rule: a failure is recorded as surely as a pass, since the latest
+/// answer for a key is the one that counts, and a verifier killed because
+/// another failed has no answer and leaves the key as it was.
+pub fn record_outcomes(
+    dir: &Path,
+    ran: &[&RunKey],
+    outcomes: &[Result<Option<Outcome>>],
+    identity: &str,
+    head: &str,
+    style: crate::style::Style,
+) {
+    let at = crate::claim::now_secs();
+    for (key, outcome) in ran.iter().zip(outcomes) {
+        let Ok(Some(o)) = outcome else { continue };
+        let run = Run {
+            key: (*key).clone(),
+            ok: o.ok,
+            code: if o.timed_out { None } else { o.code },
+            by: identity.to_string(),
+            at,
+            reference: o.reference(head, false),
+        };
+        if let Err(e) = record(dir, &run) {
+            eprintln!(
+                "{} the run of {} was not recorded for reuse: {e}",
+                style.on_stderr().yellow("warning:"),
+                o.name
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The verify verb (ADR-c621cb9c6739)
+// ---------------------------------------------------------------------------
+//
+// **What it selects.** Every verifier `config.yml` declares whose `inputs`
+// match a changed file, and every verifier that declares no inputs, since a
+// verifier reading the whole tree is touched by any change. A file is changed
+// when it was committed on the branch since the merge-base with the default
+// branch, when it is tracked and its working copy differs from HEAD (deleted
+// included), or when it is untracked and not ignored.
+//
+// **What it writes.** Nothing a reader of the corpus can see: no proof, no
+// ref, no entity, and no claim is asked for. The one thing it leaves is the
+// run registry, under the git common directory and outside `.ank/`, keyed on
+// exactly what `done` computes, so that the `done` which follows finds the run
+// and reuses it on the terms ADR-a2faf59f6ce0 sets. The selection itself is
+// printed and never recorded: it is how this verb chose, never what a proof
+// may rest on.
+//
+// **It reuses nothing.** The selection is the economy; a verifier it selects is
+// one the caller is asking to see run.
+
+/// The files changed in `worktree`, and the base they were measured from: the
+/// merge-base with `default`, or `None` when no base could be established.
+///
+/// Five git processes whatever the tree holds (ADR-cc65f1388a71): two for the
+/// listing, one `cat-file --batch-check` for what HEAD records, one
+/// `hash-object --stdin-paths` for what the working copy would record, and,
+/// when a default branch is named, one `merge-base` and one `diff-tree`.
+/// `None` for the list where git cannot answer at all.
+pub fn changed_files(
+    worktree: &Path,
+    default: Option<&str>,
+) -> Option<(Vec<String>, Option<String>)> {
+    let files = crate::git::worktree_files(worktree)?;
+    let mut changed: std::collections::BTreeSet<String> = files.deleted.iter().cloned().collect();
+
+    // What HEAD records for every listed path: a path it does not carry is
+    // untracked, and changed by being there.
+    let mut input = String::new();
+    for p in &files.counted {
+        input.push_str("HEAD:");
+        input.push_str(p);
+        input.push('\n');
+    }
+    let mut tracked: Vec<(&String, String)> = Vec::new();
+    if !files.counted.is_empty() {
+        let out = crate::git::output_with_stdin(
+            worktree,
+            &["cat-file", "--batch-check"],
+            input.as_bytes(),
+        )
+        .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let answers: Vec<&str> = text.lines().collect();
+        if answers.len() != files.counted.len() {
+            return None;
+        }
+        for (p, line) in files.counted.iter().zip(answers) {
+            let mut parts = line.split(' ');
+            match (parts.next(), parts.next()) {
+                (Some(oid), Some("blob")) => tracked.push((p, oid.to_string())),
+                _ => {
+                    changed.insert(p.clone());
+                }
+            }
+        }
+    }
+    if !tracked.is_empty() {
+        let mut input = String::new();
+        for (p, _) in &tracked {
+            input.push_str(p);
+            input.push('\n');
+        }
+        let args = ["hash-object", "--stdin-paths"];
+        let out = crate::git::output_with_stdin(worktree, &args, input.as_bytes()).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let now: Vec<&str> = text.lines().collect();
+        if now.len() != tracked.len() {
+            return None;
+        }
+        for ((p, head), now) in tracked.iter().zip(now) {
+            if head != now {
+                changed.insert((*p).clone());
+            }
+        }
+    }
+
+    // Committed on the branch since it left the default one. The local branch
+    // first, then the remote-tracking one: a clone that never checked the
+    // default branch out still has a base to measure from.
+    let base = default.and_then(|d| {
+        [d.to_string(), format!("refs/remotes/origin/{d}")]
+            .iter()
+            .find_map(|rev| crate::git::merge_base(worktree, rev, "HEAD").ok().flatten())
+    });
+    if let Some(base) = &base {
+        let args = [
+            "diff-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            base.as_str(),
+            "HEAD",
+        ];
+        let out = crate::git::output(worktree, &args).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        for p in out.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()) {
+            changed.insert(String::from_utf8_lossy(p).into_owned());
+        }
+    }
+    Some((changed.into_iter().collect(), base))
+}
+
+/// Whether verifier `v` is touched by `changed`: always without inputs, and
+/// otherwise when one of its globs matches one of the files. `None` when the
+/// globs do not parse, which the configuration parser already refuses.
+pub fn selects(v: &Verifier, changed: &[String]) -> Option<bool> {
+    match &v.inputs {
+        None => Some(true),
+        Some(globs) => {
+            let set = ank_core::ScopeSet::new(globs).ok()?;
+            Some(changed.iter().any(|p| set.matches(p)))
+        }
+    }
+}
+
+pub fn run_verb(
+    inv: &crate::cli::Invocation,
+    repo: &crate::repo::Repo,
+    cfg: &crate::config::Config,
+    identity: &str,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
+    crate::git::ensure_worktree_usable(repo)?;
+    let style = inv.style();
+
+    // An indeterminable default branch degrades rather than refuses
+    // (ADR-9307e5d214a7): the tree's own changes are still a selection, and
+    // the line below says what it could not measure.
+    let default = crate::git::resolve_default_branch(
+        cfg.default_branch.as_deref(),
+        crate::git::origin_head(&repo.worktree)?.as_deref(),
+    )
+    .ok();
+    let Some((changed, base)) = changed_files(&repo.worktree, default.as_deref()) else {
+        return Err(CliError::new(
+            ExitCode::Environment,
+            "git could not list the work tree, so no change can be selected from",
+        )
+        .with_hint("git ls-files --cached --others --exclude-standard"));
+    };
+    if base.is_none() && !inv.quiet() {
+        // Selecting less than a change touches is the one direction this verb
+        // must not err in, so the gap is said out loud.
+        eprintln!(
+            "{} no merge-base with the default branch: only the work tree's changes are selected from",
+            style.on_stderr().yellow("warning:"),
+        );
+    }
+
+    let mut selected: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for (name, v) in &cfg.verifiers {
+        if selects(v, &changed).unwrap_or(true) {
+            selected.push(name.clone());
+        } else {
+            skipped.push(name.clone());
+        }
+    }
+
+    let defs: Vec<(&str, &Verifier)> = selected
+        .iter()
+        .map(|n| (n.as_str(), &cfg.verifiers[n]))
+        .collect();
+    // Taken before anything runs, as `done` takes them: what a run is recorded
+    // against is the content it was started on.
+    let registry = registry(&repo.worktree);
+    let keys = registry.as_ref().and_then(|_| {
+        if defs.is_empty() {
+            Some(Vec::new())
+        } else {
+            keys(&repo.worktree, &defs)
+        }
+    });
+    let head = crate::git::run(&repo.worktree, &["rev-parse", "HEAD"]).unwrap_or_default();
+
+    let outcomes =
+        crate::done::run_concurrently(repo, cfg, &selected, "config.yml", cfg.verifier_jobs());
+    match (&registry, &keys) {
+        (Some(dir), Some(keys)) => {
+            let ran: Vec<&RunKey> = keys.iter().collect();
+            record_outcomes(dir, &ran, &outcomes, identity, &head, style);
+        }
+        _ if !selected.is_empty() => eprintln!(
+            "{} no content key could be established: these runs are not recorded for reuse",
+            style.on_stderr().yellow("warning:"),
+        ),
+        _ => {}
+    }
+
+    // Reported in configuration order once all have finished, and the first
+    // failure in that order is the answer, as `done` reports it.
+    let mut rows: Vec<(String, Outcome)> = Vec::new();
+    for (name, outcome) in selected.iter().zip(outcomes) {
+        let Some(outcome) = outcome? else { break };
+        let err = style.on_stderr();
+        eprintln!(
+            "running: {name} ... {} ({:.1}s)",
+            if outcome.ok {
+                err.green("ok")
+            } else {
+                err.red("FAILED")
+            },
+            outcome.elapsed.as_secs_f64()
+        );
+        if !outcome.ok {
+            return Err(failure(&outcome, &cfg.verifiers[name].run));
+        }
+        rows.push((name.clone(), outcome));
+    }
+
+    if inv.json() {
+        let ran = rows.iter().map(|(name, o)| {
+            crate::json::Obj::new()
+                .str("name", name)
+                .str("verifier", &definition_ref(name, &cfg.verifiers[name]))
+                .bool("ok", o.ok)
+                .finish()
+        });
+        let doc = crate::json::Obj::document()
+            .opt_str("base", base.as_deref())
+            .num("changed", changed.len())
+            .array("ran", ran)
+            .strings("skipped", &skipped)
+            .finish();
+        let _ = writeln!(out, "{doc}");
+    } else if !inv.quiet() {
+        let from = match &base {
+            Some(b) => format!("since {}", &b[..b.len().min(7)]),
+            None => "in the work tree".to_string(),
+        };
+        let _ = writeln!(
+            out,
+            "{} file(s) changed {from}; ran {} of {} verifier(s), recorded for reuse",
+            changed.len(),
+            rows.len(),
+            cfg.verifiers.len()
+        );
+        for (name, _) in &rows {
+            let _ = writeln!(out, "  {name}  {}", style.green("ok"));
+        }
+        for name in &skipped {
+            let _ = writeln!(out, "  {name}  skipped, no input changed");
+        }
+    }
+    Ok(ExitCode::Ok)
 }
 
 /// Locates a POSIX shell.
@@ -356,7 +827,6 @@ mod tests {
             run: run.to_string(),
             timeout: Duration::from_secs(secs),
             inputs: None,
-            env: None,
         }
     }
 
@@ -479,10 +949,10 @@ mod tests {
         );
     }
 
-    /// ADR-d8a328e311b9: `inputs` and `env` are part of what ran, and a
-    /// verifier declaring neither hashes exactly as it did before they existed.
+    /// ADR-7224dea611c1: `inputs` is part of what ran, and a verifier
+    /// declaring none hashes exactly as it did before it existed.
     #[test]
-    fn the_definition_hash_covers_inputs_and_env_and_nothing_when_neither_is_declared() {
+    fn the_definition_hash_covers_inputs_and_nothing_when_none_is_declared() {
         let p = std::path::Path::new("config.yml");
         let hash = |yaml: &str| {
             let cfg = crate::config::parse(&format!("schema: 1\nverifiers:\n  t:\n{yaml}"), p)
@@ -493,11 +963,6 @@ mod tests {
         // sha256("cargo test\0600"), first twelve hex digits: the formula
         // every proof recorded so far was hashed with.
         assert_eq!(bare, "ea889101030e");
-        assert_eq!(
-            hash("    run: cargo test\n    env: {}\n"),
-            bare,
-            "an env declaring nothing is no environment"
-        );
 
         let inputs = hash("    run: cargo test\n    inputs: [\"src/**\", \"Cargo.toml\"]\n");
         assert_ne!(inputs, bare);
@@ -509,28 +974,6 @@ mod tests {
         assert_ne!(
             hash("    run: cargo test\n    inputs: [\"src/**\"]\n"),
             inputs
-        );
-
-        let image = "    run: cargo test\n    env:\n      image: r@sha256:\
-                     0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n      \
-                     platform: linux/amd64\n";
-        let pinned = hash(image);
-        assert_ne!(pinned, bare);
-        assert_eq!(
-            hash(&format!("{image}      network: none\n")),
-            pinned,
-            "network none written out is the default under an image"
-        );
-        assert_ne!(hash(&format!("{image}      network: open\n")), pinned);
-        let with_var = hash(&format!("{image}      vars:\n        LANG: C\n"));
-        assert_ne!(with_var, pinned);
-        assert_ne!(
-            hash(&format!("{image}      vars:\n        LANG: POSIX\n")),
-            with_var
-        );
-        assert_ne!(
-            hash("    run: cargo test\n    env:\n      platform: linux/arm64\n"),
-            hash("    run: cargo test\n    env:\n      platform: linux/amd64\n")
         );
     }
 

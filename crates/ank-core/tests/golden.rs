@@ -980,3 +980,22 @@ fn closed_blocker_does_not_unblock() {
     let active = t.active_blockers(|_| Some(TaskStatus::Closed)).unwrap();
     assert_eq!(active.len(), 1);
 }
+
+/// A proof entry `done` reused rather than ran carries `reused` and `by`, after
+/// `via`, and earns no schema bump: an entry without them was run for its task
+/// (ADR-a2faf59f6ce0).
+#[test]
+fn a_reused_proof_entry_says_where_it_came_from_and_who_ran_it() {
+    let input = fs::read_to_string(golden_dir("valid").join("TASK-6b0e4c2a91d5.md")).unwrap();
+    let t = parse_task(&input).unwrap();
+    assert_eq!(SCHEMA_VERSION, 4, "reused and by earn no bump");
+    assert_eq!(t.proof[0].reused, None);
+    assert_eq!(t.proof[0].by, None);
+    assert_eq!(t.proof[1].reused.as_deref(), Some("local"));
+    assert_eq!(t.proof[1].by.as_deref(), Some("claude-code/opus-5+sibling"));
+    assert_eq!(serialize_task(&t), input.replace("\r\n", "\n"));
+
+    let older = fs::read_to_string(golden_dir("valid").join("TASK-2f8c41ba07d3.md")).unwrap();
+    let t = parse_task(&older).unwrap();
+    assert!(t.proof.iter().all(|p| p.reused.is_none() && p.by.is_none()));
+}

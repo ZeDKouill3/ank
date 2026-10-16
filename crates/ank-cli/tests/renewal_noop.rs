@@ -11,15 +11,19 @@
 //! measure a renewal that never pushes either way.
 //!
 //! Process counts are read from `GIT_TRACE` at an absolute path and never from a
-//! wall clock (CLAUDE.md). The one wait here is for a second to turn, which is a
-//! wait on state: nothing is asserted about how long anything took.
+//! wall clock (CLAUDE.md). Nothing here is asserted about how long anything
+//! took, and nothing depends on it either: the record a renewal meets is kept
+//! equal to the one it computes for as long as the verb runs, however long that
+//! is (TASK-2839df6619e2).
 
 use crate::scratch;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ANK: &str = env!("CARGO_BIN_EXE_ank");
@@ -36,10 +40,13 @@ const T: &str = "TASK-000000000001";
 const TTL_SECONDS: u64 = 7_200;
 const TTL: &str = "2h";
 
-/// How many seconds a verb is allowed to take between the instant the test
-/// names and the instant the binary stamps. Only the format guard uses it; the
-/// arrangement below does not depend on a duration.
-const TOLERATED_SECONDS: u64 = 3;
+/// How many renewals may miss the record they were kept for before the test
+/// gives up. A miss is a renewal whose clock reading fell in another second
+/// than the one the [`Keeper`] led it to; it is recognised from what the
+/// renewal wrote and never from how long anything took, and each miss corrects
+/// the lead it was measured against, so this bounds how often the verb's own
+/// lag changes from one run to the next, not how long the verb takes.
+const MISSES_TOLERATED: usize = 10;
 
 fn isolated_git_config() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -60,7 +67,9 @@ fn isolated_git_config() -> &'static Path {
 fn spawn(program: &str) -> Command {
     let mut c = Command::new(program);
     let config = isolated_git_config();
-    c.env("GIT_CONFIG_GLOBAL", config)
+    // Only the binary's own processes are traced, and only where a test asks.
+    c.env_remove("GIT_TRACE")
+        .env("GIT_CONFIG_GLOBAL", config)
         .env("GIT_CONFIG_SYSTEM", config);
     let root = scratch::root();
     c.env("TMPDIR", root).env("TMP", root).env("TEMP", root);
@@ -92,22 +101,6 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// Returns once the wall clock is in a later second than it was on entry.
-fn cross_a_second() {
-    let start = now_secs();
-    while now_secs() == start {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// Returns at the start of `second`, having spent the wait asleep in short
-/// steps so the return lands near its beginning rather than anywhere in it.
-fn wait_for_second(second: u64) {
-    while now_secs() < second {
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
-
 /// `YYYY-MM-DDThh:mm:ssZ`, the stamp `claim` writes into a record.
 ///
 /// Restated here because the binary exposes no library to borrow it from, and
@@ -133,6 +126,23 @@ fn rfc3339(epoch_secs: u64) -> String {
         (secs % 3600) / 60,
         secs % 60
     )
+}
+
+/// Reads a stamp of [`rfc3339`] back to seconds since the epoch.
+fn epoch(stamp: &str) -> Option<i64> {
+    let (date, time) = stamp.strip_suffix('Z')?.split_once('T')?;
+    let mut d = date.split('-').map(|p| p.parse::<i64>());
+    let (y, m, day) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
+    let mut t = time.split(':').map(|p| p.parse::<i64>());
+    let (hh, mm, ss) = (t.next()?.ok()?, t.next()?.ok()?, t.next()?.ok()?);
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
 }
 
 /// A repository with a corpus of one task, and a bare origin it pushes to.
@@ -232,15 +242,13 @@ impl Level1 {
     /// Confronts [`rfc3339`] with a stamp the binary wrote, so nothing below
     /// rests on a format this file only believes it shares.
     ///
-    /// The renewal that produced the record happened somewhere inside the
-    /// second the caller names or the one after it -- the verb is what sits
-    /// between -- so both are admitted, and a format that differs in any other
-    /// way matches neither.
-    fn assert_stamp_matches_the_binary(&self, at_or_after: u64) {
+    /// The renewal that produced the record happened between the two readings
+    /// of the clock the caller took around the verb, so every second between
+    /// them is admitted -- a bracket, not a tolerance: a slow verb widens it and
+    /// a format that differs in any other way matches none of it.
+    fn assert_stamp_matches_the_binary(&self, from: u64, to: u64) {
         let written = self.expiry();
-        let candidates: Vec<String> = (0..=TOLERATED_SECONDS)
-            .map(|d| rfc3339(at_or_after + d + TTL_SECONDS))
-            .collect();
+        let candidates: Vec<String> = (from..=to).map(|s| rfc3339(s + TTL_SECONDS)).collect();
         assert!(
             candidates.contains(&written),
             "the binary writes an expiry this file cannot reproduce: \
@@ -254,37 +262,9 @@ impl Level1 {
         self.forge_expiry("2099-01-01T00:00:00Z");
     }
 
-    /// The same route, to a stamp of the caller's choosing: the expiry a
-    /// renewal in a chosen second computes, so the identical-record case is
-    /// arranged instead of waited for.
+    /// The same route, to a stamp of the caller's choosing.
     fn forge_expiry(&self, stamp: &str) {
-        let rewritten: String = self
-            .record()
-            .lines()
-            .map(|l| {
-                if l.starts_with("expires: ") {
-                    format!("expires: {stamp}\n")
-                } else {
-                    format!("{l}\n")
-                }
-            })
-            .collect();
-        let mut child = spawn("git")
-            .args(["hash-object", "-w", "--stdin"])
-            .current_dir(&self.repo)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        use std::io::Write;
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(rewritten.as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        let blob = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let blob = with_expiry(&self.repo, &self.record(), stamp);
         let name = self.claim_ref();
         git(&self.repo, &["update-ref", &name, &blob]);
         git(
@@ -292,6 +272,141 @@ impl Level1 {
             &["push", "-q", "-f", "origin", &format!("{name}:{name}")],
         );
     }
+}
+
+/// Writes `record` with its expiry replaced by `stamp` as a blob, and names it.
+fn with_expiry(repo: &Path, record: &str, stamp: &str) -> String {
+    let rewritten: String = record
+        .lines()
+        .map(|l| {
+            if l.starts_with("expires: ") {
+                format!("expires: {stamp}\n")
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect();
+    let mut child = spawn("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(rewritten.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "hash-object failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Keeps the claim ref, for as long as it runs, on the record a renewal
+/// computes `lead` seconds from now: the clock the binary reads is the test's
+/// to follow rather than to race.
+///
+/// The lead is the verb's own lag between enumerating the claim ref and reading
+/// the clock to renew it -- the git processes between the two -- in whole
+/// seconds. It is zero on an idle machine and grows with the load, and the
+/// caller learns it from the renewals that missed (see [`missed_by`]) instead
+/// of assuming it. The blob for the next second is written during the one
+/// before it, so at a boundary all that is left is one `update-ref`.
+struct Keeper {
+    stop: Arc<AtomicBool>,
+    kept: Arc<AtomicU64>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Keeper {
+    fn start(r: &Level1, lead: i64) -> Keeper {
+        let repo = r.repo.clone();
+        let name = r.claim_ref();
+        let record = r.record();
+        let stop = Arc::new(AtomicBool::new(false));
+        let kept = Arc::new(AtomicU64::new(0));
+        let (stop_t, kept_t) = (Arc::clone(&stop), Arc::clone(&kept));
+        let thread = std::thread::spawn(move || {
+            let blob_for = |s: u64| {
+                let at = (s as i64 + lead).max(0) as u64;
+                with_expiry(&repo, &record, &rfc3339(at + TTL_SECONDS))
+            };
+            let mut next = now_secs();
+            let mut blob = blob_for(next);
+            while !stop_t.load(Ordering::SeqCst) {
+                let now = now_secs();
+                if now >= next {
+                    if now > next {
+                        // A second went by unwritten: catch up to this one.
+                        next = now;
+                        blob = blob_for(next);
+                    }
+                    // Lock contention with the binary's own write is that
+                    // renewal having missed; the next turn retries.
+                    let moved = spawn("git")
+                        .args(["update-ref", &name, &blob])
+                        .current_dir(&repo)
+                        .stderr(Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if moved && now_secs() == next {
+                        kept_t.store(next, Ordering::SeqCst);
+                        next += 1;
+                        blob = blob_for(next);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let k = Keeper {
+            stop,
+            kept,
+            thread: Some(thread),
+        };
+        // Nothing runs before the ref says what this second computes.
+        while k.kept.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        k
+    }
+
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            t.join().expect("the keeper thread panicked");
+        }
+    }
+}
+
+impl Drop for Keeper {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// By how many seconds a traced renewal that wrote missed the record it read.
+///
+/// `update-ref <ref> <new> <old>`: the record it made and the one it read. The
+/// difference of their expiries is how far its clock reading was from the
+/// second the [`Keeper`] led it to, which is what the next lead corrects by.
+/// Zero means it rewrote a record it computed unchanged, the defect this file
+/// exists to catch. `None` when the trace carries no swap to read.
+fn missed_by(repo: &Path, lines: &[String]) -> Option<i64> {
+    let swap = lines.iter().find(|l| l.starts_with("update-ref"))?;
+    let args: Vec<&str> = swap.split_whitespace().collect();
+    let (new, old) = (args.get(2)?, args.get(3)?);
+    let expiry = |sha: &str| {
+        git(repo, &["cat-file", "-p", sha])
+            .lines()
+            .find_map(|l| l.strip_prefix("expires: ").and_then(epoch))
+    };
+    Some(expiry(new)? - expiry(old)?)
 }
 
 impl Drop for Level1 {
@@ -328,43 +443,53 @@ fn a_renewal_that_changes_nothing_writes_nothing_and_pushes_nothing() {
     let r = Level1::new("renewal-noop");
 
     // A renewal writes `now + ttl` and is a no-op when the record already says
-    // so. Racing the claim for that was what made this test fail on a slow
-    // runner for a reason it does not measure (TASK-faf554e366c5): what decided
-    // each attempt was the phase of the second at which `claim` happened to
-    // write, which nothing aligned.
-    //
-    // So the state is arranged. The expiry a renewal in a named second computes
-    // is written onto the ref and the origin first, and the second is then
-    // entered at its start, which leaves a whole second for one `context` to
-    // reach its renewal. The loop remains because a verb can still be slower
-    // than that, and it is now the unlikely case rather than the usual one.
-    cross_a_second();
+    // so. Arranging that once, for a named second, left the outcome to whether
+    // one `context` reached its renewal inside that second, which a loaded
+    // runner does not (TASK-faf554e366c5, then TASK-2839df6619e2). So the ref
+    // is kept, for the whole of the verb, on the record the renewal will
+    // compute, led by the verb's own lag, and the verb may take as long as it
+    // takes.
     r.ok(&["claim", T, "--ttl", TTL]);
-    let claimed_at = now_secs();
+    let from = now_secs();
     let _ = r.traced_context("warm");
+    let to = now_secs();
     // Nothing below is trusted until this file and the binary are shown to
     // write the same twenty characters.
-    r.assert_stamp_matches_the_binary(claimed_at);
+    r.assert_stamp_matches_the_binary(from, to);
 
     let mut identical = None;
-    for _ in 0..10 {
-        let target = now_secs() + 2;
-        r.forge_expiry(&rfc3339(target + TTL_SECONDS));
-        wait_for_second(target);
-        let before = r.record();
+    let mut leads = Vec::new();
+    let mut lead = 0;
+    for _ in 0..MISSES_TOLERATED {
+        leads.push(lead);
+        let keeper = Keeper::start(&r, lead);
         let lines = r.traced_context("identical");
-        if r.record() == before {
+        keeper.stop();
+        if !lines.iter().any(|l| l.starts_with("hash-object")) {
             identical = Some(lines);
             break;
         }
+        // It wrote. Only a miss excuses that, and it says by how much; a
+        // renewal that wrote the very expiry it read rewrote a record it
+        // computed unchanged.
+        let missed = missed_by(&r.repo, &lines);
+        assert!(
+            missed.is_some_and(|d| d != 0),
+            "a renewal that changes nothing still runs hash-object: {} processes, {}",
+            lines.len(),
+            names(&lines)
+        );
+        lead += missed.unwrap();
     }
-    let identical = identical
-        .expect("ten arranged seconds never held a whole context: the verb takes over a second");
+    let identical = identical.unwrap_or_else(|| {
+        panic!("no renewal met the record it was led to, with leads of {leads:?} seconds")
+    });
 
     r.forge_expiry_ahead();
     let changing = r.traced_context("changing");
 
     // Printed for the record the task asks for (`--nocapture`).
+    eprintln!("leads tried before an unchanged renewal: {leads:?} seconds");
     eprintln!(
         "git processes of context at level 1: unchanged renewal {} ({}), \
          changing renewal {} ({}), verb before its renewal {}",

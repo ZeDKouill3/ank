@@ -25,7 +25,7 @@ One verb, whole, is the shape of every entry:
 <!-- replay help -->
 
     $ ank help close --json
-    {"contract":1,"verbs":[{"name":"close","usage":"ank close <id>","summary":"closes a task that will never be done; --reason is mandatory","group":"shape the work","flags":[{"name":"--reason","short":null,"takes_value":true,"repeatable":false},{"name":"--json","short":"-j","takes_value":false,"repeatable":false},{"name":"--quiet","short":"-q","takes_value":false,"repeatable":false},{"name":"--repo","short":"-r","takes_value":true,"repeatable":false},{"name":"--worktree","short":null,"takes_value":true,"repeatable":false}],"notes":["the ref is not the whole product: a push the remote refuses leaves the write standing in this clone, and the verb exits 0"],"refuses":[{"code":7,"when":"no --reason: a closure nobody explained is one nobody can reopen"},{"code":2,"when":"no such entity, or the prefix matches more than one"},{"code":1,"when":"a flag this verb does not take, or a value the parser cannot read"},{"code":3,"when":"the entity moved between the read and the write: redo context, somebody else wrote"},{"code":9,"when":"git is absent or older than 2.34: an environment to repair, not work that failed"},{"code":6,"when":"the task is already closed or already done: neither is a state this verb moves out of"}],"kinds":[],"returns":[{"when":null,"fields":[{"name":"contract","type":"number","nullable":false},{"name":"task","type":"string","nullable":false},{"name":"status","type":"string","nullable":false},{"name":"claim_revoked","type":"boolean","nullable":false}]}]}]}
+    {"contract":1,"verbs":[{"name":"close","usage":"ank close <id>","summary":"closes a task that will never be done; --reason is mandatory","group":"shape the work","writes":"both","flags":[{"name":"--reason","short":null,"takes_value":true,"repeatable":false},{"name":"--json","short":"-j","takes_value":false,"repeatable":false},{"name":"--quiet","short":"-q","takes_value":false,"repeatable":false},{"name":"--repo","short":"-r","takes_value":true,"repeatable":false},{"name":"--worktree","short":null,"takes_value":true,"repeatable":false}],"notes":["the ref is not the whole product: a push the remote refuses leaves the write standing in this clone, and the verb exits 0"],"refuses":[{"code":7,"when":"no --reason: a closure nobody explained is one nobody can reopen"},{"code":2,"when":"no such entity, or the prefix matches more than one"},{"code":1,"when":"a flag this verb does not take, or a value the parser cannot read"},{"code":3,"when":"the entity moved between the read and the write: redo context, somebody else wrote"},{"code":9,"when":"git is absent or older than 2.34: an environment to repair, not work that failed"},{"code":6,"when":"the task is already closed or already done: neither is a state this verb moves out of"}],"kinds":[],"returns":[{"when":null,"fields":[{"name":"contract","type":"number","nullable":false},{"name":"task","type":"string","nullable":false},{"name":"status","type":"string","nullable":false},{"name":"claim_revoked","type":"boolean","nullable":false}]}]}]}
 
 So a client can discover, without reading a line of Rust: every verb, its flags
 and their short forms, the states it refuses on **with the code each returns**,
@@ -350,11 +350,15 @@ is `done` or `closed` on the default branch. The binary says so itself:
     $ ank help check
     ank check [<path>]
       the mechanical invariants: parse, round-trip, references, frozen fields, orphaned claims; prunes the claim refs it finds stale, so it writes
+      flags:    --kind <v>
       global:   -j, --json -q, --quiet -r, --repo <v> --worktree <v>
       note:     exit 8 means findings; a signal alone leaves it 0
                 the only verb that prunes refs/ank/claims: orphans, and completion refs whose task is done or closed on the default branch
+                a signal kind firing on more entities than the smaller of 20 and five percent of the hot corpus, and on more than five, is reported once for the corpus, naming five and the command that lists the rest; a fault never is
+                --kind <kind> lists the findings of that kind alone, one per entity and never folded; the exit code stays the whole corpus's
       refuses:  the path names nothing inside this repository (1)
                 the corpus carries at least one fault; a signal alone leaves the code at 0 (8)
+                --kind names a word no rule of check answers to; the refusal lists the ones it does (7)
 
 A dashboard refreshing every thirty seconds must not call it. `ank status` and
 `ank find` are what a poll uses; `check` is the verb a human or a pipeline runs
@@ -385,12 +389,13 @@ of them slower than a read, and it is a second reason not to put either on a
 timer. Only `check` prunes, so only `check` writes; but neither is a poll.
 
 What a finding means, fault or signal, is [Reading ank check](check.md). Under
-`--json` each one carries its level, its subject and its message:
+`--json` each one carries its level, its kind, its subject and its message. The
+kind is one stable word per rule, the word `ank check --kind` takes:
 
 <!-- replay state -->
 
     $ ank check --json
-    {"contract":1,"faults":0,"signals":4,"tasks":1,"adr":1,"hot_files":6,"plane_bytes":173,"pruned":[],"findings":[{"level":"signal","subject":"ADR-57715ae64348","message":"written by an agent and read by no human","note":[],"charge":[]},{"level":"signal","subject":"TASK-6da126c832be","message":"written by an agent and read by no human","note":[],"charge":[]},{"level":"signal","subject":"allowed_signers","message":"no ratification key declared: permissions are advisory, not enforced (§8)","note":[],"charge":[]},{"level":"signal","subject":"coordination","message":"default branch indeterminable, completion refs neither pruned nor judged and log entries not compared against it (ank config default_branch <name>)","note":[],"charge":[]}]}
+    {"contract":1,"faults":0,"signals":4,"tasks":1,"adr":1,"hot_files":6,"plane_bytes":173,"pruned":[],"findings":[{"level":"signal","kind":"read-by-no-human","subject":"ADR-57715ae64348","message":"written by an agent and read by no human","note":[],"charge":[]},{"level":"signal","kind":"read-by-no-human","subject":"TASK-6da126c832be","message":"written by an agent and read by no human","note":[],"charge":[]},{"level":"signal","kind":"default-branch-unknown","subject":"coordination","message":"default branch indeterminable, completion refs neither pruned nor judged and log entries not compared against it (ank config default_branch <name>)","note":[],"charge":[]},{"level":"signal","kind":"no-signers","subject":"signers","message":"no ratification key declared: permissions are advisory, not enforced (§8)","note":[],"charge":[]}]}
 
 ## The conformance suite is offered to you
 

@@ -1,5 +1,5 @@
 //! What a command *is*, now that nothing composes one out of words
-//! (TASK-c94d086682f3, ADR-559eebf5c6f5).
+//! (TASK-c94d086682f3, ADR-ac6be1ebe9aa).
 //!
 //! **There is no grammar here any more.** This module was the reader's
 //! one-line prompt: `parse` took a string and answered a [`Command`], and
@@ -13,9 +13,9 @@
 //! TASK-1a415107fd56 took the writing verbs out of the prompt and left the rest
 //! of the grammar standing, on the reasoning that `open`, `top`, a row number
 //! and an identifier "are lines by nature, and none of them writes". That was
-//! true and it was not the question. ADR-559eebf5c6f5 asks a different one:
-//! *a search narrows the list as it is typed and is not a line to compose and
-//! submit*, and *input is a keystroke and no longer a line*.
+//! true and it was not the question. ADR-ac6be1ebe9aa asks a different one:
+//! *a search narrows the focused listing as it is typed and is not a line to
+//! compose and submit*, and *input is a keystroke and never a line*.
 //!
 //! Once the search narrows on the keystroke there is nothing left for a line to
 //! be. `/` was the last thing anybody typed into the prompt, and it was the
@@ -100,7 +100,7 @@ pub enum Command {
     /// Narrow the list to the rows whose title or identifier carries this text,
     /// or give it back whole.
     ///
-    /// **One of these per keystroke** (TASK-c94d086682f3, ADR-559eebf5c6f5).
+    /// **One of these per keystroke** (TASK-c94d086682f3, ADR-ac6be1ebe9aa).
     /// It used to arrive once, when a composed line was submitted; the search
     /// narrows as it is typed now, so `/` opens it, every character sends
     /// another of these, and Escape sends the `None`.

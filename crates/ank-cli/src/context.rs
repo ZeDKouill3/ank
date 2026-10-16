@@ -291,6 +291,22 @@ pub struct ConstraintLine {
     /// ADR says so. Empty for a rule nothing amends and for a peer's rule,
     /// whose amendments live in a corpus this one does not read.
     pub amended_by: Vec<Amendment>,
+    /// What the ADR declares holds it, `<path>#<symbol>` entries
+    /// (ADR-25584c56c1a7). Non-empty, the rule is served by its title in both
+    /// modes and `text` is empty: a test enforces it whether or not the agent
+    /// reads it, and the budget its text would take belongs to the rules
+    /// nothing but the agent enforces.
+    pub enforced_by: Vec<String>,
+}
+
+/// The `constraint` a page serves of `adr`: the rule verbatim, or nothing when
+/// something is declared to hold it (ADR-25584c56c1a7).
+fn served(adr: &ank_core::Adr) -> String {
+    if adr.enforced_by.is_empty() {
+        adr.constraint.trim_end().to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// An accepted ADR that amends a constraint, as the mark names it.
@@ -824,10 +840,11 @@ fn adr_lines(
             id: r.id.clone(),
             title: adr.title.clone(),
             overlap: words(&adr.constraint).intersection(vocabulary).count(),
-            text: adr.constraint.trim_end().to_string(),
+            text: served(&adr),
             specificity: specificity(&r.scope),
             home: None,
             amended_by: Vec::new(),
+            enforced_by: adr.enforced_by.clone(),
         };
         if r.status == "accepted" {
             active.push(line);
@@ -941,10 +958,11 @@ fn peer_lines(
             id: adr.id.clone(),
             title: adr.title.clone(),
             overlap: words(&adr.constraint).intersection(vocabulary).count(),
-            text: adr.constraint.trim_end().to_string(),
+            text: served(&adr),
             specificity: specificity(&bound.globs),
             home: Some(bound.peer),
             amended_by: Vec::new(),
+            enforced_by: adr.enforced_by.clone(),
         };
         if adr.status.as_str() == "accepted" {
             active.push(line);
@@ -1094,8 +1112,25 @@ fn build_execution(
     let rows = index.all()?;
     let by_id: HashMap<String, &Row> = rows.iter().map(|r| (r.id.to_string(), r)).collect();
 
+    // What holds each bearing ADR, read off the ADRs already loaded: the text
+    // `applicable` carries is the one the claim hashes, and it stays so; what
+    // changes for an enforced rule is only what this page serves of it.
+    let enforced: HashMap<String, &Vec<String>> = adrs
+        .iter()
+        .filter(|a| !a.enforced_by.is_empty())
+        .map(|a| (a.id.to_string(), &a.enforced_by))
+        .collect();
     let mut constraints = Vec::new();
     for (adr_id, text) in applicable {
+        let enforced_by = enforced
+            .get(&adr_id)
+            .map(|e| (*e).clone())
+            .unwrap_or_default();
+        let text = if enforced_by.is_empty() {
+            text.trim_end().to_string()
+        } else {
+            String::new()
+        };
         let parsed = EntityId::parse(&adr_id)
             .map_err(|_| CliError::new(ExitCode::Generic, format!("unreadable adr id {adr_id}")))?;
         let scope = by_id
@@ -1113,11 +1148,12 @@ fn build_execution(
                 .unwrap_or_else(|| adr_id.clone()),
             id: parsed,
             title,
-            text: text.trim_end().to_string(),
+            text,
             specificity: specificity(&scope),
             overlap: 0,
             home: None,
             amended_by: Vec::new(),
+            enforced_by,
         });
     }
     mark_amendments(&adrs, shorts, &mut constraints);
@@ -1277,6 +1313,17 @@ fn end_of_loop(view: &View) -> String {
 }
 
 fn constraint_block(c: &ConstraintLine, style: Style) -> Vec<String> {
+    // A rule something holds is one line in execution mode too, the line
+    // orientation prints (ADR-25584c56c1a7): its text is one `ank show` away.
+    if !c.enforced_by.is_empty() {
+        return vec![format!(
+            "  {}  {}{}{}",
+            style.id(&c.short),
+            c.title,
+            amended_mark(c, style),
+            enforced_mark(c)
+        )];
+    }
     // Continuation lines align under the text, so a multi-line constraint
     // reads as one rule rather than several. The indent is measured on the
     // unpainted identifier: an escape sequence has no width on screen, and
@@ -1731,10 +1778,11 @@ fn constraint_section(
     out.push(style.header(&format!("CONSTRAINTS ({} active)", constraints.len())));
     for c in constraints {
         out.push(format!(
-            "  {}  {}{}",
+            "  {}  {}{}{}",
             style.id(&c.short),
             c.title,
-            amended_mark(c, style)
+            amended_mark(c, style),
+            enforced_mark(c)
         ));
     }
     if cut_constraints > 0 {
@@ -1755,6 +1803,17 @@ fn amended_mark(c: &ConstraintLine, style: Style) -> String {
     }
     let shorts: Vec<String> = c.amended_by.iter().map(|a| style.id(&a.short)).collect();
     format!("  (amended by {})", shorts.join(", "))
+}
+
+/// The mark a line carries for a rule something holds, empty for every other:
+/// `  (enforced by <path>#<symbol>, ...)`. On the line, for the reason the
+/// amendment mark is, and in both modes, since it is the whole of what either
+/// serves of such a rule.
+fn enforced_mark(c: &ConstraintLine) -> String {
+    if c.enforced_by.is_empty() {
+        return String::new();
+    }
+    format!("  (enforced by {})", c.enforced_by.join(", "))
 }
 
 /// The specifications governing the perimeter, one line each, in both modes.
@@ -1916,6 +1975,7 @@ pub fn render_json(view: &View, budget: usize) -> String {
                         .map(|a| a.id.to_string())
                         .collect::<Vec<_>>(),
                 )
+                .strings("enforced_by", &c.enforced_by)
                 .finish()
         })
         .collect();
@@ -2315,6 +2375,7 @@ After a blank one."
                 overlap: 0,
                 home: None,
                 amended_by: Vec::new(),
+                enforced_by: Vec::new(),
             };
             let expected = 2 + short.chars().count() + 2;
             for style in [crate::style::PLAIN, crate::style::COLOR] {
@@ -2486,6 +2547,7 @@ After a blank one."
             scope: scope.iter().map(|s| s.to_string()).collect(),
             constraint: constraint.into(),
             see: None,
+            enforced_by: Vec::new(),
             amends: Vec::new(),
             supersedes: None,
             ratified: None,

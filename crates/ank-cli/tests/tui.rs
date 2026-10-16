@@ -1,5 +1,5 @@
 //! `ank tui` through the binary (TASK-49746735127f, ADR-8bd76e8d7c4e,
-//! ADR-559eebf5c6f5).
+//! ADR-ac6be1ebe9aa).
 //!
 //! CLAUDE.md leaves no choice about where this suite lives: a criterion that
 //! talks about the binary is tested through the binary, and twice in this
@@ -24,7 +24,7 @@
 //! the engine whole.
 //!
 //! **How the session is driven did move, twice.** A command is a key now
-//! (ADR-559eebf5c6f5), so a list of lines became a list of keystrokes, with the
+//! (ADR-ac6be1ebe9aa), so a list of lines became a list of keystrokes, with the
 //! four verbs that carry a message, a reason, a proof or a flag spelled into
 //! the one line `/` opens -- see [`on_a_terminal`] for what an entry of one
 //! of those lists is.
@@ -264,7 +264,7 @@ fn ids_of(doc: &str) -> Vec<String> {
 
 /// Goes to the listing and opens one entity, by narrowing the listing to it.
 ///
-/// **The road is the search now** (TASK-c94d086682f3, ADR-559eebf5c6f5). It was
+/// **The road is the search now** (TASK-c94d086682f3, ADR-ac6be1ebe9aa). It was
 /// the identifier typed whole into the prompt -- `Command::Select`, which
 /// forced the listing, put the cursor on the row and opened it in one command
 /// -- and that command is gone with the line it needed. What replaces it is
@@ -383,7 +383,7 @@ fn json_does_not_exempt_a_caller_from_the_terminal() {
 /// nothing is added to the link line either.
 ///
 /// **The window is set here and it has to be.** The reader asks the terminal
-/// how big it is (ADR-559eebf5c6f5), and a pseudo-terminal nobody sized is nought
+/// how big it is (ADR-ac6be1ebe9aa), and a pseudo-terminal nobody sized is nought
 /// by nought -- so a suite that skipped this would be asserting what a reader
 /// draws into no window at all. It is also what makes the resize measurable:
 /// setting it again while a session is running is exactly what a person
@@ -853,7 +853,8 @@ fn drive(repo: &Repo, agent: &str, keys: &[&str]) -> Seen {
 /// There is no second form. An entry opening with `:` used to mean "open the
 /// line, clear the search seed, type this and submit it", which is how this
 /// suite reached the two commands no key had: `filter <kind>` and an identifier
-/// typed whole. ADR-559eebf5c6f5 ends the line, so both roads are keys now --
+/// typed whole. There is no line now -- input is a keystroke and never a line
+/// (ADR-ac6be1ebe9aa) -- so both roads are keys --
 /// [`kinds`] walks the filter and [`open`] narrows with the search -- and every
 /// entry here is something a person presses.
 ///
@@ -1089,8 +1090,9 @@ impl Live {
     /// **There is no second form any more** (TASK-c94d086682f3). An entry that
     /// opened with `:` used to mean "open the line, clear the seed, type this
     /// and submit it" -- which is how this suite reached `filter <kind>`, a
-    /// word of a grammar that no key spelled. ADR-559eebf5c6f5 ends the line
-    /// and the grammar with it, so every entry here is now what a person
+    /// word of a grammar that no key spelled. Input is a keystroke and never a
+    /// line (ADR-ac6be1ebe9aa), so there is no grammar left and every entry
+    /// here is now what a person
     /// actually presses, and [`kinds`] computes the presses for the one road
     /// that was reached by a word.
     fn press(&mut self, entry: &str) {
@@ -1289,7 +1291,7 @@ fn a_driven_session_names_the_entities_the_corpus_carries() {
 /// has (ADR-c9f9d1a05b23).
 ///
 /// **Both ends of the window are taken in characters and never in bytes**
-/// (ADR-559eebf5c6f5). The frames carry box-drawing glyphs now and a glyph is
+/// (ADR-ac6be1ebe9aa). The frames carry box-drawing glyphs now and a glyph is
 /// three bytes, so the two byte offsets this used to take are both a slice
 /// through a code point -- which is a panic and not a failure. `rfind`
 /// answers the byte index a character *starts* at, so the old `i + 1` landed
@@ -1383,13 +1385,13 @@ fn the_frames_carry_no_identifier_the_corpus_does_not() {
 }
 
 /// A terminal made narrower, then wider, redraws to its new size with nobody
-/// typing (TASK-4fa385c1772d, ADR-559eebf5c6f5).
+/// typing (TASK-4fa385c1772d, ADR-ac6be1ebe9aa).
 ///
 /// **The whole of the assertion is that no key was pressed.** The window is
 /// changed on the master side, exactly as a terminal emulator changes it, and
 /// the session is told the way a terminal tells one. What has to follow is a
 /// frame in the new shape: a row whose title no longer fits is cut and says so,
-/// no line runs past the new right edge, and the trailer sits on the last row
+/// no line runs past the new right edge, and the key line sits on the last row
 /// of the new height rather than off the bottom of it. Widened again, the title
 /// comes back whole -- so what happened was a fit and never a loss.
 ///
@@ -1417,8 +1419,8 @@ fn a_terminal_resized_redraws_to_its_new_size_with_nothing_typed() {
         s.contains(LONG)
     });
     let wide = live.frame();
-    // `split` and not `lines`, for the reason given further down: the last row
-    // of every frame is the note band, and it is blank at rest.
+    // `split` and not `lines`, for the reason given further down: the note band
+    // is a blank row at rest.
     assert_eq!(wide.split('\n').count(), WINDOW.1 as usize, "{wide}");
 
     live.resize(60, 20);
@@ -1440,20 +1442,19 @@ fn a_terminal_resized_redraws_to_its_new_size_with_nothing_typed() {
     // The bottom of the window is reached, which is what says the layout used
     // the new height rather than the old one.
     //
-    // **Read off the last panel's own bottom border since TASK-9a402a54886f.**
-    // It was read off the trailer, which was the last row and was never blank;
-    // the trailer is gone and what is there now is the note band -- one row,
-    // blank where there is nothing to say. So the count is taken with `split`,
-    // which keeps the empty piece a trailing separator leaves behind, and the
-    // bottom is the second-last row.
+    // **Read off the key line since TASK-933fdb42c7d9** (ADR-ac6be1ebe9aa).
+    // It was the trailer's row, then the note band's, blank at rest
+    // (TASK-9a402a54886f); the last row of every frame is the key line now, so
+    // the new height is reached when the key line is on its last row, with the
+    // blank note band over it and the panel's bottom border over that.
     let rows: Vec<&str> = narrow.split('\n').collect();
     assert_eq!(rows.len(), 20, "{narrow}");
     assert!(
-        rows[19].trim().is_empty(),
-        "something other than the note band is on the last row:\n{narrow}"
+        rows[19].starts_with("[? keys]") && rows[19].trim_end().ends_with("[q quit]"),
+        "the key line is not on the last row of the new window:\n{narrow}"
     );
     assert!(
-        !rows[18].trim().is_empty(),
+        rows[18].trim().is_empty() && !rows[17].trim().is_empty(),
         "the layout did not reach the bottom of the new window:\n{narrow}"
     );
 
@@ -1667,8 +1668,8 @@ fn a_claim_held_elsewhere_is_named_with_its_holder() {
 /// the session survives it (ADR-8bd76e8d7c4e).
 ///
 /// **The refusal is made, not hoped for** (TASK-0e544fa90566). This used to
-/// type `:LOG-000000000000`, a line the reader stopped reading when
-/// ADR-559eebf5c6f5 made input a keystroke, so no call was refused at all; it
+/// type `:LOG-000000000000`, a line the reader stopped reading once input
+/// became a keystroke (ADR-ac6be1ebe9aa), so no call was refused at all; it
 /// went on passing because the unread listing said `no entity matches this
 /// filter`, and `no entity` was what it looked for. A corpus whose config
 /// does not parse refuses every read, and the bytes it refuses with are the
@@ -2040,7 +2041,7 @@ fn a_session_left_idle_renews_no_claim() {
 /// firmer ground.** It used to carry one task around the loop by spelling a
 /// tail after each word -- a message, a glob, a reason, a proof -- and to
 /// assert the corpus afterwards. There is no line to spell a tail on now
-/// (ADR-559eebf5c6f5: input is a keystroke), so a press composes the verb and
+/// (ADR-ac6be1ebe9aa: input is a keystroke), so a press composes the verb and
 /// the identifier and nothing else, and three of the five reach a verb that
 /// wants something the reader cannot yet give it.
 ///

@@ -27,6 +27,7 @@ pub const DEFAULT_CLAIM_TTL: &str = ank_core::config::DEFAULT_CLAIM_TTL;
 pub const DEFAULT_VERIFIER_TIMEOUT: &str = ank_core::config::DEFAULT_VERIFIER_TIMEOUT;
 pub const DEFAULT_WEIGHT_HOT_FILES: u64 = ank_core::config::DEFAULT_WEIGHT_HOT_FILES;
 pub const DEFAULT_WEIGHT_PLANE_BYTES: u64 = ank_core::config::DEFAULT_WEIGHT_PLANE_BYTES;
+pub const DEFAULT_PROOF_REUSE_MAX_AGE: &str = ank_core::config::DEFAULT_PROOF_REUSE_MAX_AGE;
 
 pub type Result<T> = std::result::Result<T, CliError>;
 
@@ -79,11 +80,137 @@ struct ConfigFile {
     identities: BTreeMap<String, String>,
     #[serde(default)]
     weight: Weight,
+    /// `proof:`, how `done` treats what it already ran (ADR-a2faf59f6ce0).
+    #[serde(default)]
+    proof: ProofFile,
     /// How many verifiers of one `done` run at once. Absent, the machine's
     /// available parallelism: the bound exists for several agents sharing one
     /// machine, and only somebody who knows there are several can set it.
     #[serde(default)]
     verifier_jobs: Option<usize>,
+    /// Who may ratify, keyed by principal (ADR-5c6db7a161b8). A mapping rather
+    /// than a `BTreeMap` for the reason `verifiers` is one: the order the file
+    /// declares them in is the order `review` lists them in.
+    #[serde(default)]
+    signers: serde_yaml::Mapping,
+}
+
+/// One principal under `signers:`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrincipalFile {
+    #[serde(default)]
+    keys: Vec<SignerKeyFile>,
+}
+
+/// One key of a principal, as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignerKeyFile {
+    key: String,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    valid_before: Option<String>,
+}
+
+/// One key allowed to ratify (§8, ADR-5c6db7a161b8): a principal, the key in
+/// git's `<keytype> <key>` form, and the date after which it ratifies nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signer {
+    pub principal: String,
+    /// Lowercased: `gpg`, or an ssh key type.
+    pub keytype: String,
+    pub key: String,
+    pub note: Option<String>,
+    /// `YYYY-MM-DD`, read as midnight UTC. A commit dated at or after it is
+    /// not a ratification this key can make.
+    pub valid_before: Option<String>,
+}
+
+/// Whether a field names a key type: every ssh type is `ssh-`, `ecdsa-`,
+/// `sk-` or `webauthn-`, certificate forms included, and `gpg` is ank's own
+/// extension (§8) and the one exact match.
+pub fn is_keytype(field: &str) -> bool {
+    let lower = field.to_ascii_lowercase();
+    lower == "gpg"
+        || ["ssh-", "ecdsa-", "sk-", "webauthn-"]
+            .iter()
+            .any(|p| lower.starts_with(p))
+}
+
+/// `YYYY-MM-DD` as days since the epoch, or `None` when it is not a date.
+pub fn date_days(text: &str) -> Option<i64> {
+    let b = text.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let y: i64 = text[..4].parse().ok()?;
+    let m: u32 = text[5..7].parse().ok()?;
+    let d: u32 = text[8..].parse().ok()?;
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days_in = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if d == 0 || d > days_in {
+        return None;
+    }
+    // Howard Hinnant's days_from_civil.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = i64::from((m + 9) % 12);
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Reads `signers:` into one row per key, in the order the file declares them.
+fn parse_signers(map: serde_yaml::Mapping, path: &Path) -> Result<Vec<Signer>> {
+    let refuse =
+        |what: String| CliError::new(ExitCode::Generic, format!("{}: {what}", path.display()));
+    let mut out = Vec::new();
+    for (principal, value) in map {
+        let Some(principal) = principal.as_str().map(str::to_string) else {
+            return Err(refuse("a signer is named by a string".to_string()));
+        };
+        let p: PrincipalFile = serde_yaml::from_value(value)
+            .map_err(|e| refuse(format!("signers.{principal}: {e}")))?;
+        for k in p.keys {
+            let fields: Vec<&str> = k.key.split_whitespace().collect();
+            let [keytype, key] = fields.as_slice() else {
+                return Err(refuse(format!(
+                    "signers.{principal}: '{}' is not '<keytype> <key>'",
+                    k.key
+                )));
+            };
+            if !is_keytype(keytype) {
+                return Err(refuse(format!(
+                    "signers.{principal}: '{keytype}' is not a key type (gpg, ssh-..., ecdsa-..., sk-...)"
+                )));
+            }
+            let valid_before = k.valid_before.map(|d| d.trim().to_string());
+            if let Some(d) = &valid_before {
+                if date_days(d).is_none() {
+                    return Err(refuse(format!(
+                        "signers.{principal}: valid_before '{d}' is not a YYYY-MM-DD date"
+                    )));
+                }
+            }
+            out.push(Signer {
+                principal: principal.clone(),
+                keytype: keytype.to_ascii_lowercase(),
+                key: (*key).to_string(),
+                note: k.note,
+                valid_before,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// `weight:`, what the corpus declares it may grow to before `check` says so
@@ -106,6 +233,27 @@ impl Default for Weight {
             plane_bytes: DEFAULT_WEIGHT_PLANE_BYTES,
         }
     }
+}
+
+/// `proof:` as written. A mapping of its own rather than a top-level key, so
+/// the next setting about proofs lands beside this one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProofFile {
+    #[serde(default = "default_reuse_max_age")]
+    reuse_max_age: String,
+}
+
+impl Default for ProofFile {
+    fn default() -> ProofFile {
+        ProofFile {
+            reuse_max_age: default_reuse_max_age(),
+        }
+    }
+}
+
+fn default_reuse_max_age() -> String {
+    DEFAULT_PROOF_REUSE_MAX_AGE.to_string()
 }
 
 fn default_hot_files() -> u64 {
@@ -154,24 +302,9 @@ struct VerifierFile {
     /// input; an empty list is refused, because it would say nothing can.
     #[serde(default)]
     inputs: Option<Vec<String>>,
-    /// Where the verifier is meant to run. Parsed, validated and hashed, never
-    /// executed here: ank runs every verifier on the host, and running inside
-    /// this is an independent executor's job (ADR-d8a328e311b9, point 5).
-    #[serde(default)]
-    env: Option<EnvFile>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EnvFile {
-    #[serde(default)]
-    image: Option<String>,
-    #[serde(default)]
-    platform: Option<String>,
-    #[serde(default)]
-    vars: BTreeMap<String, String>,
-    #[serde(default)]
-    network: Option<String>,
+    // No `env`: ADR-7224dea611c1 withdrew it until an executor exists to
+    // honour it, and `deny_unknown_fields` refuses it by name like any key
+    // the parser does not know.
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -189,36 +322,6 @@ pub struct Verifier {
     pub timeout: Duration,
     /// As declared; `None` is the whole tree, never an empty list.
     pub inputs: Option<Vec<String>>,
-    pub env: Option<Env>,
-}
-
-/// A verifier's declared environment (ADR-d8a328e311b9), validated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Env {
-    /// Pinned by `sha256:` digest: a tag never reaches this field.
-    pub image: Option<String>,
-    /// `os/arch`, present whenever `image` is.
-    pub platform: Option<String>,
-    pub vars: BTreeMap<String, String>,
-    /// Resolved: `none` when an image is declared and the file says nothing.
-    /// `None` here is the host's network, which only a verifier with no image
-    /// has.
-    pub network: Option<Network>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Network {
-    None,
-    Open,
-}
-
-impl Network {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Network::None => "none",
-            Network::Open => "open",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +363,11 @@ pub struct Config {
     /// [`Config::verifier_jobs`], because what it resolves to is the machine
     /// and not the file.
     pub verifier_jobs: Option<usize>,
+    /// How old a passing run of the local registry may be for `done` to
+    /// reuse it, `proof.reuse_max_age` (ADR-a2faf59f6ce0).
+    pub reuse_max_age: Duration,
+    /// Who may ratify, one row per key (ADR-5c6db7a161b8).
+    pub signers: Vec<Signer>,
 }
 
 impl Config {
@@ -375,6 +483,8 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
 
     let claim_ttl_max = dur(&raw.claim_ttl_max, "claim_ttl_max")?;
     let claim_ttl_default = dur(&raw.claim_ttl_default, "claim_ttl_default")?;
+    let reuse_max_age = dur(&raw.proof.reuse_max_age, "proof.reuse_max_age")?;
+    let signers = parse_signers(raw.signers, path)?;
     let mut verifiers = BTreeMap::new();
     let mut default_verifiers = Vec::new();
     for (name, value) in raw.verifiers {
@@ -421,25 +531,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
                 }
             }
         }
-        // An `env` declaring nothing is no environment: hashing it would move
-        // the definition over a key that says nothing.
-        let env = v
-            .env
-            .map(|e| env_of(e, &name, path))
-            .transpose()?
-            .filter(|e| {
-                e.image.is_some()
-                    || e.platform.is_some()
-                    || e.network.is_some()
-                    || !e.vars.is_empty()
-            });
         verifiers.insert(
             name,
             Verifier {
                 run: v.run,
                 timeout,
                 inputs: v.inputs,
-                env,
             },
         );
     }
@@ -471,72 +568,9 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
         identities: raw.identities,
         weight: raw.weight,
         verifier_jobs: raw.verifier_jobs,
+        reuse_max_age,
+        signers,
     })
-}
-
-/// An `env` block validated into what it declares (ADR-d8a328e311b9).
-fn env_of(e: EnvFile, name: &str, path: &Path) -> Result<Env> {
-    let refuse = |f: &str, why: String| {
-        CliError::new(
-            ExitCode::Generic,
-            format!("{}: verifiers.{name}.env.{f}: {why}", path.display()),
-        )
-    };
-    if let Some(image) = &e.image {
-        if !pinned_by_digest(image) {
-            return Err(refuse(
-                "image",
-                format!(
-                    "'{image}' is not pinned by digest: a tag names different environments \
-                     over time, and an image is <name>@sha256:<64 hex digits>"
-                ),
-            ));
-        }
-        if e.platform.is_none() {
-            return Err(
-                refuse("platform", "required with an image, as os/arch".to_string()).with_hint(
-                    format!("ank config verifiers.{name}.env.platform linux/amd64"),
-                ),
-            );
-        }
-    }
-    if let Some(platform) = &e.platform {
-        let parts: Vec<&str> = platform.split('/').collect();
-        if parts.len() != 2 || parts.iter().any(|p| p.trim().is_empty() || p.trim() != *p) {
-            return Err(refuse("platform", format!("'{platform}' is not os/arch")));
-        }
-    }
-    let network = match e.network.as_deref() {
-        Some("none") => Some(Network::None),
-        Some("open") => Some(Network::Open),
-        Some(other) => {
-            return Err(refuse(
-                "network",
-                format!("'{other}' is neither none nor open"),
-            ))
-        }
-        None if e.image.is_some() => Some(Network::None),
-        None => None,
-    };
-    Ok(Env {
-        image: e.image,
-        platform: e.platform,
-        vars: e.vars,
-        network,
-    })
-}
-
-/// `<name>@sha256:<64 lowercase hex digits>`, and nothing that a tag could be.
-fn pinned_by_digest(image: &str) -> bool {
-    let Some((name, digest)) = image.rsplit_once("@sha256:") else {
-        return false;
-    };
-    !name.is_empty()
-        && !name.contains('@')
-        && digest.len() == 64
-        && digest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub fn load(path: &Path) -> Result<Config> {
@@ -863,12 +897,6 @@ enum Key {
     /// back as one YAML flow sequence and stored with every glob double-quoted,
     /// because a glob opening on `*` written plain is a YAML alias.
     Inputs { verifier: String },
-    /// A scalar under `verifiers.<name>.env`, one mapping per segment of
-    /// `path`: `env.image`, `env.platform`, `env.network`, `env.vars.<VAR>`.
-    Nested { verifier: String, path: Vec<String> },
-    /// `verifiers.<name>.env` or `.env.vars`: a mapping, legal for `--unset`
-    /// alone, as a whole verifier is.
-    NestedBlock { verifier: String, path: Vec<String> },
     /// One scalar under one mapping, which is the shape of a declaration: a
     /// peer corpus under `peers` (§7), and a corpus declared for a repository
     /// identity under `corpora` (ADR-96174f1ac2b7). One level shallower than a
@@ -1029,11 +1057,29 @@ fn resolve_key(path: &str) -> Result<Key> {
                 .to_string(),
             ),
         }),
+        ["proof", "reuse_max_age"] => Ok(Key::Under {
+            map: "proof",
+            name: "reuse_max_age".to_string(),
+            verbatim: false,
+            default: Some(DEFAULT_PROOF_REUSE_MAX_AGE.to_string()),
+        }),
+        ["proof", ..] => Err(CliError::new(
+            ExitCode::Generic,
+            format!("'{path}': proof has one key"),
+        )
+        .with_hint("ank config proof.reuse_max_age")),
         ["weight", ..] => Err(CliError::new(
             ExitCode::Generic,
             format!("'{path}': the weight has two counters"),
         )
         .with_hint("ank config weight.hot_files   or   weight.plane_bytes")),
+        // ADR-5c6db7a161b8: declaring who may ratify is a trust act, and it
+        // has a verb of its own.
+        ["signers", ..] => Err(CliError::new(
+            ExitCode::Generic,
+            format!("'{path}': who may ratify is written by ank signers, not by ank config"),
+        )
+        .with_hint("ank help signers")),
         ["roles", ..] => Err(structured("roles")),
         ["identities", ..] => Err(structured("identities")),
         ["verifiers"] => Err(CliError::new(
@@ -1070,37 +1116,16 @@ fn resolve_key(path: &str) -> Result<Key> {
         ["verifiers", name, "inputs"] => Ok(Key::Inputs {
             verifier: (*name).to_string(),
         }),
-        ["verifiers", name, "env"] => Ok(Key::NestedBlock {
-            verifier: (*name).to_string(),
-            path: vec!["env".to_string()],
-        }),
-        ["verifiers", name, "env", "vars"] => Ok(Key::NestedBlock {
-            verifier: (*name).to_string(),
-            path: vec!["env".to_string(), "vars".to_string()],
-        }),
-        ["verifiers", name, "env", field @ ("image" | "platform" | "network")] => {
-            Ok(Key::Nested {
-                verifier: (*name).to_string(),
-                path: vec!["env".to_string(), (*field).to_string()],
-            })
-        }
-        ["verifiers", name, "env", "vars", var] => Ok(Key::Nested {
-            verifier: (*name).to_string(),
-            path: vec!["env".to_string(), "vars".to_string(), (*var).to_string()],
-        }),
-        ["verifiers", _, "env", ..] => Err(CliError::new(
-            ExitCode::Generic,
-            format!("unknown env key '{path}'"),
-        )
-        .with_hint(
-            "ank config verifiers.<name>.env.image   or   .platform   or   .network   or   .vars.<VAR>",
-        )),
+        // Withdrawn by ADR-7224dea611c1 and refused by name, ahead of the
+        // dotted-name arm below, which would blame the verifier's name for a
+        // key the parser simply does not know.
+        ["verifiers", _, "env", ..] => Err(unknown_key(path)),
         ["verifiers", _, other] => Err(CliError::new(
             ExitCode::Generic,
             format!("unknown verifier field '{other}'"),
         )
         .with_hint(
-            "ank config verifiers.<name>.run   or   .timeout   or   .default   or   .inputs   or   .env.<key>",
+            "ank config verifiers.<name>.run   or   .timeout   or   .default   or   .inputs",
         )),
         ["verifiers", _, _, _, ..] => Err(CliError::new(
             ExitCode::Generic,
@@ -1558,12 +1583,7 @@ fn scalar_at(line: &Line, name: &str) -> Result<Value> {
 fn read_key(lines: &[Line], key: &Key) -> Result<Value> {
     match key {
         Key::Block { verifier } => Err(whole_block(verifier)),
-        Key::NestedBlock { verifier, path } => Err(mapping(&dotted(verifier, path))),
         Key::Inputs { verifier } => read_inputs(lines, verifier),
-        Key::Nested { verifier, path } => match locate_nested(lines, verifier, path) {
-            Some(j) => scalar_at(&lines[j.0], &dotted(verifier, path)),
-            None => Ok(nested_default(lines, verifier, path)),
-        },
         Key::Top { name, default, .. } => match find_key(lines, 0..lines.len(), 0, name) {
             Some(i) => scalar_at(&lines[i], name),
             None => Ok(from_default(default)),
@@ -1610,10 +1630,6 @@ fn observe(lines: &[Line], key: &Key) -> Result<Value> {
             Some(_) => Value::Set("declared".to_string()),
             None => Value::Unset,
         }),
-        Key::NestedBlock { verifier, path } => Ok(match locate_nested(lines, verifier, path) {
-            Some(_) => Value::Set("declared".to_string()),
-            None => Value::Unset,
-        }),
         other => read_key(lines, other),
     }
 }
@@ -1621,9 +1637,7 @@ fn observe(lines: &[Line], key: &Key) -> Result<Value> {
 fn write_key(lines: &mut Vec<Line>, key: &Key, value: &str) -> Result<()> {
     match key {
         Key::Block { verifier } => Err(whole_block(verifier)),
-        Key::NestedBlock { verifier, path } => Err(mapping(&dotted(verifier, path))),
         Key::Inputs { verifier } => write_inputs(lines, verifier, value),
-        Key::Nested { verifier, path } => write_nested(lines, verifier, path, false, value),
         Key::Top { name, verbatim, .. } => match find_key(lines, 0..lines.len(), 0, name) {
             Some(i) => {
                 let (_, after) = key_of(&lines[i].text).expect("found by its key");
@@ -1965,7 +1979,7 @@ fn write_nested(
 }
 
 /// Removes the key at `path` with everything under it, then every mapping on
-/// the way up that is left with nothing in it: an `env:` holding no key is a
+/// the way up that is left with nothing in it: a mapping holding no key is a
 /// key nobody wrote.
 fn unset_nested(lines: &mut Vec<Line>, verifier: &str, path: &[String]) {
     let Some((j, indent)) = locate_nested(lines, verifier, path) else {
@@ -2037,25 +2051,6 @@ fn write_inputs(lines: &mut Vec<Line>, verifier: &str, value: &str) -> Result<()
     write_nested(lines, verifier, &path, true, &render_inputs(&globs))
 }
 
-/// `env.network` resolves to `none` under an image and to nothing without
-/// one, which is the host's network.
-fn nested_default(lines: &[Line], verifier: &str, path: &[String]) -> Value {
-    let image = ["env".to_string(), "image".to_string()];
-    if path == ["env", "network"] && locate_nested(lines, verifier, &image).is_some() {
-        Value::Default("none".to_string())
-    } else {
-        Value::Unset
-    }
-}
-
-fn mapping(name: &str) -> CliError {
-    CliError::new(
-        ExitCode::Generic,
-        format!("'{name}' is a mapping, not a value: --unset removes it"),
-    )
-    .with_hint(format!("ank config {name}.<key>"))
-}
-
 fn first_grandchild_indent(lines: &[Line], block: &Block, child: usize) -> Option<usize> {
     for i in block.range.clone() {
         if content_indent(&lines[i].text) == Some(child) && key_of(&lines[i].text).is_some() {
@@ -2069,10 +2064,6 @@ fn unset_key(lines: &mut Vec<Line>, key: &Key) -> Result<()> {
     match key {
         Key::Inputs { verifier } => {
             unset_nested(lines, verifier, &["inputs".to_string()]);
-            Ok(())
-        }
-        Key::Nested { verifier, path } | Key::NestedBlock { verifier, path } => {
-            unset_nested(lines, verifier, path);
             Ok(())
         }
         Key::Top { name, .. } => {
@@ -2665,6 +2656,901 @@ pub fn run(inv: &Invocation, repo: &crate::repo::Repo, out: &mut dyn Write) -> R
     Ok(ExitCode::Ok)
 }
 
+// ---------------------------------------------------------------------------
+// `ank signers` (ADR-5c6db7a161b8)
+// ---------------------------------------------------------------------------
+
+/// `ank signers <subcommand>`. Every subcommand writes `signers:` through the
+/// line-level writer `config` uses (ADR-e64dfaafd578), so what it does not
+/// name is left byte for byte as it was.
+pub fn run_signers(
+    inv: &Invocation,
+    repo: &crate::repo::Repo,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let sub = inv.subcommand.as_deref().unwrap_or_default();
+    let (takes, positional): (&[&str], bool) = match sub {
+        "add" => (&["--key", "--principal", "--note"], false),
+        "retire" => (&["--date"], true),
+        "remove" => (&[], true),
+        "migrate" => (&[], false),
+        other => {
+            return Err(
+                CliError::new(ExitCode::Generic, format!("unknown subcommand '{other}'"))
+                    .with_hint("ank help signers"),
+            )
+        }
+    };
+    for name in ["--key", "--principal", "--note", "--date"] {
+        if inv.has(name) && !takes.contains(&name) {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("'ank signers {sub}' takes no {name}"),
+            )
+            .with_hint("ank help signers"));
+        }
+    }
+    if !positional {
+        if let Some(extra) = inv.positionals.first() {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("extra argument '{extra}': 'ank signers {sub}' takes none"),
+            )
+            .with_hint("ank help signers"));
+        }
+    }
+    match sub {
+        "add" => add_signer(inv, repo, out),
+        "retire" | "remove" => {
+            let Some(target) = inv.positionals.first() else {
+                return Err(CliError::new(
+                    ExitCode::Prerequisite,
+                    format!("'ank signers {sub}' needs the key it acts on"),
+                )
+                .with_hint(format!("ank signers {sub} '<keytype> <key>'")));
+            };
+            edit_signer(inv, repo, sub, target, out)
+        }
+        _ => migrate_signers(inv, repo, out),
+    }
+}
+
+/// One `- key:` entry of a principal's list, as lines of the file.
+struct KeyItem {
+    /// The line carrying the dash.
+    start: usize,
+    /// One past its last line of content: a comment below it introduces what
+    /// follows, so it is not the entry's to take.
+    end: usize,
+    /// The indentation of its fields, the one after the dash.
+    fields: usize,
+    /// The `key:` value, unquoted.
+    key: Option<String>,
+    /// The line declaring `valid_before`, when it has one.
+    valid_before: Option<usize>,
+}
+
+/// A line of an entry as a mapping line: the dash that opens the entry read
+/// as the space it stands in for, so `key_of` and `value_span` find the field
+/// at the same byte offsets.
+fn as_field(text: &str, dash: Option<usize>) -> String {
+    match dash {
+        Some(d) => format!("{} {}", &text[..d], &text[d + 1..]),
+        None => text.to_string(),
+    }
+}
+
+fn opens_item(text: &str, indent: usize) -> bool {
+    let rest = &text[indent..];
+    rest == "-" || rest.starts_with("- ")
+}
+
+/// The entries of the sequence under `keys:` on line `ki`, and the indentation
+/// of their dashes. YAML lets a sequence sit at its key's own indentation, so
+/// `block_under`, which wants deeper lines, cannot find it.
+fn key_items(lines: &[Line], ki: usize, kindent: usize) -> (Option<usize>, Vec<KeyItem>) {
+    let mut dash: Option<usize> = None;
+    let mut items: Vec<KeyItem> = Vec::new();
+    for (i, line) in lines.iter().enumerate().skip(ki + 1) {
+        let Some(n) = content_indent(&line.text) else {
+            continue;
+        };
+        let d = match dash {
+            None if n >= kindent && opens_item(&line.text, n) => {
+                dash = Some(n);
+                n
+            }
+            None => break,
+            Some(d) => d,
+        };
+        let first = n == d && opens_item(&line.text, n);
+        if first {
+            items.push(KeyItem {
+                start: i,
+                end: i + 1,
+                fields: 0,
+                key: None,
+                valid_before: None,
+            });
+        } else if n <= d {
+            break;
+        }
+        let Some(item) = items.last_mut() else { break };
+        item.end = i + 1;
+        let text = as_field(&line.text, first.then_some(d));
+        let Some(fi) = content_indent(&text) else {
+            continue;
+        };
+        if first {
+            item.fields = fi;
+        }
+        if fi != item.fields {
+            continue;
+        }
+        if let Some((name, at)) = key_of(&text) {
+            match name.as_str() {
+                "key" => item.key = Some(value_span(&text, at).value),
+                "valid_before" => item.valid_before = Some(i),
+                _ => {}
+            }
+        }
+    }
+    (dash, items)
+}
+
+/// Where a principal's keys are: the principal's line, the end of its block,
+/// the `keys:` line and its indentation.
+struct PrincipalAt {
+    line: usize,
+    end: usize,
+    keys: Option<(usize, usize)>,
+}
+
+fn locate_principal(lines: &[Line], name: &str) -> Option<PrincipalAt> {
+    let (_, block) = named_block(lines, "signers")?;
+    let child = block.indent?;
+    let line = find_key(lines, block.range, child, name)?;
+    let own = block_under(lines, line, child);
+    let keys = own.indent.and_then(|k| {
+        let ki = find_key(lines, own.range.clone(), k, "keys")?;
+        Some((ki, k))
+    });
+    // The block of a principal ends with the last of its keys, which may sit
+    // at the principal's own indentation plus nothing: take the further one.
+    let end = keys
+        .and_then(|(ki, k)| key_items(lines, ki, k).1.last().map(|i| i.end))
+        .map_or(own.range.end, |e| e.max(own.range.end));
+    Some(PrincipalAt { line, end, keys })
+}
+
+/// Whether a declared key is the one `target` names: `<keytype> <key>`, or
+/// the key alone.
+fn names_key(declared: &str, target: &str) -> bool {
+    let d: Vec<&str> = declared.split_whitespace().collect();
+    let t: Vec<&str> = target.split_whitespace().collect();
+    match (d.as_slice(), t.as_slice()) {
+        ([dt, dk], [tt, tk]) => dt.eq_ignore_ascii_case(tt) && dk == tk,
+        ([_, dk], [tk]) => dk == tk,
+        _ => false,
+    }
+}
+
+/// `<keytype> <key>` out of the text of a public key, its comment dropped.
+fn public_key(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))?;
+    let mut fields = line.split_whitespace();
+    let keytype = fields.next()?;
+    let key = fields.next()?;
+    is_keytype(keytype).then(|| format!("{} {key}", keytype.to_ascii_lowercase()))
+}
+
+fn git_config(repo: &crate::repo::Repo, key: &str) -> Option<String> {
+    crate::git::output(&repo.worktree, &["config", "--get", key])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// What `--key` names: a public key file, or `<keytype> <key>` as written.
+fn key_from_flag(value: &str) -> Result<String> {
+    let path = Path::new(value);
+    if path.is_file() {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+        return public_key(&text).ok_or_else(|| {
+            CliError::new(
+                ExitCode::Generic,
+                format!("--key {value}: the file holds no public key '<keytype> <key>'"),
+            )
+            .with_hint("ank signers add --key <file>.pub")
+        });
+    }
+    public_key(value).ok_or_else(|| {
+        CliError::new(
+            ExitCode::Generic,
+            format!("--key {value}: neither a file nor '<keytype> <key>'"),
+        )
+        .with_hint("ank signers add --key ~/.ssh/id_ed25519.pub")
+    })
+}
+
+/// The key git signs with, in the form `signers:` declares it.
+fn key_from_git(repo: &crate::repo::Repo) -> Result<String> {
+    let missing = |why: String| {
+        CliError::new(ExitCode::Prerequisite, why)
+            .with_hint("ank signers add --key <file> (or: git config user.signingkey <key>)")
+    };
+    let Some(value) = git_config(repo, "user.signingkey") else {
+        return Err(missing(
+            "git names no user.signingkey, and no --key was given".to_string(),
+        ));
+    };
+    let format = git_config(repo, "gpg.format").unwrap_or_else(|| "openpgp".to_string());
+    match format.as_str() {
+        "ssh" => {
+            if let Some(literal) = value.strip_prefix("key::") {
+                return public_key(literal).ok_or_else(|| {
+                    missing(format!(
+                        "user.signingkey '{value}' is not '<keytype> <key>'"
+                    ))
+                });
+            }
+            if let Some(k) = public_key(&value) {
+                return Ok(k);
+            }
+            // A path, to the public half or to the private one beside it.
+            let path = std::path::PathBuf::from(&value);
+            let path = if path.is_relative() {
+                repo.worktree.join(path)
+            } else {
+                path
+            };
+            let mut public = path.clone().into_os_string();
+            public.push(".pub");
+            [path, public.into()]
+                .iter()
+                .find_map(|p| std::fs::read_to_string(p).ok().and_then(|t| public_key(&t)))
+                .ok_or_else(|| {
+                    missing(format!(
+                        "user.signingkey '{value}' names no readable public key"
+                    ))
+                })
+        }
+        "openpgp" => {
+            let id = value
+                .trim_start_matches("0x")
+                .trim_end_matches('!')
+                .to_ascii_uppercase();
+            let hex = id.bytes().all(|b| b.is_ascii_hexdigit());
+            if hex && [16, 40, 64].contains(&id.len()) {
+                Ok(format!("gpg {id}"))
+            } else {
+                Err(missing(format!(
+                    "user.signingkey '{value}' is not a fingerprint or a long key id"
+                )))
+            }
+        }
+        other => Err(missing(format!(
+            "gpg.format {other}: signers: declares gpg and ssh keys only"
+        ))),
+    }
+}
+
+/// Inserts lines at `at`, with the file's own terminator.
+fn insert_lines(lines: &mut Vec<Line>, at: usize, new: Vec<String>) {
+    let eol = dominant_eol(lines);
+    if at == lines.len() {
+        terminate_last(lines, &eol);
+    }
+    let new: Vec<Line> = new
+        .into_iter()
+        .map(|text| Line {
+            text,
+            eol: eol.clone(),
+        })
+        .collect();
+    lines.splice(at..at, new);
+}
+
+fn hand_edit(what: String) -> CliError {
+    CliError::new(ExitCode::Generic, format!("refused: {what}"))
+        .with_hint("edit signers: in .ank/config.yml by hand, then ank check")
+}
+
+/// Reads the result back through the parser every verb uses, and writes it
+/// only when it says what the subcommand meant.
+fn write_signers(path: &Path, lines: &[Line], holds: impl Fn(&[Signer]) -> bool) -> Result<()> {
+    let after = join_lines(lines);
+    let read = parse(&after, path).map_err(|e| {
+        hand_edit(format!(
+            "the change would leave {} unreadable",
+            path.display()
+        ))
+        .with_hint(e.message)
+    })?;
+    if !holds(&read.signers) {
+        return Err(hand_edit(
+            "the change would not read back as written".to_string(),
+        ));
+    }
+    std::fs::write(path, after)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))
+}
+
+fn report_signer(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    action: &str,
+    principal: &str,
+    key: &str,
+    valid_before: Option<&str>,
+) {
+    if inv.json() {
+        let doc = crate::json::Obj::document()
+            .str("action", action)
+            .str("principal", principal)
+            .str("key", key)
+            .opt_str("valid_before", valid_before)
+            .finish();
+        let _ = writeln!(out, "{doc}");
+    } else if !inv.quiet() {
+        let keytype = key.split_whitespace().next().unwrap_or_default();
+        let _ = match valid_before {
+            Some(d) => writeln!(
+                out,
+                "{action} {keytype} key of {principal}, valid before {d}"
+            ),
+            None => writeln!(out, "{action} {keytype} key of {principal}"),
+        };
+        let _ = writeln!(out, "  review: git diff .ank");
+    }
+}
+
+/// `ank signers add`: one key, under its principal, after the last key there;
+/// a principal not yet declared after the last one; a block not yet written
+/// at the end of the file.
+fn add_signer(inv: &Invocation, repo: &crate::repo::Repo, out: &mut dyn Write) -> Result<ExitCode> {
+    let key = match inv.value("--key") {
+        Some(v) => key_from_flag(v)?,
+        None => key_from_git(repo)?,
+    };
+    let principal = match inv.value("--principal").map(str::to_string) {
+        Some(p) => p,
+        None => git_config(repo, "user.email").ok_or_else(|| {
+            CliError::new(
+                ExitCode::Prerequisite,
+                "git names no user.email, and no --principal was given",
+            )
+            .with_hint("ank signers add --principal <email>")
+        })?,
+    };
+    let note: Vec<String> = inv
+        .value("--note")
+        .map(|n| n.lines().map(str::to_string).collect())
+        .unwrap_or_default();
+
+    let path = repo.config_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    let current = parse(&text, &path)?;
+    if let Some(s) = current
+        .signers
+        .iter()
+        .find(|s| names_key(&format!("{} {}", s.keytype, s.key), &key))
+    {
+        return Err(CliError::new(
+            ExitCode::Transition,
+            format!(
+                "refused: the {} key is already declared under {}",
+                s.keytype, s.principal
+            ),
+        )
+        .with_hint(format!(
+            "ank signers retire '{key}', or ank signers remove '{key}'"
+        )));
+    }
+
+    let mut lines = split_lines(&text);
+    let entry = |dash: usize| {
+        let pad = " ".repeat(dash);
+        let mut l = vec![format!("{pad}- key: {}", scalar(&key))];
+        if !note.is_empty() {
+            l.extend(note_lines(&note, &format!("{pad}  ")));
+        }
+        l
+    };
+    let declared = current.signers.iter().any(|s| s.principal == principal);
+    match named_block(&lines, "signers") {
+        None => {
+            let block = render_signers(&[Migrated {
+                principal: principal.clone(),
+                keytype: key
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+                key: key
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string(),
+                note: note.clone(),
+                valid_before: None,
+            }]);
+            let at = lines.len();
+            insert_lines(&mut lines, at, block);
+        }
+        Some((si, block)) => {
+            if !value_span(&lines[si].text, key_of(&lines[si].text).map_or(0, |k| k.1))
+                .value
+                .is_empty()
+            {
+                return Err(hand_edit("signers: is not written as a block".to_string()));
+            }
+            match locate_principal(&lines, &principal) {
+                Some(PrincipalAt {
+                    keys: Some((ki, kindent)),
+                    ..
+                }) => {
+                    let (dash, items) = key_items(&lines, ki, kindent);
+                    let at = items.last().map_or(ki + 1, |i| i.end);
+                    insert_lines(&mut lines, at, entry(dash.unwrap_or(kindent + 2)));
+                }
+                Some(_) => {
+                    return Err(hand_edit(format!(
+                        "{principal} under signers: carries no keys: list to add to"
+                    )))
+                }
+                None if declared => {
+                    return Err(hand_edit(format!(
+                        "{principal} under signers: is not written as a block"
+                    )))
+                }
+                None => {
+                    let indent = block.indent.unwrap_or(2);
+                    let pad = " ".repeat(indent);
+                    let mut new = vec![
+                        format!("{pad}{}:", scalar(&principal)),
+                        format!("{pad}  keys:"),
+                    ];
+                    new.extend(entry(indent + 4));
+                    insert_lines(&mut lines, block.range.end, new);
+                }
+            }
+        }
+    }
+    let wanted_note = (!note.is_empty()).then(|| note.join("\n"));
+    write_signers(&path, &lines, |read| {
+        read.iter().any(|s| {
+            s.principal == principal
+                && names_key(&format!("{} {}", s.keytype, s.key), &key)
+                && s.note == wanted_note
+        }) && read.len() == current.signers.len() + 1
+    })?;
+    report_signer(inv, out, "added", &principal, &key, None);
+    Ok(ExitCode::Ok)
+}
+
+/// `ank signers retire` and `ank signers remove`, which find one declared key
+/// and change only its lines.
+fn edit_signer(
+    inv: &Invocation,
+    repo: &crate::repo::Repo,
+    sub: &str,
+    target: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let date = match inv.value("--date") {
+        Some(d) if date_days(d).is_none() => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("--date '{d}' is not a YYYY-MM-DD date"),
+            )
+            .with_hint(format!("ank signers retire '{target}' --date 2026-01-31")))
+        }
+        Some(d) => d.to_string(),
+        None => crate::claim::now_utc()[..10].to_string(),
+    };
+
+    let path = repo.config_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    let current = parse(&text, &path)?;
+    let matching: Vec<&Signer> = current
+        .signers
+        .iter()
+        .filter(|s| names_key(&format!("{} {}", s.keytype, s.key), target))
+        .collect();
+    let signer = match matching.as_slice() {
+        [one] => (*one).clone(),
+        [] => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("signers: declares no key matching '{target}'"),
+            )
+            .with_hint("ank review"))
+        }
+        _ => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("'{target}' matches {} declared keys", matching.len()),
+            )
+            .with_hint(format!("ank signers {sub} '<keytype> <key>'")))
+        }
+    };
+    let full = format!("{} {}", signer.keytype, signer.key);
+
+    let mut lines = split_lines(&text);
+    let at = locate_principal(&lines, &signer.principal).and_then(|p| {
+        let (ki, kindent) = p.keys?;
+        let (_, items) = key_items(&lines, ki, kindent);
+        let i = items
+            .into_iter()
+            .position(|i| i.key.as_deref().is_some_and(|k| names_key(k, &full)))?;
+        Some((p, ki, kindent, i))
+    });
+    let Some((p, ki, kindent, index)) = at else {
+        return Err(hand_edit(format!(
+            "the key of {} is declared in a form this writer does not locate",
+            signer.principal
+        )));
+    };
+    let (dash, items) = key_items(&lines, ki, kindent);
+    let item = &items[index];
+
+    if sub == "retire" {
+        match item.valid_before {
+            Some(vi) => {
+                let field = as_field(&lines[vi].text, dash.filter(|_| vi == item.start));
+                let colon = key_of(&field).map_or(0, |k| k.1);
+                let span = value_span(&field, colon);
+                splice(&mut lines[vi], &span, &date);
+            }
+            None => {
+                let pad = " ".repeat(item.fields);
+                insert_lines(
+                    &mut lines,
+                    item.end,
+                    vec![format!("{pad}valid_before: {date}")],
+                );
+            }
+        }
+        write_signers(&path, &lines, |read| {
+            read.iter().any(|s| {
+                s.principal == signer.principal
+                    && s.keytype == signer.keytype
+                    && s.key == signer.key
+                    && s.note == signer.note
+                    && s.valid_before.as_deref() == Some(date.as_str())
+            }) && read.len() == current.signers.len()
+        })?;
+        report_signer(inv, out, "retired", &signer.principal, &full, Some(&date));
+        return Ok(ExitCode::Ok);
+    }
+
+    // remove: the entry, then the principal it leaves empty, then the block.
+    let last_of_principal = items.len() == 1;
+    let last_principal = current
+        .signers
+        .iter()
+        .all(|s| s.principal == signer.principal);
+    if last_of_principal && last_principal {
+        let (si, block) = named_block(&lines, "signers").expect("located above");
+        remove_lines(&mut lines, si..block.range.end.max(p.end));
+    } else if last_of_principal {
+        remove_lines(&mut lines, p.line..p.end);
+    } else {
+        remove_lines(&mut lines, item.start..item.end);
+    }
+    write_signers(&path, &lines, |read| {
+        read.len() + 1 == current.signers.len()
+            && !read
+                .iter()
+                .any(|s| s.keytype == signer.keytype && s.key == signer.key)
+    })?;
+    report_signer(inv, out, "removed", &signer.principal, &full, None);
+    Ok(ExitCode::Ok)
+}
+
+/// One key read out of `.ank/allowed_signers`, before it is written anywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Migrated {
+    principal: String,
+    keytype: String,
+    key: String,
+    note: Vec<String>,
+    valid_before: Option<String>,
+}
+
+/// Reads git's allowed-signers layout, `principal [options] keytype key
+/// [comment]`, keeping what the layout's readers throw away: the comment lines
+/// above a key and the comment after it become that key's note, in order.
+///
+/// Refuses rather than drops. A line it cannot read, or an option `signers:`
+/// has no field for, stops the migration naming the line: the file is deleted
+/// at the end, and a key quietly left out of the block is a key that stops
+/// ratifying without anybody having decided it.
+fn read_allowed_signers(text: &str) -> std::result::Result<Vec<Migrated>, String> {
+    let mut keys: Vec<Migrated> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.is_empty() {
+            // A blank line inside a block of comments is a paragraph break in
+            // the note; a blank line with nothing pending separates nothing.
+            if !pending.is_empty() {
+                pending.push(String::new());
+            }
+            continue;
+        }
+        if let Some(c) = t.strip_prefix('#') {
+            pending.push(c.strip_prefix(' ').unwrap_or(c).trim_end().to_string());
+            continue;
+        }
+        let at = |why: &str| format!(".ank/allowed_signers line {}: {why}: {t}", n + 1);
+        let mut fields = t.split_whitespace();
+        let principal = fields.next().unwrap_or_default().to_string();
+        let mut valid_before = None;
+        let keytype = loop {
+            let Some(f) = fields.next() else {
+                return Err(at("no key type"));
+            };
+            if is_keytype(f) {
+                break f.to_ascii_lowercase();
+            }
+            match f.strip_prefix("valid-before=") {
+                Some(v) => {
+                    let v = v.trim_matches('"');
+                    let date = (v.len() == 8 && v.bytes().all(|b| b.is_ascii_digit()))
+                        .then(|| format!("{}-{}-{}", &v[..4], &v[4..6], &v[6..]))
+                        .filter(|d| date_days(d).is_some())
+                        .ok_or_else(|| at("valid-before is not a YYYYMMDD date"))?;
+                    valid_before = Some(date);
+                }
+                None => return Err(at(&format!("'{f}' is an option signers: has no field for"))),
+            }
+        };
+        let Some(key) = fields.next() else {
+            return Err(at("no key after the key type"));
+        };
+        while pending.last().is_some_and(String::is_empty) {
+            pending.pop();
+        }
+        let mut note = std::mem::take(&mut pending);
+        let trailing: Vec<&str> = fields.collect();
+        if !trailing.is_empty() {
+            note.push(trailing.join(" "));
+        }
+        keys.push(Migrated {
+            principal,
+            keytype,
+            key: key.to_string(),
+            note,
+            valid_before,
+        });
+    }
+    while pending.last().is_some_and(String::is_empty) {
+        pending.pop();
+    }
+    if !pending.is_empty() {
+        // Comments below the last key belong to no key; they are kept on the
+        // last one rather than lost, after a blank line.
+        let Some(last) = keys.last_mut() else {
+            return Err(
+                ".ank/allowed_signers declares no key: nothing to move, and its \
+                 comments would have nowhere to go"
+                    .to_string(),
+            );
+        };
+        if !last.note.is_empty() {
+            last.note.push(String::new());
+        }
+        last.note.extend(pending);
+    }
+    if keys.is_empty() {
+        return Err(".ank/allowed_signers declares no key".to_string());
+    }
+    Ok(keys)
+}
+
+/// A scalar as a plain one when YAML reads it back unchanged, double-quoted
+/// otherwise.
+fn scalar(s: &str) -> String {
+    if plain_safe(s) {
+        s.to_string()
+    } else {
+        double_quoted(s)
+    }
+}
+
+/// A note, at the indentation of its key's fields. Several lines are a
+/// literal block, which keeps them readable in review; a line a literal block
+/// could not carry as written falls back to one double-quoted scalar.
+fn note_lines(note: &[String], indent: &str) -> Vec<String> {
+    if note.len() == 1 {
+        return vec![format!("{indent}note: {}", scalar(&note[0]))];
+    }
+    let literal = note.first().is_some_and(|l| !l.is_empty())
+        && note
+            .iter()
+            .all(|l| !l.starts_with([' ', '\t']) && !l.chars().any(char::is_control));
+    if !literal {
+        return vec![format!("{indent}note: {}", double_quoted(&note.join("\n")))];
+    }
+    let mut out = vec![format!("{indent}note: |-")];
+    for l in note {
+        out.push(match l.is_empty() {
+            true => String::new(),
+            false => format!("{indent}  {l}"),
+        });
+    }
+    out
+}
+
+/// The `signers:` block, principals in the order the file first names them.
+fn render_signers(keys: &[Migrated]) -> Vec<String> {
+    let mut principals: Vec<&str> = Vec::new();
+    for k in keys {
+        if !principals.contains(&k.principal.as_str()) {
+            principals.push(&k.principal);
+        }
+    }
+    let mut out = vec!["signers:".to_string()];
+    for p in principals {
+        out.push(format!("  {}:", scalar(p)));
+        out.push("    keys:".to_string());
+        for k in keys.iter().filter(|k| k.principal == p) {
+            out.push(format!(
+                "      - key: {}",
+                scalar(&format!("{} {}", k.keytype, k.key))
+            ));
+            if !k.note.is_empty() {
+                out.extend(note_lines(&k.note, "        "));
+            }
+            if let Some(d) = &k.valid_before {
+                out.push(format!("        valid_before: {d}"));
+            }
+        }
+    }
+    out
+}
+
+/// `ank signers migrate`: `.ank/allowed_signers` becomes `signers:` in
+/// `config.yml`, and the file is deleted.
+///
+/// The block is appended, so every byte above it is the file as it was; it is
+/// read back through the parser every other verb uses and compared key by key
+/// before anything is written, and the file is removed only once the block is
+/// on disk.
+fn migrate_signers(
+    inv: &Invocation,
+    repo: &crate::repo::Repo,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let source = repo.ank.join("allowed_signers");
+    let file = match std::fs::read_to_string(&source) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CliError::new(
+                ExitCode::Prerequisite,
+                "no .ank/allowed_signers to migrate: who may ratify is already signers: in .ank/config.yml",
+            )
+            .with_hint("ank review"))
+        }
+        Err(e) => {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!("{}: {e}", source.display()),
+            ))
+        }
+    };
+    let keys = read_allowed_signers(&file)
+        .map_err(|why| CliError::new(ExitCode::Generic, format!("refused: {why}")))?;
+
+    let path = repo.config_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    let current = parse(&text, &path)?;
+    // What `signers:` already declares is not declared twice. Anything left to
+    // add beside a block that exists is refused: appending a second `signers:`
+    // would not parse, and merging into a block a human wrote is `ank signers
+    // add`'s surgery, not this one's.
+    let declared = |k: &Migrated| {
+        current
+            .signers
+            .iter()
+            .any(|s| s.principal == k.principal && s.keytype == k.keytype && s.key == k.key)
+    };
+    let remaining: Vec<Migrated> = keys.iter().filter(|k| !declared(k)).cloned().collect();
+    let mut lines = split_lines(&text);
+    if !remaining.is_empty() {
+        if find_key(&lines, 0..lines.len(), 0, "signers").is_some() {
+            return Err(CliError::new(
+                ExitCode::Generic,
+                format!(
+                    "refused: {} key(s) of .ank/allowed_signers are not under the signers: block \
+                     .ank/config.yml already has, and migrate only writes an absent one",
+                    remaining.len()
+                ),
+            )
+            .with_hint(
+                "move them under signers: by hand, then ank signers migrate removes the file",
+            ));
+        }
+        let eol = dominant_eol(&lines);
+        terminate_last(&mut lines, &eol);
+        for l in render_signers(&remaining) {
+            lines.push(Line {
+                text: l,
+                eol: eol.clone(),
+            });
+        }
+        let after_text = join_lines(&lines);
+        // Read back through the parser, and compared field by field: a note
+        // YAML would fold or a principal it would retype is caught here,
+        // before the file that held it is gone.
+        let read = parse(&after_text, &path).map_err(|e| {
+            CliError::new(
+                ExitCode::Generic,
+                format!(
+                    "refused: the block would leave {} unreadable",
+                    path.display()
+                ),
+            )
+            .with_hint(e.message)
+        })?;
+        for k in &remaining {
+            let note = (!k.note.is_empty()).then(|| k.note.join("\n"));
+            let back = read.signers.iter().any(|s| {
+                s.principal == k.principal
+                    && s.keytype == k.keytype
+                    && s.key == k.key
+                    && s.note == note
+                    && s.valid_before == k.valid_before
+            });
+            if !back {
+                return Err(CliError::new(
+                    ExitCode::Generic,
+                    format!(
+                        "refused: the key of {} would not read back as written",
+                        k.principal
+                    ),
+                ));
+            }
+        }
+        std::fs::write(&path, &after_text)
+            .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", path.display())))?;
+    }
+    std::fs::remove_file(&source)
+        .map_err(|e| CliError::new(ExitCode::Generic, format!("{}: {e}", source.display())))?;
+
+    let mut principals: Vec<&str> = remaining.iter().map(|k| k.principal.as_str()).collect();
+    principals.sort_unstable();
+    principals.dedup();
+    if inv.json() {
+        let doc = crate::json::Obj::document()
+            .num("principals", principals.len())
+            .num("keys", remaining.len())
+            .str("removed", ".ank/allowed_signers")
+            .finish();
+        let _ = writeln!(out, "{doc}");
+    } else if !inv.quiet() {
+        let _ = writeln!(
+            out,
+            "migrated {} key(s) of {} principal(s) under signers: in .ank/config.yml, \
+             and removed .ank/allowed_signers",
+            remaining.len(),
+            principals.len()
+        );
+        let _ = writeln!(out, "  review: git diff .ank");
+    }
+    Ok(ExitCode::Ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2932,24 +3818,18 @@ identities: {}
             .collect()
     }
 
-    /// The surgery reaches two levels under a verifier and moves nothing it
-    /// was not asked to (ADR-e64dfaafd578): a whole env written and removed
-    /// again gives the file back byte for byte.
+    /// The surgery moves nothing it was not asked to (ADR-e64dfaafd578):
+    /// `inputs` written and removed again gives the file back byte for byte.
     #[test]
-    fn env_and_inputs_are_written_and_removed_surgically() {
-        let mut text = FIXTURE.to_string();
-        for (key, value) in [
-            ("verifiers.cargo-test.env.vars.LANG", "C"),
-            ("verifiers.cargo-test.env.platform", "linux/amd64"),
-            ("verifiers.cargo-test.inputs", "[src/a.rs, '**/*.toml']"),
-        ] {
-            text = edit(&text, key, Some(value)).unwrap();
-        }
+    fn inputs_are_written_and_removed_surgically() {
+        let text = edit(
+            FIXTURE,
+            "verifiers.cargo-test.inputs",
+            Some("[src/a.rs, '**/*.toml']"),
+        )
+        .unwrap();
         assert!(
-            text.contains(
-                "    timeout: 30m\n    env:\n      vars:\n        LANG: C\n      \
-                 platform: linux/amd64\n    inputs: [\"src/a.rs\", \"**/*.toml\"]\n\nroles:"
-            ),
+            text.contains("    timeout: 30m\n    inputs: [\"src/a.rs\", \"**/*.toml\"]\n\nroles:"),
             "{text}"
         );
         assert!(parse(&text, p()).is_ok());
@@ -2958,18 +3838,9 @@ identities: {}
             Value::Set("[\"src/a.rs\", \"**/*.toml\"]".to_string())
         );
         assert_eq!(
-            read(&text, "verifiers.cargo-test.env.network").unwrap(),
-            Value::Unset,
-            "no image, so the host's network and no default to print"
+            edit(&text, "verifiers.cargo-test.inputs", None).unwrap(),
+            FIXTURE
         );
-        for key in [
-            "verifiers.cargo-test.env.vars.LANG",
-            "verifiers.cargo-test.env.platform",
-            "verifiers.cargo-test.inputs",
-        ] {
-            text = edit(&text, key, None).unwrap();
-        }
-        assert_eq!(text, FIXTURE);
 
         // A block sequence is read as the list it is, and replaced by the
         // flow form, its items with it.
@@ -2990,39 +3861,17 @@ identities: {}
             )
         );
 
-        // `env: {}` is promoted, any other flow mapping refused by name.
-        let empty = FIXTURE.replace("    timeout: 30m\n", "    timeout: 30m\n    env: {}\n");
-        assert_eq!(
-            edit(&empty, "verifiers.cargo-test.env.network", Some("open")).unwrap(),
-            FIXTURE.replace(
-                "    timeout: 30m\n",
-                "    timeout: 30m\n    env:\n      network: open\n"
-            )
-        );
-        let flow = FIXTURE.replace(
-            "    timeout: 30m\n",
-            "    timeout: 30m\n    env: {network: open}\n",
-        );
-        let err = edit(&flow, "verifiers.cargo-test.env.network", Some("none")).unwrap_err();
-        assert!(err.message.contains("flow mapping"), "{}", err.message);
-
-        // Nothing declares a verifier but `run`, and a mapping is not a value.
-        let err = edit(FIXTURE, "verifiers.nope.env.platform", Some("linux/amd64")).unwrap_err();
-        assert_eq!(err.code, ExitCode::Prerequisite);
+        // Nothing declares a verifier but `run`.
         let err = edit(FIXTURE, "verifiers.nope.inputs", Some("[x]")).unwrap_err();
         assert_eq!(err.code, ExitCode::Prerequisite);
-        assert!(read(FIXTURE, "verifiers.cargo-test.env").is_err());
-        assert!(edit(FIXTURE, "verifiers.cargo-test.env.vars", Some("x")).is_err());
-        assert!(edit(FIXTURE, "verifiers.cargo-test.env.hermetic", Some("true")).is_err());
         let err = edit(FIXTURE, "verifiers.cargo-test.inputs", Some("src/**")).unwrap_err();
         assert!(err.message.contains("flow sequence"), "{}", err.message);
     }
 
-    /// ADR-d8a328e311b9, refused where the file is parsed: every verb loads
+    /// ADR-7224dea611c1, refused where the file is parsed: every verb loads
     /// it through here, so a refusal here is one no verb can step around.
     #[test]
-    fn env_and_inputs_are_validated_when_the_file_is_parsed() {
-        const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    fn inputs_are_validated_and_env_is_unknown_when_the_file_is_parsed() {
         let verifier = |body: &str| format!("schema: 1\nverifiers:\n  t:\n    run: x\n{body}");
         let refused = |body: &str| {
             parse(&verifier(body), p())
@@ -3031,48 +3880,23 @@ identities: {}
                 .message
         };
 
-        let ok = parse(
-            &verifier(&format!(
-                "    inputs: [\"src/**\"]\n    env:\n      image: ghcr.io/a/b@sha256:{DIGEST}\n      \
-                 platform: linux/amd64\n      vars:\n        LANG: C\n"
-            )),
-            p(),
-        )
-        .unwrap();
+        let ok = parse(&verifier("    inputs: [\"src/**\"]\n"), p()).unwrap();
         let t = &ok.verifiers["t"];
         assert_eq!(t.inputs.as_deref(), Some(&["src/**".to_string()][..]));
-        let env = t.env.as_ref().unwrap();
-        assert_eq!(env.network, Some(Network::None), "none under an image");
-        assert_eq!(env.vars["LANG"], "C");
-        let host = parse(&verifier("    env:\n      vars:\n        LANG: C\n"), p()).unwrap();
-        assert_eq!(host.verifiers["t"].env.as_ref().unwrap().network, None);
 
-        // A tag, in each of the shapes one is written.
-        for image in [
-            "ghcr.io/a/b:1.80".to_string(),
-            "ghcr.io/a/b".to_string(),
-            "ghcr.io/a/b:latest@sha256:abc".to_string(),
-            format!("ghcr.io/a/b@sha256:{}", DIGEST.to_uppercase()),
-            format!("ghcr.io/a/b@sha512:{DIGEST}"),
+        // Every key the withdrawn block carried, and the block itself.
+        for body in [
+            "    env: {}\n",
+            "    env:\n      platform: linux/amd64\n",
+            "    env:\n      vars:\n        LANG: C\n",
+            "    env:\n      network: none\n",
         ] {
-            let m = refused(&format!(
-                "    env:\n      image: \"{image}\"\n      platform: linux/amd64\n"
-            ));
+            let m = refused(body);
             assert!(
-                m.contains("verifiers.t.env.image") && m.contains("tag"),
-                "{image}: {m}"
+                m.contains("verifiers.t") && m.contains("unknown field `env`"),
+                "{body}: {m}"
             );
         }
-        let m = refused(&format!(
-            "    env:\n      image: ghcr.io/a/b@sha256:{DIGEST}\n"
-        ));
-        assert!(m.contains("verifiers.t.env.platform"), "{m}");
-        let m = refused("    env:\n      platform: linux\n");
-        assert!(m.contains("os/arch"), "{m}");
-        let m = refused("    env:\n      network: host\n");
-        assert!(m.contains("neither none nor open"), "{m}");
-        let m = refused("    env:\n      hermetic: true\n");
-        assert!(m.contains("hermetic"), "derived, never declared: {m}");
         let m = refused("    inputs: []\n");
         assert!(m.contains("verifiers.t.inputs"), "{m}");
         let m = refused("    inputs: [\"src/[\"]\n");
@@ -3622,17 +4446,7 @@ mod reference_table {
                 }
                 "verifiers" => {
                     for f in fields_of::<VerifierFile>() {
-                        if f != "env" {
-                            accepted.insert(format!("verifiers.<name>.{f}"));
-                            continue;
-                        }
-                        for e in fields_of::<EnvFile>() {
-                            accepted.insert(if e == "vars" {
-                                "verifiers.<name>.env.vars.<var>".to_string()
-                            } else {
-                                format!("verifiers.<name>.env.{e}")
-                            });
-                        }
+                        accepted.insert(format!("verifiers.<name>.{f}"));
                     }
                 }
                 "roles" => accepted.extend(
@@ -3645,6 +4459,19 @@ mod reference_table {
                         .into_iter()
                         .map(|f| format!("weight.{f}")),
                 ),
+                "proof" => accepted.extend(
+                    fields_of::<ProofFile>()
+                        .into_iter()
+                        .map(|f| format!("proof.{f}")),
+                ),
+                "signers" => {
+                    assert_eq!(fields_of::<PrincipalFile>(), vec!["keys"]);
+                    accepted.extend(
+                        fields_of::<SignerKeyFile>()
+                            .into_iter()
+                            .map(|f| format!("signers.<principal>.keys[].{f}")),
+                    );
+                }
                 scalar => {
                     accepted.insert(scalar.to_string());
                 }
@@ -3697,17 +4524,8 @@ mod reference_table {
             cfg.verifiers["t"].timeout
         );
         assert_eq!(row("verifiers.<name>.default"), Absent::Text("false"));
-        for key in [
-            "inputs",
-            "env.image",
-            "env.platform",
-            "env.network",
-            "env.vars.<var>",
-        ] {
-            assert_eq!(row(&format!("verifiers.<name>.{key}")), Absent::None);
-        }
+        assert_eq!(row("verifiers.<name>.inputs"), Absent::None);
         assert_eq!(cfg.verifiers["t"].inputs, None);
-        assert_eq!(cfg.verifiers["t"].env, None);
         assert!(cfg.default_verifiers.is_empty());
         let roles = parse("schema: 1\nroles:\n  r: {}\n", p).unwrap().roles;
         assert_eq!(row("roles.<name>.can"), Absent::Text("[]"));
@@ -3729,6 +4547,7 @@ mod reference_table {
             row("weight.plane_bytes"),
             Absent::Number(cfg.weight.plane_bytes)
         );
+        assert_eq!(dur(row("proof.reuse_max_age")), cfg.reuse_max_age);
         assert_eq!(row("verifier_jobs"), Absent::None);
         assert_eq!(cfg.verifier_jobs, None);
         assert!(cfg.verifier_jobs() >= 1);

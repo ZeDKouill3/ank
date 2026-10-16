@@ -233,7 +233,11 @@ fn install(inv: &Invocation, cwd: &Path, out: &mut dyn Write) -> Result<ExitCode
     }
     match code {
         Some(0) => {
-            if let Some(line) = skills_line(&exe, out) {
+            let repair = match route {
+                Route::Npm => format!("npm install -g {NPM_PACKAGE}@{version} --prefer-online"),
+                Route::Installer => shown.clone(),
+            };
+            if let Some(line) = skills_line(&exe, &repair, out)? {
                 let _ = writeln!(out, "{line}");
             }
             Ok(ExitCode::Ok)
@@ -465,7 +469,12 @@ fn set_aside(exe: &Path, route: &Route) -> Result<Option<PathBuf>> {
 /// carries another skill revision than this one. It is never run from here
 /// (ADR-64f32c74a0f9): it chains npx and the network behind a verb that was
 /// asked to update a binary.
-fn skills_line(exe: &Path, out: &mut dyn Write) -> Option<String> {
+///
+/// **A binary that does not answer `--version` is the update failing**, at 9,
+/// whatever the route exited with: npm has exited 0 having removed the old
+/// platform package and installed none, and an agent reading the code would
+/// believe the update landed. `repair` is the command that installs it again.
+fn skills_line(exe: &Path, repair: &str, out: &mut dyn Write) -> Result<Option<String>> {
     let output = Command::new(exe)
         .arg("--version")
         .stdin(Stdio::null())
@@ -473,22 +482,33 @@ fn skills_line(exe: &Path, out: &mut dyn Write) -> Option<String> {
     let text = match output {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => {
-            eprintln!(
-                "{} did not answer --version after the install",
-                exe.display()
-            );
-            return None;
+            let _ = out.flush();
+            let state = if exe.exists() {
+                "did not answer --version"
+            } else {
+                "is missing"
+            };
+            return Err(CliError::new(
+                ExitCode::Environment,
+                format!(
+                    "the route exited 0, and {} {state} after the install",
+                    exe.display()
+                ),
+            )
+            .with_hint(repair.to_string()));
         }
     };
     let installed = text.lines().next().unwrap_or_default();
     let _ = writeln!(out, "installed: {installed}");
-    let revision = skill_revision(installed)?;
-    (revision != env!("ANK_SKILL")).then(|| {
+    let Some(revision) = skill_revision(installed) else {
+        return Ok(None);
+    };
+    Ok((revision != env!("ANK_SKILL")).then(|| {
         format!(
             "the skills changed ({} to {revision}): ank skills --install installs them",
             env!("ANK_SKILL")
         )
-    })
+    }))
 }
 
 /// The revision in `ank X (commit, skill <revision>)`.

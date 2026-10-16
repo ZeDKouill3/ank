@@ -1,4 +1,4 @@
-//! Every binding of the reader, declared once (ADR-559eebf5c6f5).
+//! Every binding of the reader, declared once (ADR-ac6be1ebe9aa).
 //!
 //! **One table, and the surfaces are computed from it.** [`keys::typed`] reads
 //! a keystroke out of it, [`crate::view::App::actions`] draws the offer out of
@@ -22,7 +22,7 @@
 //!
 //! # Every binding has a key, and the writing half has one too
 //!
-//! TASK-1a415107fd56 is where that became true (ADR-559eebf5c6f5: *a key is the
+//! TASK-1a415107fd56 is where that became true (ADR-ac6be1ebe9aa: *a key is the
 //! verb it runs*). The six verbs used to be rows with no key, reached by
 //! spelling the word into a prompt, and the table said so in an `Option`. There
 //! is no prompt for a verb any more and no row without a key, so [`Binding::key`]
@@ -55,7 +55,7 @@
 //! command: raw mode has taken the line discipline's interrupt, and this is the
 //! way out of a program that took the terminal. `q` is the binding, and it
 //! reaches the same place with no modifier -- which is what
-//! ADR-559eebf5c6f5's "no command anywhere requires a modifier chord" asks for
+//! ADR-ac6be1ebe9aa's "no command requires a modifier chord" asks for
 //! and what the table in `keys.rs` measures over every key there is. Every
 //! other row is reached bare and only bare: a letter that writes must not also
 //! be a letter something was holding a modifier over.
@@ -79,8 +79,8 @@ pub struct Binding {
     /// The key that runs it.
     ///
     /// Not an `Option` any more (TASK-1a415107fd56). It was one for exactly as
-    /// long as the writing half had no letters, and ADR-559eebf5c6f5 ends that:
-    /// a key is the verb it runs, and every row of this table now carries one.
+    /// long as the writing half had no letters, and a key is the verb it runs
+    /// (ADR-ac6be1ebe9aa), so every row of this table now carries one.
     ///
     /// What the type buys is that no surface has to ask. A target is drawn for
     /// every offer; the key list names every row the same way; and a press on a
@@ -161,6 +161,11 @@ pub enum Runs {
     Keep,
     /// The open search, ended, and the list given back unnarrowed.
     Undo,
+    /// The open form, composed into the command it spells, which goes on to
+    /// the confirmation like every other (TASK-933fdb42c7d9).
+    Submit,
+    /// The open form, closed, and nothing composed.
+    Close,
 }
 
 /// Which half of the reader a binding belongs to.
@@ -232,6 +237,10 @@ pub enum Offered {
     /// is open every letter is a needle, so the two rows this offers are the
     /// two ways out of it (TASK-c94d086682f3).
     Narrowing,
+    /// Only over an open form, which is modal for the search's reason: every
+    /// letter is typed into a field, so what it offers is how it is left
+    /// (TASK-933fdb42c7d9).
+    Filling,
     /// Only on a document `accept` would take: a proposal, open in the body
     /// panel. A trailer that carried the word over every open entity would be
     /// offering what the verb turns down.
@@ -316,6 +325,8 @@ pub enum Holding {
     Waiting,
     /// An open search.
     Narrowing,
+    /// An open form.
+    Filling,
     /// Neither, with this panel focused.
     Panel(Focus),
 }
@@ -334,7 +345,7 @@ pub enum Holding {
 /// same order is not a coincidence to be maintained -- it is one list.
 pub static BINDINGS: &[Binding] = &[
     // -----------------------------------------------------------------------
-    // What moves the screen (ADR-559eebf5c6f5: every one of them is one key)
+    // What moves the screen (ADR-ac6be1ebe9aa: every one of them is one key)
     // -----------------------------------------------------------------------
     Binding {
         key: KeyCode::Char('j'),
@@ -355,7 +366,7 @@ pub static BINDINGS: &[Binding] = &[
         verb: None,
     },
     // Space and the two named keys, and no letter: `n` and `p` went to the
-    // verbs' side of the ledger (ADR-559eebf5c6f5: navigation takes what is
+    // verbs' side of the ledger (ADR-ac6be1ebe9aa: navigation takes what is
     // left). Space is what a reader who has used `less` presses first and the
     // one paging key a phone keyboard shows without a second layer, so it is
     // the key rather than the third alias it used to be.
@@ -400,7 +411,7 @@ pub static BINDINGS: &[Binding] = &[
     // `s` and no longer `c`, which is `claim`'s now. The letter is not a
     // leftover: what this draws is `ank scope`'s answer over the open
     // document's globs, so the reader binds the initial of the verb whose
-    // answer it is showing -- ADR-559eebf5c6f5's rule about the letters, on a
+    // answer it is showing -- ADR-ac6be1ebe9aa's rule about the letters, on a
     // command that reads rather than writes.
     Binding {
         key: KeyCode::Char('s'),
@@ -439,7 +450,7 @@ pub static BINDINGS: &[Binding] = &[
         group: Group::Screen,
         // The graph narrows on the needle as the listing does
         // (TASK-67583993ef0d).
-        offered: Offered::Panels(&[Focus::Entities, Focus::Graph]),
+        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Queue, Focus::Graph]),
         verb: None,
     },
     // `u` and no longer `r`, which is `release`'s now: the corpus is a working
@@ -600,7 +611,7 @@ pub static BINDINGS: &[Binding] = &[
     // -----------------------------------------------------------------------
     // What moves the corpus, one letter each (TASK-1a415107fd56).
     //
-    // The verb's own initial, which is ADR-559eebf5c6f5's rule and the whole of
+    // The verb's own initial, which is ADR-ac6be1ebe9aa's rule and the whole of
     // why these letters and not others: a person who knows `ank claim` knows
     // `c` here, and a person who learns `c` here has learned something the
     // shell takes. `m` for `amend` is the one that is not an initial, because
@@ -691,7 +702,7 @@ pub static BINDINGS: &[Binding] = &[
     // -----------------------------------------------------------------------
     // What changes what an entity says (TASK-e8da6a00564a)
     //
-    // `e` is `edit`'s own initial, which is ADR-559eebf5c6f5's rule and the
+    // `e` is `edit`'s own initial, which is ADR-ac6be1ebe9aa's rule and the
     // same reason the six above have theirs; the letter was free.
     //
     // It is `Runs::Form` and not `Runs::Compose`, and that is the whole of the
@@ -718,7 +729,7 @@ pub static BINDINGS: &[Binding] = &[
     // -----------------------------------------------------------------------
     // What makes an entity (TASK-d832452630d2)
     //
-    // `n` is `new`'s own initial, which is ADR-559eebf5c6f5's rule and the same
+    // `n` is `new`'s own initial, which is ADR-ac6be1ebe9aa's rule and the same
     // reason the six above have theirs -- and the letter was free: paging went
     // to Space and the two named keys when TASK-1a415107fd56 priced `n` and `p`
     // out of movement, so the verb takes a key nothing else wanted.
@@ -743,7 +754,7 @@ pub static BINDINGS: &[Binding] = &[
     // -----------------------------------------------------------------------
     // What the corpus is configured to do (TASK-b08d090f699c)
     //
-    // `o` and not `c`, which is `claim`'s. ADR-559eebf5c6f5 binds a verb's own
+    // `o` and not `c`, which is `claim`'s. ADR-ac6be1ebe9aa binds a verb's own
     // initial where the initial is free, and `m` for `amend` is already the row
     // that shows what happens when it is not: the letter goes to the verb whose
     // hand a person's should go to, and the other takes what is left of its own
@@ -812,6 +823,28 @@ pub static BINDINGS: &[Binding] = &[
         offered: Offered::Narrowing,
         verb: None,
     },
+    // The form's two ways out (TASK-933fdb42c7d9). Its whole grammar is
+    // `Form::press`, which reads every letter as text; these are what the key
+    // line puts in front of a person typing, because `q` and `?` are letters
+    // there and a line naming them would be naming two characters of a title.
+    Binding {
+        key: KeyCode::Enter,
+        aliases: &[],
+        runs: Runs::Submit,
+        word: "compose",
+        group: Group::Answer,
+        offered: Offered::Filling,
+        verb: None,
+    },
+    Binding {
+        key: KeyCode::Esc,
+        aliases: &[],
+        runs: Runs::Close,
+        word: "close",
+        group: Group::Answer,
+        offered: Offered::Filling,
+        verb: None,
+    },
 ];
 
 impl Binding {
@@ -860,6 +893,7 @@ impl Binding {
         match (self.offered, holding) {
             (Offered::Waiting, Holding::Waiting) => true,
             (Offered::Narrowing, Holding::Narrowing) => true,
+            (Offered::Filling, Holding::Filling) => true,
             (Offered::Anywhere, Holding::Panel(_)) => true,
             (Offered::Panels(panels), Holding::Panel(focus)) => panels.contains(&focus),
             // The ratification offer is the line the trailer draws over a
@@ -1020,7 +1054,7 @@ pub fn offered(holding: Holding) -> impl Iterator<Item = &'static Binding> {
 /// The reverse of [`Binding::press`], and it exists for the two callers that
 /// have a command and need the key: a sentence that names a letter, and a
 /// drawn target that has to hand [`crate::view::App::press`] the very key a
-/// keyboard would have sent (ADR-559eebf5c6f5).
+/// keyboard would have sent (ADR-ac6be1ebe9aa).
 pub fn of_command(command: &Command) -> Option<&'static Binding> {
     BINDINGS
         .iter()
@@ -1033,7 +1067,7 @@ pub fn of_command(command: &Command) -> Option<&'static Binding> {
 /// says how the screen is being kept current and names the key that reads the
 /// corpus again, and it said `r` -- which TASK-1a415107fd56 gave to `release`.
 /// A sentence carrying its own copy of a letter is one of the five parallel
-/// tables this one replaced, in prose -- the drift ADR-559eebf5c6f5 forbids by
+/// tables this one replaced, in prose -- the drift ADR-ac6be1ebe9aa forbids by
 /// reading what the reader offers out of the contract's own verb table.
 ///
 /// The empty string where no binding runs it, which no caller has: a sentence
@@ -1111,9 +1145,13 @@ const WAITING_NOTE: &str = "   (over a command waiting -- every other key dismis
 /// What it says after the search's two.
 ///
 /// "as it is typed" and not "then Enter", because that is the grammar
-/// (ADR-559eebf5c6f5): the list is already narrowed by the time either of these
+/// (ADR-ac6be1ebe9aa): the list is already narrowed by the time either of these
 /// two keys is pressed, and what they choose is whether it stays that way.
 const NARROWING_NOTE: &str = "   (the list narrows as it is typed -- there is nothing to submit)";
+
+/// What it says after the form's two.
+const FILLING_NOTE: &str =
+    "   (every other key is typed into the field -- Tab and the arrows move between them)";
 
 /// One line of the key list: the bindings it names, and how they are drawn.
 ///
@@ -1306,6 +1344,17 @@ fn narrowed() -> Line {
     }
 }
 
+/// What an open form offers (TASK-933fdb42c7d9).
+fn filled() -> Line {
+    Line {
+        title: "form",
+        bindings: answering(Offered::Filling),
+        lead: String::new(),
+        between: "  ",
+        note: FILLING_NOTE.to_string(),
+    }
+}
+
 /// The key list, line by line.
 ///
 /// **Every binding of the table is on exactly one of these, and nothing else
@@ -1324,13 +1373,13 @@ fn lines() -> Vec<Line> {
         ratify(),
         waiting(),
         narrowed(),
+        filled(),
     ]
 }
 
 // `screen_line` and `write_line` stood here (TASK-9a402a54886f). They were the
 // two lines of the trailer, drawn under every frame at every window, and what
-// they cost the reader they were meant to serve is why no offer is drawn at
-// rest now (ADR-559eebf5c6f5).
+// they cost the reader they were meant to serve is why they went.
 // The rows they named are on the key list, whole, one to a row, and nothing
 // else renders them now.
 
@@ -1412,7 +1461,7 @@ pub struct Beyond {
 /// confirmation, since §4 gives it no flag at all.
 ///
 /// Read out of the contract's own table, name, positional and flags alike, so
-/// a form drawn here is a form `ank` takes (ADR-559eebf5c6f5: what the reader
+/// a form drawn here is a form `ank` takes (ADR-ac6be1ebe9aa: what the reader
 /// offers is read out of the verb table rather than transcribed beside it).
 /// One row per verb and not one line carrying all three: a row is a rectangle a
 /// finger fits in, which is what the key list's overlay bought and what makes
@@ -1547,7 +1596,7 @@ mod tests {
     }
 
     /// **The gate is measured against the table and never generated from it**
-    /// (TASK-4d2eb2b4e193, ADR-559eebf5c6f5).
+    /// (TASK-4d2eb2b4e193, ADR-ac6be1ebe9aa).
     ///
     /// The dependency runs this way round on purpose. If `ank.rs` built its
     /// list from the rows above, a row added here would widen what this reader
@@ -1757,10 +1806,22 @@ mod tests {
                         "{binding:?}"
                     );
                 }
+                // The form's two, held to `Form::press` the same way
+                // (TASK-933fdb42c7d9): a key line offering `[Enter compose]`
+                // over a form that read Enter as text would be the target
+                // that reads as an offer and behaves as nothing.
+                Runs::Submit | Runs::Close => {
+                    let mut form = crate::form::Form::open("new").expect("new opens a form");
+                    let expected = match binding.runs {
+                        Runs::Submit => crate::form::Filled::Compose,
+                        _ => crate::form::Filled::Close,
+                    };
+                    assert_eq!(form.press(key), expected, "{binding:?}");
+                }
                 ref other => panic!("{other:?} is not something a modal state answers with"),
             }
         }
-        assert_eq!(answered, 4, "two states, two keys each");
+        assert_eq!(answered, 6, "three states, two keys each");
     }
 
     /// A digit reaches the panel whose title carries it, and the table and

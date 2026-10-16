@@ -1,5 +1,5 @@
 //! What the reader opens on, through the binary (TASK-b5185df7aa44,
-//! ADR-559eebf5c6f5).
+//! ADR-ac6be1ebe9aa).
 //!
 //! CLAUDE.md leaves no choice about where the measurement happens: a criterion
 //! that talks about the binary is tested through the binary, and "the list
@@ -178,7 +178,7 @@ fn restamp(entities: &std::path::Path, id: &str, was: &str, status: &str, create
 /// The short form every listing prints, of every identifier the fixture holds,
 /// in the order the corpus hands them over: `find`'s own `ORDER BY id`.
 ///
-/// Log entries left out, because they are never rows (ADR-559eebf5c6f5) and
+/// Log entries left out, because they are never rows (ADR-ac6be1ebe9aa) and
 /// `new` leaves one beside each entity it writes (ADR-52bb0da2023a).
 fn as_they_arrive(repo: &Repo) -> Vec<String> {
     terminal::ids_of(&repo.stdout(&["find", "--json"]))
@@ -191,7 +191,7 @@ fn as_they_arrive(repo: &Repo) -> Vec<String> {
 /// The identifiers on a frame, in the order the rows carry them.
 ///
 /// One per line and the first on each: a row is a line, and the identifier is
-/// one of the two fields the reader never drops (ADR-559eebf5c6f5). Lines
+/// one of the two fields the reader never drops (ADR-ac6be1ebe9aa). Lines
 /// carrying none are the chrome and are passed over.
 fn rows(frame: &str) -> Vec<String> {
     let mut out = Vec::new();

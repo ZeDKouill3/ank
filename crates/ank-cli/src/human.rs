@@ -77,9 +77,134 @@ pub struct Charge {
     pub characters: usize,
 }
 
+/// Declares [`Kind`] and the word each variant answers to, in one table.
+///
+/// One table, because the word is the contract (ADR-df1035934387): `--json`
+/// carries it, `check --kind` takes it, and the fold names it in the command it
+/// prints. A variant and its word declared apart would be two places for one
+/// fact to disagree.
+macro_rules! kinds {
+    ($($variant:ident => $word:literal,)*) => {
+        /// Which rule a finding comes from: one stable word per rule `check`
+        /// applies (ADR-df1035934387).
+        ///
+        /// Stable because a caller filters on it: renaming one is a contract
+        /// change, where rewording a message is not. A rule with two severities
+        /// -- a dead scope git can or cannot explain -- is still one rule and one
+        /// kind, and the level says which.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum Kind {
+            $($variant,)*
+        }
+
+        impl Kind {
+            /// Every kind, in the order `check --kind` names them on a refusal.
+            pub const ALL: &'static [Kind] = &[$(Kind::$variant,)*];
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Kind::$variant => $word,)*
+                }
+            }
+
+            pub fn parse(word: &str) -> Option<Kind> {
+                Kind::ALL.iter().copied().find(|k| k.as_str() == word)
+            }
+        }
+    };
+}
+
+kinds! {
+    Unreadable => "unreadable",
+    ConflictMarkers => "conflict-markers",
+    Unparseable => "unparseable",
+    Crlf => "crlf",
+    NonCanonical => "non-canonical",
+    FileName => "file-name",
+    Misfiled => "misfiled",
+    PreviousLayout => "previous-layout",
+    PreviousLogDir => "previous-log-dir",
+    ResolutionIncomplete => "resolution-incomplete",
+    CoordinationSkipped => "coordination-skipped",
+    ArchiveChanged => "archive-changed",
+    Cold => "cold",
+    SignatureUnchecked => "signature-unchecked",
+    SignatureUnreadable => "signature-unreadable",
+    DefaultBranchUnknown => "default-branch-unknown",
+    DefaultBranchEmpty => "default-branch-empty",
+    OriginRefspec => "origin-refspec",
+    RefName => "ref-name",
+    RefRecord => "ref-record",
+    ProofRefGrowth => "proof-ref-growth",
+    UnservedRef => "unserved-ref",
+    OrphanRef => "orphan-ref",
+    Unmerged => "unmerged",
+    NoSigners => "no-signers",
+    SignersFile => "signers-file",
+    NoScope => "no-scope",
+    InvalidGlob => "invalid-glob",
+    ScopeNotYet => "scope-not-yet",
+    ScopeClosed => "scope-closed",
+    DeadScope => "dead-scope",
+    BlockerMissing => "blocker-missing",
+    BlockerClosed => "blocker-closed",
+    BlockerPeer => "blocker-peer",
+    Cycle => "cycle",
+    SelfBlocking => "self-blocking",
+    CriteriaByClaimer => "criteria-by-claimer",
+    NoCriteria => "no-criteria",
+    CriteriaDiverged => "criteria-diverged",
+    Claimless => "claimless",
+    ClaimExpired => "claim-expired",
+    ConstraintsChanged => "constraints-changed",
+    Discrepancy => "discrepancy",
+    LogUnreadable => "log-unreadable",
+    NoProof => "no-proof",
+    WeakProof => "weak-proof",
+    UnattestedProof => "unattested-proof",
+    ProofCommitUnreachable => "proof-commit-unreachable",
+    VerifierAbsent => "verifier-absent",
+    VerifierChanged => "verifier-changed",
+    Future => "future",
+    OverConstrained => "over-constrained",
+    Weight => "weight",
+    NoConstraint => "no-constraint",
+    EnforcedBy => "enforced-by",
+    Reference => "reference",
+    StaleCitation => "stale-citation",
+    Supersession => "supersession",
+    Unratified => "unratified",
+    RatificationAltered => "ratification-altered",
+    RatificationUnverifiable => "ratification-unverifiable",
+    Signature => "signature",
+    SelfRatified => "self-ratified",
+    EditedOutside => "edited-outside",
+    BornOutside => "born-outside",
+    LogRewritten => "log-rewritten",
+    LogUnknownWord => "log-unknown-word",
+    LogOrphan => "log-orphan",
+    LogChanged => "log-changed",
+    ProseIdentifiers => "prose-identifiers",
+    Authorless => "authorless",
+    UntypedAuthor => "untyped-author",
+    ReadByNoHuman => "read-by-no-human",
+    Burst => "burst",
+    Drift => "drift",
+    DriftUncompared => "drift-uncompared",
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub level: Level,
+    /// The rule that fired, which is what the fold groups by and what `--json`
+    /// hands a caller instead of the opening words of `message`.
+    pub kind: Kind,
     pub subject: String,
     pub message: String,
     /// What the finding does not say and the reader needs anyway, printed
@@ -101,18 +226,20 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn fault(subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
+    fn fault(kind: Kind, subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
         Finding {
             level: Level::Fault,
+            kind,
             subject: subject.to_string(),
             message: message.into(),
             note: Vec::new(),
             charge: Vec::new(),
         }
     }
-    fn signal(subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
+    fn signal(kind: Kind, subject: impl std::fmt::Display, message: impl Into<String>) -> Finding {
         Finding {
             level: Level::Signal,
+            kind,
             subject: subject.to_string(),
             message: message.into(),
             note: Vec::new(),
@@ -204,6 +331,112 @@ impl Report {
             ExitCode::Ok
         }
     }
+
+    /// How many entities a kind may fire on and still be reported per entity:
+    /// the smaller of [`FOLD_CEILING`] and five percent of the hot corpus
+    /// (ADR-df1035934387), twenty on a corpus of 400 hot files and more.
+    ///
+    /// **Never fewer than [`FOLD_NAMES`].** A fold names five entities, so a
+    /// kind firing on five or fewer would be folded into a line naming every
+    /// one of them, and the reader would be handed a longer answer with less in
+    /// it. Five percent of a corpus under 100 files is under five, and under 20
+    /// files it is nothing at all: a single dead scope would arrive as "fires
+    /// on 1 entity" with its rename read off `--kind`. Measured on this suite,
+    /// a threshold of zero turned 80 tests red and every output block of
+    /// docs/check.md into that sentence. The floor is ADR-1a91435caf07, an
+    /// amendment proposed beside this code rather than a reading taken here.
+    pub fn fold_threshold(&self) -> usize {
+        FOLD_CEILING.min(self.hot_files * 5 / 100).max(FOLD_NAMES)
+    }
+
+    /// The report a reader is shown: every signal kind firing on more entities
+    /// than [`Report::fold_threshold`] becomes one signal for the corpus, in the
+    /// place its first line held (ADR-df1035934387).
+    ///
+    /// **A fault is never folded.** A fault is for reading one by one, and a
+    /// folded one would be a red CI with nothing to read. **Nor is a finding
+    /// whose subject is not an entity** (ADR-1a91435caf07): the rule counts
+    /// entities, and a
+    /// subject such as `corpus`, `allowed_signers` or a ref name is not one --
+    /// `corpus` least of all, since it is the shape the fold produces, written
+    /// by hand before the rule existed.
+    ///
+    /// Applied by the readers and never by [`inspect`], so the per-entity
+    /// findings stay what `check --kind` lists and what a rule's own test
+    /// asserts on, and the fold is the one place a count is turned into prose.
+    pub fn folded(mut self) -> Report {
+        let threshold = self.fold_threshold();
+        let mut fired: BTreeMap<Kind, Vec<String>> = BTreeMap::new();
+        let mut seen: HashSet<(Kind, &str)> = HashSet::new();
+        for f in self.findings.iter().filter(|f| f.foldable()) {
+            if seen.insert((f.kind, f.subject.as_str())) {
+                fired.entry(f.kind).or_default().push(f.subject.clone());
+            }
+        }
+        fired.retain(|_, entities| entities.len() > threshold);
+        if fired.is_empty() {
+            return self;
+        }
+        let mut placed: HashSet<Kind> = HashSet::new();
+        let findings = std::mem::take(&mut self.findings);
+        for f in findings {
+            match fired.get(&f.kind).filter(|_| f.foldable()) {
+                Some(entities) => {
+                    if placed.insert(f.kind) {
+                        self.findings.push(Finding::folded(f.kind, entities));
+                    }
+                }
+                None => self.findings.push(f),
+            }
+        }
+        self
+    }
+
+    /// The findings of one kind alone, unfolded: what the command a folded
+    /// signal names lists.
+    pub fn only(mut self, kind: Kind) -> Report {
+        self.findings.retain(|f| f.kind == kind);
+        self
+    }
+}
+
+/// The most entities a kind reports one by one, however large the corpus
+/// (ADR-df1035934387).
+pub const FOLD_CEILING: usize = 20;
+
+/// How many identifiers a folded signal names (ADR-df1035934387).
+const FOLD_NAMES: usize = 5;
+
+impl Finding {
+    /// Whether the fold may take it: a signal about one entity, named by its id
+    /// or by its file.
+    fn foldable(&self) -> bool {
+        self.level == Level::Signal
+            && EntityId::parse(self.subject.strip_suffix(".md").unwrap_or(&self.subject)).is_ok()
+    }
+
+    /// The one signal a kind becomes once it fires past the threshold.
+    ///
+    /// The message names the kind, the count and the first five entities in
+    /// the order `check` met them; the note is the command that lists them
+    /// all, on its own line so a reader can copy it.
+    fn folded(kind: Kind, entities: &[String]) -> Finding {
+        let n = entities.len();
+        let first = entities
+            .iter()
+            .take(FOLD_NAMES)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let what = if n == 1 { "entity" } else { "entities" };
+        let more = if n > FOLD_NAMES { " ..." } else { "" };
+        Finding::signal(
+            kind,
+            "corpus",
+            format!("{kind} fires on {n} {what}, reported once for the corpus: {first}{more}"),
+        )
+        .with_note(vec![format!("ank check --kind {kind} lists every one")])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +444,7 @@ impl Report {
 // ---------------------------------------------------------------------------
 
 pub fn check(inv: &Invocation, repo: &Repo, cfg: &Config, out: &mut dyn Write) -> Result<ExitCode> {
+    let kind = kind_flag(inv)?;
     let path = crate::context::perimeter(inv, repo)?;
     // Repaired before the inspection reads a single ref, so the proofs the
     // fetch brings are the ones it counts (ADR-1b030fe70442). Only where git
@@ -223,8 +457,39 @@ pub fn check(inv: &Invocation, repo: &Repo, cfg: &Config, out: &mut dyn Write) -
         origin
     });
     let report = inspect_with(repo, cfg, path.as_deref(), true, origin)?;
-    render(&report, inv, out);
-    Ok(report.exit_code())
+    // The code is the whole corpus's whatever is shown: narrowing the listing
+    // to one kind must not turn a corpus with a fault green.
+    let code = report.exit_code();
+    let shown = match kind {
+        Some(kind) => report.only(kind),
+        None => report.folded(),
+    };
+    render(&shown, inv, out);
+    Ok(code)
+}
+
+/// The kind `--kind` names, refused at 7 when no rule answers to it, before
+/// the corpus is read: a word misremembered lists nothing, and an empty list
+/// would read as a clean corpus.
+fn kind_flag(inv: &Invocation) -> Result<Option<Kind>> {
+    let Some(word) = inv.value("--kind") else {
+        return Ok(None);
+    };
+    match Kind::parse(word) {
+        Some(kind) => Ok(Some(kind)),
+        None => Err(CliError::new(
+            ExitCode::Prerequisite,
+            format!(
+                "no rule of check answers to the kind '{word}'; the kinds are {}",
+                Kind::ALL
+                    .iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+        .with_hint("ank check --kind <kind>")),
+    }
 }
 
 /// Everything mechanical §4 lists, plus the maintenance of §7.
@@ -299,19 +564,25 @@ pub fn inspect_with(
             let Ok(text) = std::fs::read_to_string(&p) else {
                 report
                     .findings
-                    .push(Finding::fault(&name, "unreadable file"));
+                    .push(Finding::fault(Kind::Unreadable, &name, "unreadable file"));
                 continue;
             };
             // A merge left half-done is a corpus fault long before it is a
             // parse error, and the message has to say so plainly (§7).
             if has_conflict_markers(&text) {
-                report
-                    .findings
-                    .push(Finding::fault(&name, "unresolved git conflict markers"));
+                report.findings.push(Finding::fault(
+                    Kind::ConflictMarkers,
+                    &name,
+                    "unresolved git conflict markers",
+                ));
                 continue;
             }
             match parse_entity(&text) {
-                Err(e) => report.findings.push(Finding::fault(&name, format!("{e}"))),
+                Err(e) => {
+                    report
+                        .findings
+                        .push(Finding::fault(Kind::Unparseable, &name, format!("{e}")))
+                }
                 Ok(entity) => {
                     let canonical = serialize_entity(&entity);
                     if canonical != text {
@@ -323,11 +594,13 @@ pub fn inspect_with(
                         // signal, exit 0. Anything else is a corpus defect.
                         if has_crlf(&text) && canonical == normalise_line_endings(&text) {
                             report.findings.push(Finding::signal(
+                                Kind::Crlf,
                                 &name,
                                 ank_core::Error::CrlfLineEndings.to_string(),
                             ));
                         } else {
                             report.findings.push(Finding::fault(
+                                Kind::NonCanonical,
                                 &name,
                                 "non-canonical form (round-trip differs)",
                             ));
@@ -335,6 +608,7 @@ pub fn inspect_with(
                     }
                     if name != format!("{}.md", entity.id()) {
                         report.findings.push(Finding::fault(
+                            Kind::FileName,
                             &name,
                             format!("file name does not carry {}", entity.id()),
                         ));
@@ -347,6 +621,7 @@ pub fn inspect_with(
                     if let Some(kind) = kind_of_dir {
                         if entity.id().kind() != kind {
                             report.findings.push(Finding::fault(
+                                Kind::Misfiled,
                                 &name,
                                 format!(
                                     "a {} filed under {}",
@@ -411,6 +686,7 @@ pub fn inspect_with(
             };
             if has_conflict_markers(&text) {
                 report.findings.push(Finding::fault(
+                    Kind::ConflictMarkers,
                     format!("{}/{stem}.md", Store::LOG_DIR),
                     "unresolved git conflict markers",
                 ));
@@ -452,9 +728,11 @@ pub fn inspect_with(
         for (rel, digest) in index.archived_digests()? {
             archived_paths.push(rel.clone());
             let Ok(bytes) = std::fs::read(repo.ank.join(&rel)) else {
-                report
-                    .findings
-                    .push(Finding::fault(&rel, "unreadable archived file"));
+                report.findings.push(Finding::fault(
+                    Kind::Unreadable,
+                    &rel,
+                    "unreadable archived file",
+                ));
                 continue;
             };
             if crate::index::hash_bytes(&bytes) != digest {
@@ -470,6 +748,7 @@ pub fn inspect_with(
     // `check`. Reported once, with the command that moves it.
     if still_legacy > 0 {
         report.findings.push(Finding::signal(
+            Kind::PreviousLayout,
             "corpus",
             format!(
                 "{still_legacy} entities are in the previous layout: entities live \
@@ -485,6 +764,7 @@ pub fn inspect_with(
     // becoming an entity is a rewrite and not a rename.
     if previous_log_files > 0 {
         report.findings.push(Finding::signal(
+            Kind::PreviousLogDir,
             "corpus",
             format!(
                 "{previous_log_files} entities keep their log in .ank/{}/: an entry is an \
@@ -601,6 +881,7 @@ pub fn inspect_with(
         };
         report.findings.push(
             Finding::signal(
+                Kind::ResolutionIncomplete,
                 "corpus",
                 format!(
                     "resolution is incomplete: {} entity file(s) could not be read{why}. \
@@ -631,6 +912,10 @@ pub fn inspect_with(
     // the day the spec was archived. So each archived file is also offered at
     // the address it had hot, and a glob matching that address is alive. What
     // exists in neither root is matched by nothing and stays dead.
+    // The same listing as a set, for the one question asked of it by path
+    // rather than by glob: whether an ADR's `enforced_by` names a file the
+    // tree counts (ADR-25584c56c1a7).
+    let tracked: HashSet<&str> = files.iter().map(String::as_str).collect();
     let mut scope_files = files.clone();
     let ank_rel = ank_relative(repo);
     scope_files.extend(
@@ -711,6 +996,7 @@ pub fn inspect_with(
         (coord, detached, Some(branch))
     } else {
         report.findings.push(Finding::signal(
+            Kind::CoordinationSkipped,
             "coordination",
             "half skipped: no git repository here, so claim refs, ratification \
              signatures, completion refs and detached proofs were neither read \
@@ -745,6 +1031,7 @@ pub fn inspect_with(
         };
         if let Some(held_by) = held_by {
             report.findings.push(Finding::fault(
+                Kind::ArchiveChanged,
                 rel,
                 format!(
                     "archived file changed: its bytes no longer match {held_by}, and an \
@@ -779,8 +1066,23 @@ pub fn inspect_with(
     // store would be moving the corpus to answer a question about hashes. On a
     // checkout level with the default branch that is every entity, and the
     // batch reads nothing.
+    //
+    // **And every task the plane names, carried here or not** (TASK-9cc3719ce9d6).
+    // The pruning predicate asks the default branch about each ref's task, and a
+    // ref on a task this checkout does not carry -- another worktree's claim on a
+    // task it has not merged -- used to fall outside the batch and cost one
+    // `cat-file -p` per layout: 1007 processes for a cold `status` over five
+    // hundred such refs, against 23 over one.
     if let (true, Some(Ok(branch))) = (has_git, default_branch.as_ref()) {
-        let entries = branch_entries(repo, branch, &here, &entities);
+        let mut entries = branch_entries(repo, branch, &here, &entities);
+        let foreign: BTreeSet<&EntityId> = coord
+            .keys()
+            .chain(detached.keys())
+            .filter(|id| !statuses.contains_key(*id))
+            .collect();
+        for id in foreign {
+            entries.extend(entity_rel_paths(repo, id).into_iter().map(|p| (p, None)));
+        }
         let _ = git::preload_at(&repo.corpus, branch, &entries);
     }
 
@@ -838,6 +1140,7 @@ pub fn inspect_with(
             Entity::Adr(a) => check_adr(
                 a,
                 repo,
+                &tracked,
                 &adr_ids,
                 &entities,
                 &unread,
@@ -897,6 +1200,7 @@ pub fn inspect_with(
         if !cold.is_empty() {
             report.findings.push(
                 Finding::signal(
+                    Kind::Cold,
                     "corpus",
                     format!(
                         "{} hot entities are cold and belong in .ank/archive/entities/, \
@@ -943,11 +1247,12 @@ pub fn inspect_with(
     if report.unchecked_signatures > 0 {
         let n = report.unchecked_signatures;
         report.findings.push(Finding::signal(
-            "allowed_signers",
+            Kind::SignatureUnchecked,
+            "signers",
             format!(
                 "{n} ratification signature(s) could not be checked here: no public key \
                  for the signing identity, so they are not verified and not refused \
-                 (import the key declared in .ank/allowed_signers)"
+                 (import the key declared under signers: in .ank/config.yml)"
             ),
         ));
     }
@@ -959,7 +1264,8 @@ pub fn inspect_with(
         let n = report.unreadable_signatures;
         let why = report.signature_failure.as_deref().unwrap_or("git failed");
         report.findings.push(Finding::signal(
-            "allowed_signers",
+            Kind::SignatureUnreadable,
+            "signers",
             format!(
                 "{n} ratification signature(s) could not be read, so they are \
                  neither verified nor refused: {why}"
@@ -980,6 +1286,7 @@ pub fn inspect_with(
             maintain_proofs(repo, branch, &detached, &statuses, prune, &mut report)?;
         }
         Some(Err(_)) => report.findings.push(Finding::signal(
+            Kind::DefaultBranchUnknown,
             "coordination",
             "default branch indeterminable, completion refs neither pruned nor judged \
              and log entries not compared against it (ank config default_branch <name>)",
@@ -1014,7 +1321,7 @@ pub fn inspect_with(
 /// The line is `status`'s too, word for word, so the two surfaces read alike.
 pub fn origin_refspec_finding(origin: crate::init::OriginFetch) -> Option<Finding> {
     (origin == crate::init::OriginFetch::Lacks)
-        .then(|| Finding::signal("origin", origin_refspec_gap()))
+        .then(|| Finding::signal(Kind::OriginRefspec, "origin", origin_refspec_gap()))
 }
 
 /// The sentence both surfaces print for [`crate::init::OriginFetch::Lacks`].
@@ -1068,9 +1375,11 @@ fn coordination(cwd: &Path, report: &mut Report) -> Result<Plane> {
         let Ok(id) = EntityId::parse(rest) else {
             // A ref in one of these namespaces whose tail is not an identifier
             // is an orphan by construction: nothing will ever address it.
-            report
-                .findings
-                .push(Finding::fault(&r.name, "ref name is not an identifier"));
+            report.findings.push(Finding::fault(
+                Kind::RefName,
+                &r.name,
+                "ref name is not an identifier",
+            ));
             continue;
         };
         let read = match records.get(&r.object) {
@@ -1094,6 +1403,7 @@ fn coordination(cwd: &Path, report: &mut Report) -> Result<Plane> {
                     let extra = claim::redundant_attestations(&p.proofs);
                     if extra > 0 {
                         report.findings.push(Finding::signal(
+                            Kind::ProofRefGrowth,
                             &r.name,
                             format!(
                                 "{} attestations of {} fact(s): the ref grows with runs \
@@ -1115,12 +1425,15 @@ fn coordination(cwd: &Path, report: &mut Report) -> Result<Plane> {
                 // a held task as free or lose an attestation, and both are the
                 // silent fallback this file refuses everywhere else.
                 _ => report.findings.push(Finding::fault(
+                    Kind::RefRecord,
                     &r.name,
                     "record of the wrong kind for its namespace",
                 )),
             },
             Ok(None) => {}
-            Err(e) => report.findings.push(Finding::fault(&r.name, e.message)),
+            Err(e) => report
+                .findings
+                .push(Finding::fault(Kind::RefRecord, &r.name, e.message)),
         }
     }
     Ok((map, proofs))
@@ -1172,6 +1485,7 @@ fn foreign_namespaces(refs: &[git::AnkRef], report: &mut Report) {
     for (namespace, mut names) in by_namespace {
         names.sort_unstable();
         let mut finding = Finding::signal(
+            Kind::UnservedRef,
             &namespace,
             format!(
                 "{} ref(s) in a namespace no reader serves: no verb reads \
@@ -1187,115 +1501,35 @@ fn foreign_namespaces(refs: &[git::AnkRef], report: &mut Report) {
     }
 }
 
-/// One entry of `.ank/allowed_signers`: an identity allowed to ratify (§8).
-///
-/// Git's allowed-signers layout, `principal [options] keytype key`, read from
-/// the end because the optional middle is what varies: the key is the last
-/// field and its type the one before, whatever sits between them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signer {
-    pub principal: String,
-    pub keytype: String,
-    pub key: String,
-}
+/// One key allowed to ratify, as `signers:` declares it (ADR-5c6db7a161b8).
+pub use crate::config::Signer;
 
-/// Whether a field names a key type rather than an option or a comment.
+/// The allowed-signers file git is handed, generated from `signers:`
+/// (ADR-5c6db7a161b8).
 ///
-/// Recognised from the front and by prefix: every SSH type is `ssh-`, `ecdsa-`,
-/// `sk-` or `webauthn-`, certificate forms included, since a
-/// `-cert-v01@openssh.com` suffix leaves the prefix alone. `gpg` is ank's own
-/// extension (§8) and the one exact match.
+/// One line per ssh key, `principal [valid-before="YYYYMMDD"] keytype key`,
+/// which is git's layout and its option for a retired key: git compares the
+/// bound against the committer date. `gpg` keys are never written, since
+/// ssh-keygen has no keytype for them and git never reads this file under
+/// OpenPGP; `check` judges those itself.
 ///
-/// The options that may precede it -- `cert-authority`, `namespaces="git"`,
-/// `valid-after=...` -- match none of these, which is what makes reading from
-/// the front safe where reading from the end was not.
-fn is_keytype(field: &str) -> bool {
-    let lower = field.to_ascii_lowercase();
-    lower == "gpg"
-        || ["ssh-", "ecdsa-", "sk-", "webauthn-"]
-            .iter()
-            .any(|p| lower.starts_with(p))
-}
-
-/// One entry split into the three fields that matter, or `None` for a line
-/// neither reader can make sense of.
-///
-/// **Read from the front, and this used to read from the end** — the key as the
-/// last field and its type as the one before. That is right for
-/// `principal [options] keytype key` and wrong for the line everybody actually
-/// writes, because an SSH public key carries a trailing comment: pasting
-/// `id_ed25519.pub` after a principal yields four fields, and the last two are
-/// the key and the comment. The type then read as base64 and the key as an
-/// email address (TASK-8a80b590b356, measured on the golden corpus the moment
-/// `review` first printed the field: `ssh-ed25519` came out as `ank`).
-///
-/// It stayed invisible because nothing displayed these fields and because git,
-/// not ank, decides the allowlist under `gpg.format = ssh`. Under OpenPGP it did
-/// not stay invisible: [`declares`] compares the fingerprint against `key`, and
-/// against a comment it can only ever answer no.
-fn split_entry(line: &str) -> Option<(&str, &str, &str)> {
-    let mut fields = line.split_whitespace();
-    let principal = fields.next()?;
-    let mut rest = fields.skip_while(|f| !is_keytype(f));
-    let keytype = rest.next()?;
-    let key = rest.next()?;
-    Some((principal, keytype, key))
-}
-
-/// Parses `allowed_signers`. Unreadable lines are dropped rather than reported:
-/// this file is versioned and reviewed, and a check that refuses to start over a
-/// stray line is a check that stops answering the question it exists for.
-pub fn parse_signers(text: &str) -> Vec<Signer> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .filter_map(split_entry)
-        .map(|(principal, keytype, key)| Signer {
-            principal: principal.to_string(),
-            keytype: keytype.to_lowercase(),
-            key: key.to_string(),
-        })
-        .collect()
-}
-
-/// The lines of `allowed_signers` git is able to parse, and only those.
-///
-/// The file serves two readers (§12), and they do not read the same thing. Under
-/// `gpg.format = ssh` git opens it and decides the allowlist itself; under
-/// OpenPGP git never opens it at all, so `check` matches the fingerprint here
-/// against `gpg <fingerprint>` entries. Those entries are ank's own extension
-/// and ssh-keygen has no keytype for them: it reports `invalid key` on the line,
-/// and how much of the rest of the file it goes on to read afterwards is a
-/// property of its version rather than of this repository. Measured on CI run
-/// 32191115856, where the same SSH-signed ratification was `G` on two runners
-/// and `U` on the third.
-///
-/// So git is handed what git can read. Lines are filtered and never rewritten:
-/// an entry may carry options between the principal and the key,
-/// `parse_signers` drops them, and re-rendering from what it returns would
-/// quietly change what the file permits. A comment survives because ssh-keygen
-/// skips it, and a line neither parser can make sense of is dropped, which is
-/// the one case where dropping is the conservative act.
-pub fn git_readable_signers(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let trimmed = line.trim();
-        let keep = if trimmed.is_empty() || trimmed.starts_with('#') {
-            true
-        } else {
-            // The same reading as `parse_signers`, and through the same
-            // helper: two ways of locating the key type in one file is two
-            // chances to disagree about which lines git may be handed, and a
-            // `gpg` line let through is the failure TASK-01cc22478782 closed.
-            match split_entry(trimmed) {
-                Some((_, keytype, _)) => !keytype.eq_ignore_ascii_case("gpg"),
-                None => false,
-            }
-        };
-        if keep {
-            out.push_str(line);
-            out.push('\n');
+/// The date goes without the `Z` suffix ssh-keygen accepts from 9.x onwards,
+/// so an older one still reads the line: it is then read in the verifying
+/// machine's time zone, where `check`'s own reading is UTC. Within a day of the
+/// bound the stricter of the two wins, because `classify_signature` refuses
+/// what either refuses.
+pub fn allowed_signers_for_git(declared: &[Signer]) -> String {
+    let mut out = String::new();
+    for s in declared.iter().filter(|s| s.keytype != "gpg") {
+        out.push_str(&s.principal);
+        out.push(' ');
+        if let Some(d) = &s.valid_before {
+            out.push_str(&format!("valid-before=\"{}\" ", d.replace('-', "")));
         }
+        out.push_str(&s.keytype);
+        out.push(' ');
+        out.push_str(&s.key);
+        out.push('\n');
     }
     out
 }
@@ -1364,15 +1598,8 @@ fn held() -> &'static Mutex<HashMap<PathBuf, usize>> {
     HELD.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn signers_for_git(source: &Path) -> Option<SignersForGit> {
-    let text = std::fs::read_to_string(source).ok()?;
-    let readable = git_readable_signers(&text);
-    if readable == text {
-        return Some(SignersForGit {
-            path: source.to_path_buf(),
-            scratch: false,
-        });
-    }
+fn signers_for_git(readable: &str) -> Option<SignersForGit> {
+    let readable = readable.to_string();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&readable, &mut hasher);
     let digest = std::hash::Hasher::finish(&hasher);
@@ -1405,6 +1632,13 @@ pub enum Signature {
     Trusted,
     /// Good signature, from a key nobody declared.
     Undeclared { fingerprint: String },
+    /// Good signature from a declared key, committed on or after the
+    /// `valid_before` that key carries: retired keys ratify nothing later
+    /// (ADR-5c6db7a161b8).
+    Retired {
+        fingerprint: String,
+        valid_before: String,
+    },
     /// A signature is there and this machine cannot check it: no local key, or
     /// no working gpg to ask (TASK-f4ed2020c964).
     Unchecked,
@@ -1438,6 +1672,7 @@ pub fn classify_signature(
     facts: &git::SignatureFacts,
     declared: &[Signer],
     carries_signature: bool,
+    committed: Option<i64>,
 ) -> Signature {
     match facts.status {
         // `N` is git saying it has no good signature to report, which covers
@@ -1447,35 +1682,117 @@ pub fn classify_signature(
         'N' => Signature::Absent,
         'E' => Signature::Unchecked,
         'G' | 'U' => {
-            if is_ssh(&facts.fingerprint) {
+            let fingerprint = facts.fingerprint.clone();
+            // The declared keys this signature is from. Under SSH by the
+            // fingerprint of the key, which is the SHA-256 of its blob; under
+            // OpenPGP by the fingerprint or its long-id tail.
+            let ssh = is_ssh(&facts.fingerprint);
+            let matching: Vec<&Signer> = declared
+                .iter()
+                .filter(|s| match ssh {
+                    true => {
+                        s.keytype != "gpg"
+                            && ssh_fingerprint(&s.key).as_deref()
+                                == Some(facts.fingerprint.as_str())
+                    }
+                    false => {
+                        s.keytype == "gpg" && declares(std::slice::from_ref(*s), &facts.fingerprint)
+                    }
+                })
+                .collect();
+            // A key is honoured where at least one declaration of it is live
+            // at the committer date; where every one is retired, the date
+            // is what refuses it, and the reader is told which.
+            let live = matching.iter().any(|s| !retired(s, committed));
+            let retired_on = matching.iter().filter_map(|s| s.valid_before.clone()).max();
+            if ssh {
                 // Under SSH git has already done the allowlist check, because
                 // it is the only format it will do it for: measured against
                 // git, `G` is a key the allowed-signers file matched and `U` is
-                // a good signature whose principal it did not. Re-deciding it
-                // here would mean comparing an `SHA256:` fingerprint against a
-                // base64 key and calling every correct signature undeclared.
-                if facts.status == 'G' {
-                    Signature::Trusted
-                } else {
-                    Signature::Undeclared {
-                        fingerprint: facts.fingerprint.clone(),
-                    }
+                // a good signature whose principal it did not -- including one
+                // whose `valid-before` the commit postdates. The date is judged
+                // here as well, so a git that does not honour the option still
+                // refuses a retired key.
+                match (facts.status, live, retired_on) {
+                    (_, false, Some(valid_before)) if !matching.is_empty() => Signature::Retired {
+                        fingerprint,
+                        valid_before,
+                    },
+                    ('G', _, _) => Signature::Trusted,
+                    _ => Signature::Undeclared { fingerprint },
                 }
-            } else if declares(declared, &facts.fingerprint) {
+            } else if live {
                 // OpenPGP, where git never reads the file at all. `U` here is a
                 // good signature from a key the local keyring does not
                 // *ultimately trust*, which is a statement about the operator's
                 // web of trust and not about this repository — so both good
                 // statuses are judged the same way, by the declaration.
                 Signature::Trusted
-            } else {
-                Signature::Undeclared {
-                    fingerprint: facts.fingerprint.clone(),
+            } else if let Some(valid_before) = retired_on.filter(|_| !matching.is_empty()) {
+                Signature::Retired {
+                    fingerprint,
+                    valid_before,
                 }
+            } else {
+                Signature::Undeclared { fingerprint }
             }
         }
         other => Signature::Invalid { status: other },
     }
+}
+
+/// Whether a commit dated `committed` postdates the key's `valid_before`,
+/// read as midnight UTC. A commit whose date did not read is judged retired
+/// against a key that carries a bound: no instant is not an instant before it.
+fn retired(s: &Signer, committed: Option<i64>) -> bool {
+    let Some(days) = s.valid_before.as_deref().and_then(crate::config::date_days) else {
+        return false;
+    };
+    committed.is_none_or(|c| c >= days * 86_400)
+}
+
+/// The fingerprint git prints for an ssh key, `SHA256:` and the unpadded
+/// base64 of the SHA-256 of the key blob, or `None` for a key that is not
+/// base64.
+pub fn ssh_fingerprint(key: &str) -> Option<String> {
+    let blob = base64_decode(key)?;
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(&blob);
+    Some(format!("SHA256:{}", base64_encode(&digest)))
+}
+
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim_end_matches('=');
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in text.bytes() {
+        let v = BASE64.iter().position(|&b| b == c)? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// Unpadded, which is how ssh-keygen prints a fingerprint.
+fn base64_encode(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.len();
+        let v = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..=n {
+            out.push(BASE64[((v >> (18 - 6 * i)) & 63) as usize] as char);
+        }
+    }
+    out
 }
 
 /// An SSH signature names its key as `SHA256:<base64>`; OpenPGP names it as a
@@ -1505,9 +1822,14 @@ fn declares(declared: &[Signer], fingerprint: &str) -> bool {
     })
 }
 
+/// The keys `signers:` declares, and nothing else: a remaining
+/// `.ank/allowed_signers` is a fault of its own and never a second source
+/// (ADR-5c6db7a161b8). A `config.yml` that will not load declares nothing,
+/// which every verb but `config` has already refused on.
 fn declared_signers(repo: &Repo) -> Vec<Signer> {
-    let text = std::fs::read_to_string(repo.ank.join("allowed_signers")).unwrap_or_default();
-    parse_signers(&text)
+    crate::config::load(&repo.config_path())
+        .map(|c| c.signers)
+        .unwrap_or_default()
 }
 
 /// What §8's advisory mode says, in one sentence and in one place.
@@ -1524,9 +1846,24 @@ pub const NO_RATIFICATION_KEY: &str =
 fn check_signers(repo: &Repo, report: &mut Report) {
     let keys = declared_signers(repo).len();
     if keys == 0 {
-        report
-            .findings
-            .push(Finding::signal("allowed_signers", NO_RATIFICATION_KEY));
+        report.findings.push(Finding::signal(
+            Kind::NoSigners,
+            "signers",
+            NO_RATIFICATION_KEY,
+        ));
+    }
+    // A fault and not a signal: it is a second list of who may ratify that
+    // nothing reads any more, and a reader editing it believes they changed
+    // who may ratify (ADR-5c6db7a161b8).
+    if repo.ank.join("allowed_signers").exists() {
+        let mut finding = Finding::fault(
+            Kind::SignersFile,
+            "allowed_signers",
+            "still present, and no longer read: who may ratify is signers: in \
+             .ank/config.yml (ank signers migrate moves it there)",
+        );
+        finding.note = vec!["ank signers migrate".to_string()];
+        report.findings.push(finding);
     }
 }
 
@@ -1740,9 +2077,11 @@ fn check_scope_alive(
 ) {
     let globs = entity.scope();
     if globs.is_empty() {
-        report
-            .findings
-            .push(Finding::fault(entity.id(), "no scope: attached to nothing"));
+        report.findings.push(Finding::fault(
+            Kind::NoScope,
+            entity.id(),
+            "no scope: attached to nothing",
+        ));
         return;
     }
     // Fault for a constraint, signal for work still to come. The asymmetry is
@@ -1793,6 +2132,7 @@ fn check_scope_alive(
         // which is the fault this used to raise by compiling it here.
         let Some(alive) = verdicts.get(&compiled) else {
             report.findings.push(Finding::fault(
+                Kind::InvalidGlob,
                 entity.id(),
                 format!("invalid glob '{glob}'"),
             ));
@@ -1876,6 +2216,7 @@ fn check_scope_alive(
         }
         let finding = if ahead_of_the_code {
             Finding::signal(
+                Kind::ScopeNotYet,
                 entity.id(),
                 format!("scope '{glob}' matches no file yet: work not started, or a typo"),
             )
@@ -1886,6 +2227,7 @@ fn check_scope_alive(
             // that the task is closed and the perimeter went with it, which is a
             // record and not a repair — so nothing here names a command.
             Finding::signal(
+                Kind::ScopeClosed,
                 entity.id(),
                 format!("scope '{glob}' matches no file, and the task is closed: nothing is owed"),
             )
@@ -1895,8 +2237,8 @@ fn check_scope_alive(
                 None => format!("dead scope '{glob}': no file matches it"),
             };
             match explained || unverifiable || ignored.is_some() {
-                true => Finding::signal(entity.id(), message),
-                false => Finding::fault(entity.id(), message),
+                true => Finding::signal(Kind::DeadScope, entity.id(), message),
+                false => Finding::fault(Kind::DeadScope, entity.id(), message),
             }
         };
         report.findings.push(finding.with_note(note));
@@ -2213,6 +2555,7 @@ fn check_task(
             // leaves the dependent is judged nowhere here.
             None if archived.contains(&b.to_string()) => {}
             None => report.findings.push(Finding::fault(
+                Kind::BlockerMissing,
                 &t.id,
                 format!("blocked_by names {b}, which does not exist"),
             )),
@@ -2236,6 +2579,7 @@ fn check_task(
             // invent.
             Some(TaskStatus::Closed) if t.status != TaskStatus::Closed => {
                 report.findings.push(Finding::signal(
+                    Kind::BlockerClosed,
                     &t.id,
                     format!("blocked by {b}, which is closed: close down the chain or rewrite it"),
                 ))
@@ -2254,6 +2598,7 @@ fn check_task(
     for b in &t.peer_blocked_by {
         if !cfg.peers.contains_key(&b.peer) {
             report.findings.push(Finding::fault(
+                Kind::BlockerPeer,
                 &t.id,
                 format!(
                     "blocked_by names {b}, an undeclared peer (ank config peers.{} <path>)",
@@ -2272,11 +2617,13 @@ fn check_task(
         });
         match read {
             Err(why) => report.findings.push(Finding::signal(
+                Kind::BlockerPeer,
                 &t.id,
                 format!("blocked_by names {b}, which cannot be read, so it holds: {why}"),
             )),
             Ok(statuses) => match statuses.get(&b.id).map(String::as_str) {
                 None => report.findings.push(Finding::fault(
+                    Kind::BlockerMissing,
                     &t.id,
                     format!(
                         "blocked_by names {b}, a task peer '{}' does not hold",
@@ -2285,6 +2632,7 @@ fn check_task(
                 )),
                 Some("closed") if t.status != TaskStatus::Closed => {
                     report.findings.push(Finding::signal(
+                        Kind::BlockerClosed,
                         &t.id,
                         format!(
                             "blocked by {b}, which is closed: close down the chain or rewrite it"
@@ -2300,20 +2648,23 @@ fn check_task(
     // created it. Not forbidden, and visible.
     if t.criteria_by == Some(CriteriaBy::Claimer) {
         report.findings.push(Finding::signal(
+            Kind::CriteriaByClaimer,
             &t.id,
             "done_criteria set by the claimer, not by the creator",
         ));
     }
 
     if t.status == TaskStatus::InProgress && t.done_criteria.is_none() {
-        report
-            .findings
-            .push(Finding::fault(&t.id, "in progress with no done_criteria"));
+        report.findings.push(Finding::fault(
+            Kind::NoCriteria,
+            &t.id,
+            "in progress with no done_criteria",
+        ));
     }
     if t.status == TaskStatus::Done && proofs.is_empty() {
         report
             .findings
-            .push(Finding::fault(&t.id, "done with no proof"));
+            .push(Finding::fault(Kind::NoProof, &t.id, "done with no proof"));
     }
 
     // A status that says held, with no record to hold it. The arm below already
@@ -2328,6 +2679,7 @@ fn check_task(
     // matter, and an exit code people learn to ignore is worse than none.
     if t.status == TaskStatus::InProgress && !coord.contains_key(&t.id) {
         report.findings.push(Finding::signal(
+            Kind::Claimless,
             &t.id,
             format!(
                 "in_progress with no claim ref: nothing holds it (ank claim {})",
@@ -2342,6 +2694,7 @@ fn check_task(
         if let Some(criteria) = &t.done_criteria {
             if !verify_frozen(criteria, &c.criteria) {
                 report.findings.push(Finding::fault(
+                    Kind::CriteriaDiverged,
                     &t.id,
                     format!(
                         "done_criteria diverges from the claim (claimed {}, now {})",
@@ -2353,6 +2706,7 @@ fn check_task(
         }
         if claim::is_expired(c, claim::now_secs(), &t.id).unwrap_or(false) {
             report.findings.push(Finding::signal(
+                Kind::ClaimExpired,
                 &t.id,
                 format!("claim by {} expired: the task is claimable again", c.holder),
             ));
@@ -2364,6 +2718,7 @@ fn check_task(
         {
             if claim::constraints_hash(&applicable) != c.constraints {
                 report.findings.push(Finding::signal(
+                    Kind::ConstraintsChanged,
                     &t.id,
                     "applicable constraints changed since the claim: re-read ank context",
                 ));
@@ -2398,6 +2753,7 @@ fn check_task(
                 // reads one shape, which a leading count would have broken.
                 report.findings.push(
                     Finding::signal(
+                        Kind::Discrepancy,
                         &t.id,
                         format!(
                             "discrepancy recorded against the frozen criterion: the freeze is \
@@ -2418,6 +2774,7 @@ fn check_task(
         // refuses everywhere else: the record would disappear along with the
         // line that broke the parse, and no line anywhere would say so.
         Err(LogUnread::Why(why)) => report.findings.push(Finding::signal(
+            Kind::LogUnreadable,
             &t.id,
             format!(
                 "log unreadable, so a discrepancy it records is not reported: {why} \
@@ -2442,6 +2799,7 @@ fn check_task(
         // one finding per task, because the task is what is being judged.
         let kind = proofs[0].proof_type.as_str();
         report.findings.push(Finding::signal(
+            Kind::WeakProof,
             &t.id,
             format!("weak proof '{kind}': it anchors nothing"),
         ));
@@ -2496,6 +2854,7 @@ fn check_task(
             None => "done with no test proof: nothing external anchors it".to_string(),
         };
         report.findings.push(Finding::signal(
+            Kind::UnattestedProof,
             &t.id,
             format!(
                 "{head} (ank attest {} --proof test:<run-id> --detached)",
@@ -2527,6 +2886,7 @@ fn check_task(
         .collect();
     for reference in dead {
         report.findings.push(Finding::signal(
+            Kind::ProofCommitUnreachable,
             &t.id,
             format!(
                 "proof commit:{reference} names no commit reachable here: rebased away, \
@@ -2542,11 +2902,13 @@ fn check_task(
         if let Some((name, hash)) = p.verifier.as_ref().and_then(|v| v.split_once('@')) {
             match cfg.verifier(name) {
                 None => report.findings.push(Finding::signal(
+                    Kind::VerifierAbsent,
                     &t.id,
                     format!("proof anchors verifier '{name}', absent from config.yml"),
                 )),
                 Some(def) if verify::definition_hash(def) != hash => {
                     report.findings.push(Finding::signal(
+                        Kind::VerifierChanged,
                         &t.id,
                         format!(
                             "verifier '{name}' changed since the proof ({hash} -> {})",
@@ -2574,6 +2936,7 @@ fn check_task(
         match &t.done_criteria {
             Some(criteria) if verify_frozen(criteria, anchor) => {}
             Some(criteria) => report.findings.push(Finding::fault(
+                Kind::CriteriaDiverged,
                 &t.id,
                 format!(
                     "done_criteria diverges from the proof (proved {anchor}, now {}): \
@@ -2582,6 +2945,7 @@ fn check_task(
                 ),
             )),
             None => report.findings.push(Finding::fault(
+                Kind::CriteriaDiverged,
                 &t.id,
                 format!("done_criteria diverges from the proof (proved {anchor}, now absent)"),
             )),
@@ -2593,6 +2957,7 @@ fn check_task(
     if let Some(created) = claim::parse_utc(&t.created) {
         if created > claim::now_secs() + 86_400 {
             report.findings.push(Finding::signal(
+                Kind::Future,
                 &t.id,
                 format!("created in the future ({})", t.created),
             ));
@@ -2623,9 +2988,19 @@ fn check_task(
     // refusing, and the reader who wants it on a healthy scope has `ank
     // context`.
     if matches!(t.status, TaskStatus::Open | TaskStatus::InProgress) {
-        if let Ok(applicable) =
+        if let Ok(mut applicable) =
             claim::constraints_among(adrs.iter().copied(), repo, t).map(|b| b.applicable)
         {
+            // A rule something declares to hold it is served by its title and
+            // not by its text (ADR-25584c56c1a7), so its text is no longer what
+            // the perimeter charges. It still binds: the claim record hashes it
+            // as before, and only what this signal prices changes.
+            let enforced: HashSet<String> = adrs
+                .iter()
+                .filter(|a| !a.enforced_by.is_empty())
+                .map(|a| a.id.to_string())
+                .collect();
+            applicable.retain(|(id, _)| !enforced.contains(id));
             let weight: usize = applicable.iter().map(|(_, c)| c.chars().count()).sum();
             let limit = cfg.context_budget / 2;
             if weight > limit {
@@ -2644,6 +3019,7 @@ fn check_task(
                 charge.sort_by(|a, b| b.characters.cmp(&a.characters).then(a.id.cmp(&b.id)));
                 report.findings.push(
                     Finding::signal(
+                        Kind::OverConstrained,
                         &t.id,
                         format!(
                             "over-constrained scope: {weight} characters of constraint against a \
@@ -2671,6 +3047,7 @@ fn check_weight(cfg: &Config, report: &mut Report) {
     let hot = report.hot_files as u64;
     if hot > budget.hot_files {
         report.findings.push(Finding::signal(
+            Kind::Weight,
             "weight.hot_files",
             format!(
                 "{hot} entity files under .ank/entities/, over the budget of {}: \
@@ -2694,6 +3071,7 @@ fn check_weight(cfg: &Config, report: &mut Report) {
             .collect();
         report.findings.push(
             Finding::signal(
+                Kind::Weight,
                 "weight.plane_bytes",
                 format!(
                     "{bytes} bytes of claim and proof records under refs/ank/, over the \
@@ -2875,11 +3253,13 @@ fn relief(store: &Store, t: &Task, heaviest: Option<&Charge>) -> Vec<String> {
             |loaded| matches!(loaded.entity, Entity::Adr(a) if a.status == AdrStatus::Accepted),
         );
     note.push(match accepted {
+        // `enforced_by` is outside the anchor, so this is the one amend that
+        // reaches an accepted rule's charge (ADR-25584c56c1a7).
         true => format!(
             "{} costs the most, and is accepted: its constraint is anchored in the \
-             ratification commit, so no amend reaches it — what lowers its charge is \
-             mechanising it out of injected context",
-            top.id
+             ratification commit, and what lowers its charge is naming what holds it: \
+             ank amend {} --enforced-by \"<path>#<symbol>\"",
+            top.id, top.id
         ),
         false => format!(
             "{} costs the most: ank amend {} --drop-scope \"<glob>\" narrows what it binds",
@@ -2892,6 +3272,7 @@ fn relief(store: &Store, t: &Task, heaviest: Option<&Charge>) -> Vec<String> {
 fn check_adr(
     a: &Adr,
     repo: &Repo,
+    tracked: &HashSet<&str>,
     adr_ids: &HashSet<EntityId>,
     entities: &[(PathBuf, Entity)],
     unread: &BTreeSet<String>,
@@ -2911,11 +3292,73 @@ fn check_adr(
         report,
     );
     check_anchor(&view, repo, "its constraint is no longer injected", report);
+    check_enforced_by(a, &repo.worktree, tracked, report);
     if a.constraint.trim().is_empty() {
-        report
-            .findings
-            .push(Finding::fault(&a.id, "no constraint: it binds nothing"));
+        report.findings.push(Finding::fault(
+            Kind::NoConstraint,
+            &a.id,
+            "no constraint: it binds nothing",
+        ));
     }
+}
+
+/// An ADR's `enforced_by`, confronted with the tree (ADR-25584c56c1a7): the
+/// path against the files the tree counts, the way a scope is, and the symbol
+/// against what that file holds.
+///
+/// **A signal and never a fault**, one per entry and naming it: a renamed test
+/// is not a broken rule, and the rule binds whether or not something enforces
+/// it. A superseded ADR is asked nothing, since it is history and nothing
+/// serves it.
+///
+/// The symbol is matched as a whole word, so `logs_every` is not found inside
+/// `logs_every_module`: an entry naming a prefix of the test would otherwise
+/// survive the rename of the very test it meant.
+fn check_enforced_by(a: &Adr, root: &Path, tracked: &HashSet<&str>, report: &mut Report) {
+    if a.status == AdrStatus::Superseded {
+        return;
+    }
+    for entry in &a.enforced_by {
+        let repair = format!("ank amend {} --drop-enforced-by \"{entry}\"", a.id);
+        let Some((path, symbol)) = ank_core::split_enforcement(entry) else {
+            report.findings.push(Finding::signal(
+                Kind::EnforcedBy,
+                &a.id,
+                format!("enforced_by '{entry}' is not <path>#<symbol> ({repair})"),
+            ));
+            continue;
+        };
+        if !tracked.contains(path) {
+            report.findings.push(Finding::signal(
+                Kind::EnforcedBy,
+                &a.id,
+                format!(
+                    "enforced_by '{entry}': no tracked file is {path}, so nothing there \
+                     holds the rule ({repair})"
+                ),
+            ));
+            continue;
+        }
+        let text = std::fs::read_to_string(root.join(path)).unwrap_or_default();
+        if !contains_word(&text, symbol) {
+            report.findings.push(Finding::signal(
+                Kind::EnforcedBy,
+                &a.id,
+                format!("enforced_by '{entry}': {path} does not contain {symbol} ({repair})"),
+            ));
+        }
+    }
+}
+
+/// Whether `word` occurs in `text` with no identifier character on either
+/// side of it.
+fn contains_word(text: &str, word: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(ident) && !after.is_some_and(ident)
+    })
 }
 
 /// What a spec owes beyond what every kind owes (§3).
@@ -3024,6 +3467,7 @@ fn check_relation(
         // reason the one that does is.
         if !(rel.allowed)(target.kind()) {
             report.findings.push(Finding::fault(
+                Kind::Reference,
                 citer,
                 format!(
                     "{} ({})",
@@ -3056,6 +3500,7 @@ fn check_relation(
                 continue;
             }
             report.findings.push(Finding::fault(
+                Kind::Reference,
                 citer,
                 format!(
                     "{} {target}, which does not exist ({})",
@@ -3147,6 +3592,7 @@ fn judge_reference(
         // reference resolves and nothing is owed.
         AdrStatus::Accepted => {}
         AdrStatus::Proposed => report.findings.push(Finding::signal(
+            Kind::Reference,
             citer,
             if named == target {
                 format!(
@@ -3173,6 +3619,7 @@ fn judge_reference(
         // could not load, which is the same case one link further on.
         AdrStatus::Superseded if unread.is_empty() => {
             report.findings.push(Finding::signal(
+                Kind::Reference,
                 citer,
                 if named == target {
                     format!(
@@ -3302,6 +3749,7 @@ fn check_stale_citations(
         });
         report.findings.push(
             Finding::fault(
+                Kind::StaleCitation,
                 id,
                 format!(
                     "superseded, and the workspace still cites it in {} {}: {} {} outside .ank/",
@@ -3348,6 +3796,7 @@ fn check_succession(
             // what the archive holds is verified by digest, not re-judged.
         } else if !peers.contains(target) && !unread.contains(&target.to_string()) {
             report.findings.push(Finding::fault(
+                Kind::Supersession,
                 view.id,
                 format!("supersedes {target}, which does not exist"),
             ));
@@ -3372,11 +3821,12 @@ fn check_succession(
                 let message = format!("supersedes {target}, which is not marked superseded");
                 report.findings.push(if view.status == AdrStatus::Proposed {
                     Finding::signal(
+                        Kind::Supersession,
                         view.id,
                         format!("{message} (proposed: not yet a succession)"),
                     )
                 } else {
-                    Finding::fault(view.id, message)
+                    Finding::fault(Kind::Supersession, view.id, message)
                 });
             }
         }
@@ -3388,6 +3838,7 @@ fn check_succession(
             .any(|(_, e)| Anchored::of_kind(e, kind).is_some_and(|v| v.supersedes == Some(view.id)))
     {
         report.findings.push(Finding::fault(
+            Kind::Supersession,
             view.id,
             format!("marked superseded but no {} supersedes it", kind_word(kind)),
         ));
@@ -3405,12 +3856,14 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
         // bootstrap exception. Making it a violation would condemn a whole
         // corpus at once and block every `done` behind it.
         report.findings.push(Finding::signal(
+            Kind::Unratified,
             view.id,
             "accepted with no ratification commit (bootstrap, or accepted by hand)",
         ));
     }
     match freeze_state(repo, *view) {
         Freeze::Altered { ratified, now } => report.findings.push(Finding::fault(
+            Kind::RatificationAltered,
             view.id,
             format!("altered since ratification (ratified {ratified}, now {now}): {consequence}"),
         )),
@@ -3420,6 +3873,7 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
         // broken freeze — and a check that cries divergence over a shallow clone
         // is a check people learn to ignore.
         Freeze::Unverifiable => report.findings.push(Finding::signal(
+            Kind::RatificationUnverifiable,
             view.id,
             "ratified, but no ratification commit is reachable: the freeze cannot be verified",
         )),
@@ -3431,18 +3885,24 @@ fn check_anchor(view: &Anchored, repo: &Repo, consequence: &str, report: &mut Re
     // is worth (§8). An anchor read from a commit nobody signed anchors nothing
     // against the one case the whole mechanism exists for.
     match signature_state(repo, *view) {
-        Some(Signature::Absent) => report.findings.push(Finding::fault(
+        Some(Signature::Absent) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             "its ratification commit is not signed: the anchor proves nothing (§8)",
         )),
-        Some(Signature::Invalid { status }) => report.findings.push(Finding::fault(
+        Some(Signature::Invalid { status }) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             format!("its ratification commit carries a signature git refuses ({status}): not a ratification"),
         )),
-        Some(Signature::Undeclared { fingerprint }) => report.findings.push(Finding::fault(
+        Some(Signature::Undeclared { fingerprint }) => report.findings.push(Finding::fault(Kind::Signature,
             view.id,
             format!(
-                "ratified by {fingerprint}, which .ank/allowed_signers does not declare"
+                "ratified by {fingerprint}, which signers: in .ank/config.yml does not declare"
+            ),
+        )),
+        Some(Signature::Retired { fingerprint, valid_before }) => report.findings.push(Finding::fault(Kind::Signature,
+            view.id,
+            format!(
+                "ratified by {fingerprint} after its valid_before {valid_before}: a retired key ratifies nothing committed later"
             ),
         )),
 
@@ -3533,7 +3993,7 @@ fn evidenced_writes(entity: &Entity) -> Option<u64> {
 ///
 /// **A signal and never a fault**, and the exit code is the whole argument: an
 /// entity whose arithmetic does not close was written outside the CLI, which is
-/// legal, is what a human with an editor does, and is what ADR-e45e1a29fe91
+/// legal, is what a human with an editor does, and is what ADR-3c8d94a0bbe0
 /// permits a human while asking it of no agent. What the signal says is that it
 /// happened, not that it was wrong.
 ///
@@ -3598,6 +4058,7 @@ fn check_accounting(
             let now = crate::entries::content_hash(e);
             if now != produced {
                 report.findings.push(Finding::signal(
+                    Kind::EditedOutside,
                     e.id(),
                     format!(
                         "content is {now} where the last write left {produced}: it was \
@@ -3632,6 +4093,7 @@ fn check_accounting(
             continue;
         }
         report.findings.push(Finding::signal(
+            Kind::EditedOutside,
             e.id(),
             format!(
                 "version {carried}, and its entries account for {accounted}: a write \
@@ -3737,6 +4199,7 @@ fn check_born_accounted(
         }
         let id = e.id();
         report.findings.push(Finding::fault(
+            Kind::BornOutside,
             id,
             format!(
                 "created {}, after {BORN_ACCOUNTED} was ratified, and {BORN_OUTSIDE}: \
@@ -3793,6 +4256,7 @@ fn check_entries(
         rewritten.truncate(5);
         report.findings.push(
             Finding::signal(
+                Kind::LogRewritten,
                 "corpus",
                 format!("{total} log entries have been rewritten: an entry is written once"),
             )
@@ -3825,7 +4289,7 @@ fn check_entries(
         let total = unknown.len();
         unknown.truncate(5);
         report.findings.push(
-            Finding::signal(
+            Finding::signal(Kind::LogUnknownWord,
                 "corpus",
                 format!(
                     "{total} log entries record a word this build does not know: read as machinery and kept out of the work trace"
@@ -3858,6 +4322,7 @@ fn check_entries(
     orphans.truncate(5);
     report.findings.push(
         Finding::fault(
+            Kind::LogOrphan,
             "corpus",
             format!("{total} log entries are about an entity this corpus does not hold"),
         )
@@ -3982,6 +4447,7 @@ fn check_prose_identifiers(
         .collect();
     report.findings.push(
         Finding::signal(
+            Kind::ProseIdentifiers,
             "corpus",
             format!(
                 // No command, and that is the honest end of it: an identifier
@@ -4026,6 +4492,7 @@ fn check_authorship(
     let authorless = considered.iter().filter(|e| author_of(e).is_none()).count();
     if authorless > 0 {
         report.findings.push(Finding::signal(
+            Kind::Authorless,
             "corpus",
             format!(
                 "{authorless} entities predate the author field: the burst and \
@@ -4049,6 +4516,7 @@ fn check_authorship(
         .count();
     if untyped > 0 {
         report.findings.push(Finding::signal(
+            Kind::UntypedAuthor,
             "corpus",
             format!(
                 "{untyped} authors predate the actor convention: the convention \
@@ -4089,6 +4557,7 @@ fn check_authorship(
         // a length §3 lets anything print, and this line had no corpus in hand
         // to measure a length against (TASK-c1f01f301d63).
         report.findings.push(Finding::signal(
+            Kind::ReadByNoHuman,
             e.id(),
             "written by an agent and read by no human",
         ));
@@ -4123,6 +4592,7 @@ fn check_authorship(
             continue;
         }
         report.findings.push(Finding::signal(
+            Kind::SelfRatified,
             e.id(),
             format!("ratified by its own author ({author})"),
         ));
@@ -4166,6 +4636,7 @@ fn check_authorship(
     bursts.sort_unstable();
     for (author, count) in bursts {
         report.findings.push(Finding::signal(
+            Kind::Burst,
             "corpus",
             format!(
                 "burst creation by {author}: {count} entities within an hour \
@@ -4207,6 +4678,7 @@ fn check_authorship(
         own.sort();
         if !own.is_empty() {
             report.findings.push(Finding::signal(
+                Kind::SelfBlocking,
                 &t.id,
                 format!(
                     "blocked by {} created by the holder ({}) after claiming",
@@ -4295,6 +4767,7 @@ fn check_cycles(entities: &[(PathBuf, Entity)], report: &mut Report) {
             key.sort();
             if reported.insert(key.join(",")) {
                 report.findings.push(Finding::fault(
+                    Kind::Cycle,
                     node,
                     format!("blocked_by cycle: {} -> {node}", ring.join(" -> ")),
                 ));
@@ -4474,6 +4947,7 @@ fn corpus_drift(repo: &Repo, branch: &str, here: &BTreeMap<String, PathBuf>, rep
         Err(_) => {
             if has_commit(&repo.corpus) {
                 report.findings.push(Finding::signal(
+                    Kind::DriftUncompared,
                     "corpus",
                     format!(
                         "{branch} names no commit here, so this corpus was not compared \
@@ -4488,6 +4962,7 @@ fn corpus_drift(repo: &Repo, branch: &str, here: &BTreeMap<String, PathBuf>, rep
         Ok(map) => map,
         Err(e) => {
             report.findings.push(Finding::signal(
+                Kind::DriftUncompared,
                 "corpus",
                 format!(
                     "this corpus was not compared against {branch}: {} \
@@ -4510,6 +4985,7 @@ fn corpus_drift(repo: &Repo, branch: &str, here: &BTreeMap<String, PathBuf>, rep
     });
     if entities > 0 {
         report.findings.push(Finding::signal(
+            Kind::Drift,
             "corpus",
             format!(
                 "{entities} entity file(s) differ from {branch}: this checkout does not \
@@ -4575,6 +5051,7 @@ fn rewritten_entries(
         let about = about.as_deref().unwrap_or("<id>");
         let path = entity_rel_paths(repo, &parsed).swap_remove(0);
         report.findings.push(Finding::signal(
+            Kind::LogChanged,
             id,
             format!(
                 "an entry the default branch holds was changed in this checkout, and an \
@@ -4640,10 +5117,11 @@ fn branch_entries(
 /// The entity files `branch` carries, keyed by id, with the blob each name
 /// points at.
 ///
-/// One `cat-file` per layout directory and never one per entity: `file_at` on a
-/// directory reads the tree at that revision, which already carries the content
+/// One `cat-file --batch` for every layout directory, and never one process per
+/// directory or per entity: the tree of a directory already carries the content
 /// hash of every file in it. Asking per entity would be one process per entity
-/// on a corpus of two hundred, for an answer the tree states in one line each.
+/// on a corpus of two hundred, for an answer the tree states in one line each;
+/// asking per directory paid three processes a revision (TASK-5395fef418b7).
 ///
 /// The canonical layout wins over the previous one, exactly as [`file_at_branch`]
 /// resolves a single entity: the branch and the working tree need not agree on
@@ -4679,32 +5157,24 @@ fn corpus_at_uncached(repo: &Repo, branch: &str) -> Result<BTreeMap<String, Stri
         }
     }
     let mut found: BTreeMap<String, String> = BTreeMap::new();
-    for dir in dirs {
-        let Some(listing) = git::file_at(&repo.corpus, branch, &dir)? else {
-            continue;
-        };
-        // `<mode> SP <type> SP <object>TAB<name>`, git's tree format, which has
-        // carried that shape since `cat-file -p` printed trees.
-        for line in listing.lines() {
-            let Some((meta, name)) = line.split_once('\t') else {
-                continue;
-            };
-            let mut fields = meta.split_whitespace().skip(1);
-            if fields.next() != Some("blob") {
+    // Every layout directory in one process: the order of `dirs` is the order
+    // of precedence, and the batch answers in the order it was asked.
+    for entries in git::trees_at(&repo.corpus, branch, &dirs)?
+        .into_iter()
+        .flatten()
+    {
+        for entry in entries {
+            if !entry.is_blob() {
                 continue;
             }
-            let Some(object) = fields.next() else {
-                continue;
-            };
-            let Some(id) = name
+            let Some(id) = entry
+                .name
                 .strip_suffix(".md")
                 .filter(|stem| EntityId::parse(stem).is_ok())
             else {
                 continue;
             };
-            found
-                .entry(id.to_string())
-                .or_insert_with(|| object.to_string());
+            found.entry(id.to_string()).or_insert(entry.object);
         }
     }
     Ok(found)
@@ -4867,9 +5337,11 @@ fn maintain(
                         claim::delete(&repo.corpus, id)?;
                         report.pruned.push(claim::claim_ref(id));
                     } else {
-                        report
-                            .findings
-                            .push(Finding::signal(id, "orphan ref: no such task"));
+                        report.findings.push(Finding::signal(
+                            Kind::OrphanRef,
+                            id,
+                            "orphan ref: no such task",
+                        ));
                     }
                 }
                 // Unable to ask is not permission to delete: report once and
@@ -4908,6 +5380,7 @@ fn maintain(
         } else if matches!(record, Record::Completed(_)) {
             // Not a corpus anomaly: a branch never merged. The answer is human.
             report.findings.push(Finding::signal(
+                Kind::Unmerged,
                 id,
                 format!("finished on another branch, {default_branch} has not caught up"),
             ));
@@ -4915,6 +5388,7 @@ fn maintain(
     }
     if let Some(branch) = unreachable_branch {
         report.findings.push(Finding::signal(
+            Kind::DefaultBranchEmpty,
             "coordination",
             format!("{branch} carries no commit yet: nothing pruned, nothing judged"),
         ));
@@ -4960,9 +5434,11 @@ fn maintain_proofs(
                     claim::delete_at(&repo.corpus, &claim::proof_ref(id))?;
                     report.pruned.push(claim::proof_ref(id));
                 } else {
-                    report
-                        .findings
-                        .push(Finding::signal(id, "orphan proof ref: no such task"));
+                    report.findings.push(Finding::signal(
+                        Kind::OrphanRef,
+                        id,
+                        "orphan proof ref: no such task",
+                    ));
                 }
             }
             continue;
@@ -5012,7 +5488,8 @@ fn archived_against_head(repo: &Repo, paths: &[String]) -> (BTreeSet<String>, BT
     let Ok(Some(listing)) = git::file_at(&repo.corpus, "HEAD", &dir) else {
         return none;
     };
-    // `<mode> SP <type> SP <object>TAB<name>`, as [`corpus_at`] reads it.
+    // `<mode> SP <type> SP <object>TAB<name>`, git's tree format as `cat-file
+    // -p` prints it.
     let mut at_head: HashMap<String, String> = HashMap::new();
     for line in listing.lines() {
         let Some((meta, name)) = line.split_once('\t') else {
@@ -5157,6 +5634,7 @@ fn render(report: &Report, inv: &Invocation, out: &mut dyn Write) {
                 };
                 Obj::new()
                     .str("level", level)
+                    .str("kind", f.kind.as_str())
                     .str("subject", &f.subject.to_string())
                     .str("message", &f.message)
                     .strings("note", &f.note)
@@ -5247,7 +5725,7 @@ pub fn review(
     // about the corpus's size, not about asking git the same question twice).
     let files = &report.files;
     // Who may ratify, read here because nowhere else serves it: `.ank/` is
-    // closed to a direct read (ADR-e45e1a29fe91) and `allowed_signers` is not
+    // closed to a direct read (ADR-3c8d94a0bbe0) and `allowed_signers` is not
     // an entity, so before this the one file the format asks a human to edit by
     // hand was the one file no verb could show (TASK-8a80b590b356). It belongs
     // on this verb rather than on a new one: §4 calls `review` the ratification
@@ -5317,6 +5795,10 @@ pub fn review(
 
     let mut dead: Vec<String> = dead.into_iter().collect();
     dead.sort();
+    // Counted as `check` prints them, a folded kind as the one signal it is
+    // (ADR-df1035934387), and only once the dead scopes above were read one
+    // by one: a fold names five, and this section names every one.
+    let report = report.folded();
 
     if inv.json() {
         let items: Vec<String> = live
@@ -6560,7 +7042,6 @@ fn ratification_of(repo: &Repo, view: &Anchored) -> Option<git::Ratification> {
 pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<Signature> {
     let view = of.into();
     let declared = declared_signers(repo);
-    let signers = repo.ank.join("allowed_signers");
 
     // Nothing declared is not "signed by nobody": it is the advisory mode §8
     // describes, already reported once by `check_signers`, and there is no
@@ -6568,11 +7049,13 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
     // reports `N` for a perfectly signed commit when `gpg.format` is ssh and no
     // allowed-signers file is configured, so a corpus with no file would have
     // every ratification called unsigned.
-    if declared.is_empty() || !signers.is_file() {
+    if declared.is_empty() {
         return None;
     }
 
-    let sha = ratification_of(repo, &view)?.sha;
+    let ratification = ratification_of(repo, &view)?;
+    let sha = ratification.sha;
+    let committed = ratification.committed;
 
     // **The verdict already reached for this commit, under this allowlist**
     // (TASK-dbef284a166c). gpg is 4.0 of the 7.1 seconds `check` costs on this
@@ -6592,7 +7075,7 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
             fingerprint,
         };
         let carries = facts.status == 'N' && commit_carries_signature(&repo.corpus, &sha);
-        return Some(classify_signature(&facts, &declared, carries));
+        return Some(classify_signature(&facts, &declared, carries, committed));
     }
 
     // The file git is pointed at, which is the reviewed one unless it carries
@@ -6605,11 +7088,9 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
     // verdict `check_adr` says nothing about — so a machine where the signature
     // could not be read looked exactly like a corpus that declared no key at
     // all (TASK-c92b7cc10f13). Failing to ask has to survive as an answer.
-    let for_git = signers_for_git(&signers);
-    let handed = for_git
-        .as_ref()
-        .map_or(signers.as_path(), SignersForGit::path);
-    match git::signature_of(&repo.corpus, &sha, Some(handed)) {
+    let for_git = signers_for_git(&allowed_signers_for_git(&declared));
+    let handed = for_git.as_ref().map(SignersForGit::path);
+    match git::signature_of(&repo.corpus, &sha, handed) {
         Ok(facts) => {
             signature_cache(repo, |index, key| {
                 index.remember_signature(&sha, key, facts.status, &facts.fingerprint);
@@ -6617,7 +7098,7 @@ pub fn signature_state<'a>(repo: &Repo, of: impl Into<Anchored<'a>>) -> Option<S
             // Asked only where the answer can change the verdict: every other
             // status already says whether a signature was there.
             let carries = facts.status == 'N' && commit_carries_signature(&repo.corpus, &sha);
-            Some(classify_signature(&facts, &declared, carries))
+            Some(classify_signature(&facts, &declared, carries, committed))
         }
         Err(e) => Some(Signature::Unreadable {
             reason: e.to_string(),
@@ -6675,9 +7156,20 @@ fn signature_cache<T>(repo: &Repo, with: impl FnOnce(&Index, &str) -> T) -> Opti
         static OPEN: std::cell::RefCell<HashMap<PathBuf, Index>> =
             std::cell::RefCell::new(HashMap::new());
     }
-    let text = std::fs::read(repo.ank.join("allowed_signers")).ok()?;
+    // What is hashed is every declared key with its date, rendered: a git
+    // verdict only depends on what git is handed, and a gpg key's
+    // `valid_before` is judged after the cache, against the commit's date.
+    let text: String = declared_signers(repo)
+        .iter()
+        .map(|s| {
+            format!(
+                "{} {} {} {:?}\n",
+                s.principal, s.keytype, s.key, s.valid_before
+            )
+        })
+        .collect();
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
-    sha2::Digest::update(&mut hasher, &text);
+    sha2::Digest::update(&mut hasher, text.as_bytes());
     // **The signing configuration is in the key too**, and a test that already
     // existed is what said it had to be: `gpg.format` set to something git
     // cannot use turns a readable signature into one it refuses to answer
@@ -7496,6 +7988,28 @@ pub fn amend(
     // the one `check` reports as naming nothing.
     let add_amends = crate::commands::amends_of(inv, &store)?;
     let drop_amends = parse_all(inv.values("--drop-amends"), "--drop-amends", &id)?;
+    // What holds an ADR (ADR-25584c56c1a7): one added is refused on its shape,
+    // in the words `new` uses, and the tree is not asked; one dropped is
+    // matched against what the ADR stores, since the entry worth dropping is
+    // the one `check` reports as naming nothing. Both have their path
+    // normalised, as `--scope` and `--drop-scope` do, so a dropped entry typed
+    // the way the shell completed it still matches what was stored; one that
+    // is not `<path>#<symbol>` is matched as typed, so a malformed entry
+    // written by hand can still be dropped.
+    let add_enforced =
+        crate::commands::enforced_by_of(inv, repo, &format!("ank amend {prefix} --enforced-by"))?;
+    let mut drop_enforced: Vec<String> = Vec::new();
+    for raw in inv.values("--drop-enforced-by") {
+        let raw = raw.trim();
+        drop_enforced.push(match ank_core::split_enforcement(raw) {
+            Some(_) => crate::commands::enforcement_entry(
+                raw,
+                repo,
+                &format!("ank amend {prefix} --drop-enforced-by"),
+            )?,
+            None => raw.to_string(),
+        });
+    }
 
     if add_scope.is_empty()
         && drop_scope.is_empty()
@@ -7507,6 +8021,8 @@ pub fn amend(
         && drop_refs.is_empty()
         && add_amends.is_empty()
         && drop_amends.is_empty()
+        && add_enforced.is_empty()
+        && drop_enforced.is_empty()
         && criteria.is_none()
         && method.is_none()
     {
@@ -7516,7 +8032,8 @@ pub fn amend(
                     "ank amend {id} --blocked-by <id> | --drop-blocked-by <id> | \
                  --scope <glob> | --drop-scope <glob> | --criteria \"<c>\" | \
                  --method <name> | --reference <id> | --drop-reference <id> | \
-                 --amends <id> | --drop-amends <id>"
+                 --amends <id> | --drop-amends <id> | \
+                 --enforced-by <path>#<symbol> | --drop-enforced-by <path>#<symbol>"
                 ),
             ),
         );
@@ -7546,6 +8063,18 @@ pub fn amend(
         return Err(CliError::new(
             ExitCode::Generic,
             format!("amends applies to an ADR: a {kind} is not a decision, and amends none"),
+        )
+        .with_hint(format!("ank show {id}")));
+    }
+    if !matches!(loaded.entity, Entity::Adr(_))
+        && !(add_enforced.is_empty() && drop_enforced.is_empty())
+    {
+        let kind = ank_core::Fields::kind_spec(&loaded.entity).name;
+        return Err(CliError::new(
+            ExitCode::Generic,
+            format!(
+                "enforced_by applies to an ADR: a {kind} is not a rule, and nothing enforces it"
+            ),
         )
         .with_hint(format!("ank show {id}")));
     }
@@ -7780,7 +8309,9 @@ pub fn amend(
             // on a spec: `amends` is neither the constraint nor the scope, so
             // the anchor does not cover it, and the repair `check` names for
             // an amends gone wrong fires on accepted amendments above all
-            // (TASK-0e8f4ed12897).
+            // (TASK-0e8f4ed12897). `enforced_by` is outside it on the same
+            // terms, and that is what lets a settled rule declare what already
+            // holds it without a supersession (ADR-25584c56c1a7).
             let touches_anchor = !add_scope.is_empty() || !drop_scope.is_empty();
             if touches_anchor && adr.status != AdrStatus::Proposed {
                 return Err(CliError::new(
@@ -7800,6 +8331,13 @@ pub fn amend(
                 &mut adr.amends,
                 &add_amends,
                 &drop_amends,
+                &id,
+                &mut changes,
+            )?;
+            amend_enforced_by(
+                &mut adr.enforced_by,
+                &add_enforced,
+                &drop_enforced,
                 &id,
                 &mut changes,
             )?;
@@ -8024,6 +8562,38 @@ fn amend_amends(
     }
     for a in drop {
         changes.push(format!("-amends {a}"));
+    }
+    Ok(())
+}
+
+/// The `enforced_by` half, on the terms [`amend_amends`] states: add and
+/// remove, an absent entry refused rather than ignored, and an empty list an
+/// ordinary ADR nothing is declared to hold.
+fn amend_enforced_by(
+    enforced_by: &mut Vec<String>,
+    add: &[String],
+    drop: &[String],
+    id: &EntityId,
+    changes: &mut Vec<String>,
+) -> Result<()> {
+    for e in drop {
+        if !enforced_by.contains(e) {
+            return Err(CliError::new(
+                ExitCode::Prerequisite,
+                format!("{id} is not enforced by {e}"),
+            )
+            .with_hint(format!("ank show {id}")));
+        }
+    }
+    enforced_by.retain(|e| !drop.contains(e));
+    for e in add {
+        if !enforced_by.contains(e) {
+            changes.push(format!("+enforced_by {e}"));
+            enforced_by.push(e.clone());
+        }
+    }
+    for e in drop {
+        changes.push(format!("-enforced_by {e}"));
     }
     Ok(())
 }
@@ -9111,6 +9681,8 @@ mod tests {
                     criteria: None,
                     verifier: None,
                     via: Some(ProofVia::Submitted),
+                    reused: None,
+                    by: None,
                 }]
             } else {
                 vec![]
@@ -9133,6 +9705,7 @@ mod tests {
             scope: scope.iter().map(|s| s.to_string()).collect(),
             constraint: "A binding rule.\n".into(),
             see: None,
+            enforced_by: Vec::new(),
             amends: Vec::new(),
             supersedes: None,
             ratified: None,
@@ -9148,6 +9721,71 @@ mod tests {
             .findings
             .iter()
             .any(|f| f.level == level && f.message.contains(needle))
+    }
+
+    // -----------------------------------------------------------------------
+    // the fold (ADR-df1035934387)
+    // -----------------------------------------------------------------------
+
+    /// `n` findings of one kind, one per task, on a corpus of `hot` files.
+    fn firing(level: Level, n: usize, hot: usize) -> Report {
+        let findings = (0..n)
+            .map(|i| {
+                let id = format!("TASK-{i:012x}");
+                match level {
+                    Level::Fault => Finding::fault(Kind::NoProof, id, "done with no proof"),
+                    Level::Signal => Finding::signal(Kind::ReadByNoHuman, id, "read by no human"),
+                }
+            })
+            .collect();
+        Report {
+            findings,
+            hot_files: hot,
+            ..Report::default()
+        }
+    }
+
+    #[test]
+    fn the_threshold_is_five_percent_capped_at_twenty_and_never_under_five() {
+        let at = |hot| firing(Level::Signal, 0, hot).fold_threshold();
+        assert_eq!(at(0), 5, "a fold names five, so five or fewer never fold");
+        assert_eq!(at(87), 5);
+        assert_eq!(at(200), 10);
+        assert_eq!(at(400), 20);
+        assert_eq!(at(1145), 20);
+    }
+
+    #[test]
+    fn five_entities_on_a_small_corpus_stay_and_six_fold() {
+        let five = firing(Level::Signal, 5, 10).folded();
+        assert_eq!(five.findings.len(), 5, "{:?}", five.findings);
+
+        let six = firing(Level::Signal, 6, 10).folded();
+        assert_eq!(six.signals(), 1, "{:?}", six.findings);
+        let f = &six.findings[0];
+        assert_eq!(
+            (f.kind, f.subject.as_str()),
+            (Kind::ReadByNoHuman, "corpus")
+        );
+        assert!(f.message.contains("6 entities"), "{}", f.message);
+        assert!(f.message.contains("TASK-000000000004 ..."), "{}", f.message);
+        assert!(!f.message.contains("TASK-000000000005"), "{}", f.message);
+        assert_eq!(
+            f.note,
+            ["ank check --kind read-by-no-human lists every one"]
+        );
+    }
+
+    #[test]
+    fn a_fault_and_a_subject_that_is_no_entity_are_never_folded() {
+        let faults = firing(Level::Fault, 30, 10).folded();
+        assert_eq!(faults.faults(), 30);
+
+        let mut r = firing(Level::Signal, 0, 10);
+        r.findings = (0..30)
+            .map(|i| Finding::signal(Kind::UnservedRef, format!("refs/ank/x{i}"), "unserved"))
+            .collect();
+        assert_eq!(r.folded().signals(), 30, "a ref name is not an entity");
     }
 
     // -----------------------------------------------------------------------
@@ -9615,6 +10253,8 @@ mod tests {
                 criteria: None,
                 verifier: None,
                 via: Some(ProofVia::Submitted),
+                reused: None,
+                by: None,
             }];
         }
         t.write(&weak);
@@ -9650,6 +10290,8 @@ mod tests {
                 criteria: None,
                 verifier: None,
                 via: None,
+                reused: None,
+                by: None,
             }
         }
         fn with_proofs(id: &str, proofs: Vec<Proof>) -> Entity {
@@ -9874,6 +10516,8 @@ mod tests {
                 criteria: None,
                 verifier: Some("cargo-test@000000000000".into()),
                 via: Some(ProofVia::Verifier),
+                reused: None,
+                by: None,
             }];
         }
         t.write(&done);
@@ -10438,152 +11082,61 @@ mod tests {
     // The signature on the ratification commit (TASK-d31af22248d9)
     // -----------------------------------------------------------------------
 
-    /// The shape the file actually uses, which is git's: principal, then the
-    /// key, with anything optional allowed to sit between them.
+    /// What git is handed is generated from `signers:`: the ssh keys in
+    /// git's layout, a `valid_before` as git's `valid-before` option, and no
+    /// `gpg` key, which ssh-keygen has no keytype for (TASK-01cc22478782).
     #[test]
-    fn allowed_signers_is_read_as_git_writes_it() {
-        let parsed = parse_signers(
-            "# a comment\n\
-             \n\
-             sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n\
-             marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3NzaC1lZDI1\n\
-             nonsense\n",
-        );
-        assert_eq!(parsed.len(), 2, "{parsed:?}");
-        assert_eq!(parsed[0].keytype, "gpg");
-        assert_eq!(parsed[0].key, "739A603FB05F9F2F7D3C8D50624FCFCC1482554A");
+    fn git_is_handed_the_ssh_keys_with_their_valid_before_and_no_gpg_key() {
+        let declared = vec![
+            Signer {
+                principal: "sean@example.com".into(),
+                keytype: "gpg".into(),
+                key: "739A603FB05F9F2F7D3C8D50624FCFCC1482554A".into(),
+                note: Some("release key".into()),
+                valid_before: None,
+            },
+            Signer {
+                principal: "marie@laptop".into(),
+                keytype: "ssh-ed25519".into(),
+                key: "AAAAC3NzaC1lZDI1".into(),
+                note: None,
+                valid_before: Some("2026-10-01".into()),
+            },
+            Signer {
+                principal: "marie@laptop".into(),
+                keytype: "ssh-ed25519".into(),
+                key: "AAAAC3Other".into(),
+                note: Some("a note is never handed on".into()),
+                valid_before: None,
+            },
+        ];
         assert_eq!(
-            parsed[1].keytype, "ssh-ed25519",
-            "the option in the middle must not be mistaken for the key type"
+            allowed_signers_for_git(&declared),
+            "marie@laptop valid-before=\"20261001\" ssh-ed25519 AAAAC3NzaC1lZDI1\n\
+             marie@laptop ssh-ed25519 AAAAC3Other\n"
         );
-        assert_eq!(parsed[1].key, "AAAAC3NzaC1lZDI1");
     }
 
-    /// **A public key carries a comment, and that is the line everybody
-    /// writes** (TASK-8a80b590b356).
-    ///
-    /// `ssh-keygen` puts one at the end of `id_ed25519.pub`, and declaring a
-    /// signer is pasting that line after a principal. Read from the end, the
-    /// four fields made the base64 the key type and the comment the key; the
-    /// golden corpus, whose fixture generates a key with `-C "ank test"`, is
-    /// where it surfaced the moment `review` printed a type at all.
-    ///
-    /// A comment with a space in it is the case that matters, since it is two
-    /// fields and not one: a rule that only skipped a single trailing field
-    /// would pass this test's first half and fail here.
+    /// The fingerprint `check` computes for an ssh key is the one git prints,
+    /// measured with `ssh-keygen -lf` on 2026-10-15.
     #[test]
-    fn a_trailing_comment_is_not_the_key_and_its_key_is_not_the_type() {
-        let parsed = parse_signers(
-            "test@ank.local ssh-ed25519 AAAAC3NzaC1lZDI1 ank test
-             sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A a note
-             marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3Other marie@laptop
-",
-        );
-        assert_eq!(parsed.len(), 3, "{parsed:?}");
-        assert_eq!(parsed[0].keytype, "ssh-ed25519", "{parsed:?}");
-        assert_eq!(parsed[0].key, "AAAAC3NzaC1lZDI1", "{parsed:?}");
-        assert_eq!(parsed[1].keytype, "gpg", "{parsed:?}");
+    fn an_ssh_fingerprint_is_the_one_ssh_keygen_prints() {
         assert_eq!(
-            parsed[1].key, "739A603FB05F9F2F7D3C8D50624FCFCC1482554A",
-            "a fingerprint read as a comment is a fingerprint `declares` can              never match: {parsed:?}"
+            ssh_fingerprint("AAAAC3NzaC1lZDI1NTE5AAAAIOOLkBf5BY1ONWnxBxDOvYuLQyiQZFk2blyflwOvTqGp")
+                .as_deref(),
+            Some("SHA256:dzdOzasfxk3FuGnj+BaOfZnZy2vyhQ13iU7x3lGSEN4")
         );
-        assert_eq!(parsed[2].keytype, "ssh-ed25519", "{parsed:?}");
-        assert_eq!(parsed[2].key, "AAAAC3Other", "{parsed:?}");
+        assert_eq!(ssh_fingerprint("not base64!"), None);
     }
 
-    /// The filter git is handed reads the entry the same way, so a `gpg` line
-    /// with a comment is still withheld from ssh-keygen.
-    ///
-    /// Read from the end, that line's type was the fingerprint, `gpg` matched
-    /// nothing, and the entry went to a parser with no keytype for it -- which
-    /// is exactly the state TASK-01cc22478782 closed and a comment quietly
-    /// reopened.
+    /// The file handed to git is scratch: it holds what it was given, and it
+    /// lives for the git call it was written for and no longer
+    /// (TASK-02350943e2b1).
     #[test]
-    fn a_gpg_entry_with_a_comment_is_still_withheld_from_ssh_keygen() {
-        let handed = git_readable_signers(
-            "sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A a note
-             test@ank.local ssh-ed25519 AAAAC3NzaC1lZDI1 ank test
-",
-        );
-        assert!(!handed.contains("gpg"), "{handed}");
-        assert!(handed.contains("ssh-ed25519"), "{handed}");
-    }
-
-    /// What git is handed carries nothing ssh-keygen would reject, and carries
-    /// everything ssh-keygen would accept unchanged (TASK-01cc22478782).
-    ///
-    /// The `gpg` entry is ank's own extension and the reason the filter exists.
-    /// The line with an option in the middle is the reason it filters rather
-    /// than re-renders: `parse_signers` drops that option, so a copy built from
-    /// what it returns would hand git a permission the reviewed file does not
-    /// grant.
-    #[test]
-    fn git_is_handed_no_line_ssh_keygen_would_reject() {
-        let source = "# a comment\n\
-             \n\
-             sean@example.com gpg 739A603FB05F9F2F7D3C8D50624FCFCC1482554A\n\
-             marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3NzaC1lZDI1\n\
-             nonsense\n";
-        let out = git_readable_signers(source);
-
-        for line in out.lines() {
-            let t = line.trim();
-            if t.is_empty() || t.starts_with('#') {
-                continue;
-            }
-            let fields: Vec<&str> = t.split_whitespace().collect();
-            assert!(
-                matches!(fields.as_slice(), [_, .., keytype, _] if !keytype.eq_ignore_ascii_case("gpg")),
-                "ssh-keygen has no keytype for this line: {line:?}"
-            );
-        }
-        assert!(
-            !out.contains("739A603FB05F9F2F7D3C8D50624FCFCC1482554A"),
-            "the gpg entry is ank's own and git cannot read it: {out:?}"
-        );
-        assert!(
-            out.contains("marie@laptop namespaces=\"git\" ssh-ed25519 AAAAC3NzaC1lZDI1"),
-            "an entry git can read survives whole, options included: {out:?}"
-        );
-        assert!(
-            !out.contains("nonsense"),
-            "a line neither parser can read is not handed on: {out:?}"
-        );
-        assert!(out.contains("# a comment"), "{out:?}");
-    }
-
-    /// The other half, and the one that says the filter costs nothing where it
-    /// is not needed: a file git can read whole is handed to git as itself, so
-    /// what verifies the corpus is the file under review and not a copy.
-    #[test]
-    fn a_file_git_can_read_whole_is_handed_over_untouched() {
+    fn the_file_handed_to_git_is_scratch() {
         let source = "marie@laptop ssh-ed25519 AAAAC3NzaC1lZDI1\n";
-        assert_eq!(git_readable_signers(source), source);
-
-        let dir = std::env::temp_dir().join(format!("ank-signers-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("allowed_signers");
-        std::fs::write(&file, source).unwrap();
-        assert_eq!(
-            signers_for_git(&file).unwrap().path(),
-            file.as_path(),
-            "no copy is written when none is needed"
-        );
-
-        std::fs::write(&file, format!("sean@example.com gpg 739A60\n{source}")).unwrap();
-        let handed = signers_for_git(&file).unwrap();
-        assert_ne!(
-            handed.path(),
-            file,
-            "a file carrying an ank-only entry needs a copy"
-        );
+        let handed = signers_for_git(source).unwrap();
         assert_eq!(std::fs::read_to_string(handed.path()).unwrap(), source);
-
-        // And the copy is scratch: it lives for the git call it was written
-        // for and no longer (TASK-02350943e2b1). It is not inside `dir` — it
-        // is named after its own content, in the temporary directory — so
-        // removing the directory this test made would never have reached it,
-        // which is how twenty of them came to stand beside the suite's root.
         let copy = handed.path().to_path_buf();
         drop(handed);
         assert!(
@@ -10591,8 +11144,6 @@ mod tests {
             "the copy outlived the value that owned it: {}",
             copy.display()
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn gpg_signer(key: &str) -> Vec<Signer> {
@@ -10600,6 +11151,8 @@ mod tests {
             principal: "sean@example.com".into(),
             keytype: "gpg".into(),
             key: key.into(),
+            note: None,
+            valid_before: None,
         }]
     }
 
@@ -10621,34 +11174,35 @@ mod tests {
         let declared = gpg_signer(fp);
 
         assert_eq!(
-            classify_signature(&facts('G', fp), &declared, false),
+            classify_signature(&facts('G', fp), &declared, false, None),
             Signature::Trusted
         );
         assert_eq!(
-            classify_signature(&facts('N', ""), &declared, false),
+            classify_signature(&facts('N', ""), &declared, false, None),
             Signature::Absent,
             "no signature is the forgery this check exists for"
         );
         assert_eq!(
-            classify_signature(&facts('N', ""), &declared, true),
+            classify_signature(&facts('N', ""), &declared, true, None),
             Signature::Unchecked,
             "the same letter over a commit that does carry a signature is a \
              machine that could not look, not a forgery"
         );
         assert_eq!(
-            classify_signature(&facts('E', fp), &declared, false),
+            classify_signature(&facts('E', fp), &declared, false, None),
             Signature::Unchecked,
             "a missing public key must never read as a valid signature"
         );
         assert_eq!(
-            classify_signature(&facts('B', fp), &declared, false),
+            classify_signature(&facts('B', fp), &declared, false, None),
             Signature::Invalid { status: 'B' }
         );
         assert_eq!(
             classify_signature(
                 &facts('G', "0000000000000000000000000000000000000000"),
                 &declared,
-                false
+                false,
+                None
             ),
             Signature::Undeclared {
                 fingerprint: "0000000000000000000000000000000000000000".into()
@@ -10666,7 +11220,8 @@ mod tests {
             classify_signature(
                 &facts('G', "739A603FB05F9F2F7D3C8D50624FCFCC1482554A"),
                 &declared,
-                false
+                false,
+                None
             ),
             Signature::Trusted
         );
@@ -10679,7 +11234,54 @@ mod tests {
     fn an_untrusted_openpgp_key_is_still_judged_by_the_declaration() {
         let fp = "739A603FB05F9F2F7D3C8D50624FCFCC1482554A";
         assert_eq!(
-            classify_signature(&facts('U', fp), &gpg_signer(fp), false),
+            classify_signature(&facts('U', fp), &gpg_signer(fp), false, None),
+            Signature::Trusted
+        );
+    }
+
+    /// `valid_before` against the committer date, midnight UTC: a commit the
+    /// second before the bound is the key's, the bound itself is not. Under
+    /// OpenPGP, where `check` alone judges it, and under SSH, where git may
+    /// already have said `U` and an older git `G`.
+    #[test]
+    fn a_retired_key_ratifies_nothing_committed_from_its_valid_before() {
+        let fp = "739A603FB05F9F2F7D3C8D50624FCFCC1482554A";
+        let mut declared = gpg_signer(fp);
+        declared[0].valid_before = Some("2026-10-01".into());
+        // 2026-10-01T00:00:00Z
+        let bound = 1_790_812_800;
+        assert_eq!(
+            classify_signature(&facts('G', fp), &declared, false, Some(bound - 1)),
+            Signature::Trusted
+        );
+        assert_eq!(
+            classify_signature(&facts('G', fp), &declared, false, Some(bound)),
+            Signature::Retired {
+                fingerprint: fp.into(),
+                valid_before: "2026-10-01".into()
+            }
+        );
+
+        let ssh_key = "AAAAC3NzaC1lZDI1NTE5AAAAIOOLkBf5BY1ONWnxBxDOvYuLQyiQZFk2blyflwOvTqGp";
+        let ssh_fp = "SHA256:dzdOzasfxk3FuGnj+BaOfZnZy2vyhQ13iU7x3lGSEN4";
+        let ssh = vec![Signer {
+            principal: "marie@laptop".into(),
+            keytype: "ssh-ed25519".into(),
+            key: ssh_key.into(),
+            note: None,
+            valid_before: Some("2026-10-01".into()),
+        }];
+        for status in ['G', 'U'] {
+            assert!(
+                matches!(
+                    classify_signature(&facts(status, ssh_fp), &ssh, false, Some(bound + 3600)),
+                    Signature::Retired { .. }
+                ),
+                "{status}: retired whatever git said"
+            );
+        }
+        assert_eq!(
+            classify_signature(&facts('G', ssh_fp), &ssh, false, Some(bound - 3600)),
             Signature::Trusted
         );
     }
@@ -10694,18 +11296,41 @@ mod tests {
         let ssh = "SHA256:KjhREDTh0GcSpp8doZ/yhLAG62FZ7h26dQTVffo3JFE";
         let unrelated = gpg_signer("739A603FB05F9F2F7D3C8D50624FCFCC1482554A");
         assert_eq!(
-            classify_signature(&facts('G', ssh), &unrelated, false),
+            classify_signature(&facts('G', ssh), &unrelated, false, None),
             Signature::Trusted
         );
         assert!(matches!(
-            classify_signature(&facts('U', ssh), &unrelated, false),
+            classify_signature(&facts('U', ssh), &unrelated, false, None),
             Signature::Undeclared { .. }
         ));
     }
 
-    /// Writes an allowed-signers file, since the fixture has none by default.
-    fn declare(t: &Temp, line: &str) {
-        std::fs::write(t.0.join(".ank").join("allowed_signers"), line).unwrap();
+    /// Declares keys under `signers:`, replacing whatever the block held,
+    /// from lines in git's allowed-signers layout: `principal keytype key`.
+    fn declare(t: &Temp, lines: &str) {
+        let path = t.0.join(".ank").join("config.yml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut text = match text.find("signers:\n") {
+            Some(at) => text[..at].to_string(),
+            None => text,
+        };
+        let mut principals: Vec<(String, Vec<String>)> = Vec::new();
+        for l in lines.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let key = format!("{} {}", f[1], f[2]);
+            match principals.iter_mut().find(|(p, _)| p == f[0]) {
+                Some((_, keys)) => keys.push(key),
+                None => principals.push((f[0].to_string(), vec![key])),
+            }
+        }
+        text.push_str("signers:\n");
+        for (p, keys) in principals {
+            text.push_str(&format!("  {p}:\n    keys:\n"));
+            for k in keys {
+                text.push_str(&format!("      - key: {k}\n"));
+            }
+        }
+        std::fs::write(&path, text).unwrap();
     }
 
     /// The public key `enable_signing` generated, in allowed-signers layout.
@@ -11043,7 +11668,8 @@ mod tests {
         if report.unchecked_signatures > 0 {
             let n = report.unchecked_signatures;
             report.findings.push(Finding::signal(
-                "allowed_signers",
+                Kind::SignatureUnchecked,
+                "signers",
                 format!("{n} ratification signature(s) could not be checked here"),
             ));
         }

@@ -10,12 +10,16 @@ scope:
   - crates/ank-cli/**
 constraint: |
   ank edit accepts the content field it changes by name and writes only what is named. With no field named it opens EDITOR exactly as it did, which remains the road for an edit touching several fields or none in particular. A named edit is refused on the states the editor path is refused on and on no others: the surface changes how a change is expressed, never what may be changed. The frozen fields are compared against their anchors on both paths, and the result is parsed before it reaches the corpus on both paths.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#a_named_edit_and_the_editor_meet_the_freeze_in_the_same_words
+  - crates/ank-cli/tests/cli.rs#a_named_edit_writes_only_the_field_it_names
+  - crates/ank-cli/tests/cli.rs#edit_writes_back_what_the_editor_saved_in_canonical_form
 ratified: b5ce23e4b8b7
 verified:
   - by: claude-code/opus-5
     at: 2026-08-21T20:51:39Z
 schema: 3
-version: 2
+version: 3
 ---
 
 `edit` hands `$EDITOR` a scratch copy and reads back text. It therefore knows

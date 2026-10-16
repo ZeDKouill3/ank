@@ -7,8 +7,8 @@
 //! and two on key lines cut with `~` before they finished -- and the two lines
 //! teaching the keys did not fit on the screen they were taught from. The
 //! answer was to take the offer out of the frame and put it behind a
-//! permanently visible target carved out of the header (ADR-559eebf5c6f5), and
-//! the number it has to hold to afterwards is [`CHROME`].
+//! permanently visible target carved out of the header, and the number
+//! it has to hold to afterwards is [`CHROME`].
 //!
 //! **Counted through the binary, on a pseudo-terminal, at every window the
 //! criterion states.** CLAUDE.md leaves no choice about that: a criterion that
@@ -24,6 +24,7 @@
 use crate::terminal;
 
 use crate::terminal::{Live, Repo};
+use ank_tui::input::Command;
 
 /// The windows the criterion names: the desk, the phone, a tall desk, a phone
 /// with almost nothing left, and a wide one.
@@ -39,11 +40,11 @@ const DESK: (u16, u16) = WINDOWS[0];
 
 /// What the frame may spend on anything that is not the region's own content.
 ///
-/// Four is what it actually spends -- the header's two lines and the rule under
-/// them, and the note band's single row -- and the criterion allows five, which
-/// is one row of slack for a note that has two things to say. The trailer alone
-/// was two rows and the band of targets was one more at this window, so a frame
-/// that had kept either could not pass this.
+/// Five is what it actually spends -- the header's two lines and the rule under
+/// them, the note band's single row, and the key line (TASK-933fdb42c7d9) --
+/// and the budget is five. The trailer alone was two rows and the band of
+/// targets was one more at this window, so a frame that had kept either beside
+/// the key line could not pass this.
 const CHROME: usize = 5;
 
 /// Every character the reader draws the left or right edge of a box with, at
@@ -86,16 +87,16 @@ fn panelled(line: &str, edges: &[char]) -> bool {
 
 /// The frame as the grid it is: exactly the window's rows, blank ones included.
 ///
-/// `split` and never `lines`, because the last row of every frame is the note
-/// band and it is blank at rest -- and `lines` drops the empty piece a trailing
-/// separator leaves behind, which reads as a frame one row short of its window.
+/// `split` and never `lines`, because the note band is blank at rest -- and a
+/// frame is only measurable as rows if every row of it is counted, blank ones
+/// included.
 fn grid(frame: &str) -> Vec<&str> {
     frame.split('\n').collect()
 }
 
 /// **At eighty by twenty-four, with no claim held and the queue never asked
 /// for, at most five rows are not a panel's own content**
-/// (TASK-9a402a54886f, ADR-559eebf5c6f5).
+/// (TASK-9a402a54886f).
 ///
 /// The corpus is the seeded one, which holds no claim and is opened on a
 /// session that never presses the key that asks for the queue -- so what is
@@ -137,20 +138,20 @@ fn the_chrome_at_the_desk_is_a_header_and_a_row() {
     live.quit();
 }
 
-/// **No frame carries the key trailer or the band of targets, at any of the
-/// five windows** (TASK-9a402a54886f).
+/// **Under the region there are two rows at every one of the five windows:
+/// the note band and the key line** (TASK-9a402a54886f, rewritten for
+/// TASK-933fdb42c7d9 against ADR-ac6be1ebe9aa).
 ///
-/// Two things are asserted and they are different failures. The trailer was
-/// rows of key entries under the region, so it is caught by the row budget
-/// above and by the shape of what is left here: everything below the region is
-/// one row. The band of targets was bracketed labels, and it is caught by
-/// the brackets -- the one bracketed thing on a frame at rest is the header's
-/// own target, which is what the band was traded for.
+/// The trailer this replaced was two rows of key entries cut with `~`; the
+/// key line is one row that drops entries from its middle instead, so the
+/// shape is fixed: the note band, then a line that opens on the key list's key
+/// and closes on the key that quits. Every other bracketed thing in the chrome
+/// is one of the header's own targets.
 ///
-/// The label is read out of the reader rather than written here, so a key that
-/// moved moves this with it.
+/// The labels are read out of the reader rather than written here, so a key
+/// that moved moves this with it.
 #[test]
-fn no_frame_carries_the_trailer_or_the_band_at_any_window() {
+fn under_the_region_are_the_note_band_and_the_key_line_at_every_window() {
     let repo = Repo::seeded();
     for window in WINDOWS {
         let live = Live::open(&repo, window.0, window.1);
@@ -170,8 +171,8 @@ fn no_frame_carries_the_trailer_or_the_band_at_any_window() {
                 window.0
             );
         }
-        // Under the region there is one row and it is the note band, blank
-        // because nothing has been said. Two rows of key lines would be here.
+        // Under the region there are two rows: the note band, blank because
+        // nothing has been said, and the key line.
         let edges = edges();
         let last = rows
             .iter()
@@ -179,19 +180,27 @@ fn no_frame_carries_the_trailer_or_the_band_at_any_window() {
             .unwrap_or_else(|| panic!("no region is drawn at {window:?}:\n{frame}"));
         assert_eq!(
             last,
-            rows.len() - 2,
-            "the chrome under the region is not one row at {window:?}:\n{frame}"
+            rows.len() - 3,
+            "the chrome under the region is not two rows at {window:?}:\n{frame}"
         );
         assert!(
-            rows[rows.len() - 1].trim().is_empty(),
-            "the last row of {window:?} is not the blank note band:\n{frame}"
+            rows[rows.len() - 2].trim().is_empty(),
+            "the row over the key line at {window:?} is not the blank note band:\n{frame}"
+        );
+        let keys = rows[rows.len() - 1].trim_end();
+        assert!(
+            keys.starts_with(&entry(Command::Help)) && keys.ends_with(&entry(Command::Quit)),
+            "the last row of {window:?} is not the key line: {keys}\n{frame}"
         );
         // And the only target drawn at rest is the one that opens the key list.
         // Asked of the chrome and not of the region: a listing marks a claim
         // the reader holds with `[held]`, which is a field of a row rather than
         // anything a finger is aimed at.
         let target = help_target();
-        for line in rows.iter().filter(|line| !panelled(line, &edges)) {
+        for line in rows[..rows.len() - 1]
+            .iter()
+            .filter(|line| !panelled(line, &edges))
+        {
             assert!(
                 !line.contains('[') || line.contains(&target),
                 "a target is drawn at rest at {window:?}: {line}\n{frame}"
@@ -203,6 +212,17 @@ fn no_frame_carries_the_trailer_or_the_band_at_any_window() {
         );
         live.quit();
     }
+}
+
+/// One entry of the key line, out of the table that binds the key it names.
+fn entry(command: Command) -> String {
+    let binding =
+        ank_tui::bindings::of_command(&command).expect("a row of the table runs the command");
+    format!(
+        "[{} {}]",
+        ank_tui::bindings::named(binding.key),
+        binding.word
+    )
 }
 
 /// The target the reader opens its key list with, out of the table that binds

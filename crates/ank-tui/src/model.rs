@@ -28,19 +28,19 @@
 //!
 //! **What is ordered here is ordered here and nowhere else.** [`alive_first`]
 //! is the whole of the decision about what a person sees first
-//! (ADR-559eebf5c6f5): the rows arrive from `find` in the CLI's own order and
+//! (ADR-ac6be1ebe9aa): the rows arrive from `find` in the CLI's own order and
 //! leave this file in the reader's, so no renderer downstream has an opinion
 //! about it to keep in step. That is a presentation and not a derived fact --
 //! nothing is invented, dropped or rewritten, and every field is still the
 //! CLI's.
 //!
 //! **What is a row at all is decided here too, and it is a different question**
-//! (ADR-559eebf5c6f5, TASK-3fa4892f17c0). [`listed`] drops the annotations
+//! (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0). [`listed`] drops the annotations
 //! before [`alive_first`] is asked to order anything: a log entry is read under
 //! the entity it annotates, so it is never a row of the list under any filter,
 //! and [`annotates`] is the one rule the filter reads to know which kinds it
 //! may offer. `find` hands this project's own corpus 1550 rows and 1096 of them
-//! are log entries, which is the measurement the decision was taken on.
+//! are log entries.
 //!
 //! [`Detail`] is the other half of the same clause: `show --json` already
 //! carries the entries about an entity, so folding them under it is a field
@@ -102,9 +102,83 @@ pub fn short_of(id: &str) -> String {
 pub struct Claim {
     pub id: String,
     pub holder: String,
+    /// When it was taken, as the record stores it (ADR-ac6be1ebe9aa: a row
+    /// says how long ago). Empty where `status` had no record to read it
+    /// from -- a claim seen on origin alone.
+    pub claimed: String,
     pub expires: String,
+    /// Whether `status` says the lease ran out. Its word and never this
+    /// reader's arithmetic on `expires`: the CLI judges a lapse with a drift
+    /// tolerance on top of the lease, and a screen that compared the date
+    /// itself would call a claim lapsed that `claim` still refuses to take.
+    pub lapsed: bool,
     /// Whether this is the claim the caller of the reader holds.
     pub mine: bool,
+}
+
+impl Claim {
+    /// How long ago it was taken, against `now` in seconds since the epoch:
+    /// `12s ago`, `40m ago`, `5h ago`, `3d ago`. `None` where the record gave
+    /// no readable stamp, which a row leaves blank rather than guessing.
+    pub fn age(&self, now: i64) -> Option<String> {
+        let at = utc(&self.claimed)?;
+        Some(format!("{} ago", span(now - at)))
+    }
+
+    /// What is left of the lease against `now`, or the word `lapsed` when
+    /// `status` said the lease ran out. A live lease whose date has passed
+    /// on this clock reads `0s left`: inside the CLI's tolerance it is still
+    /// live, and the word is `status`'s to say.
+    pub fn lease(&self, now: i64) -> Option<String> {
+        if self.lapsed {
+            return Some("lapsed".to_string());
+        }
+        let until = utc(&self.expires)?;
+        Some(format!("{} left", span(until - now)))
+    }
+}
+
+/// A span of seconds in the largest unit that keeps it a whole number above
+/// zero: seconds under a minute, minutes under an hour, hours under two days,
+/// days after that. Negative spans read as zero.
+fn span(secs: i64) -> String {
+    let secs = secs.max(0);
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 2 * 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
+/// Seconds since the epoch for the one stamp the CLI writes,
+/// `YYYY-MM-DDTHH:MM:SSZ`, or `None` for anything else.
+fn utc(stamp: &str) -> Option<i64> {
+    let (date, time) = stamp.trim().strip_suffix('Z')?.split_once('T')?;
+    let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let mut t = time.split(':').map(|p| p.parse::<i64>().ok());
+    let (hh, mm, ss) = (t.next()??, t.next()??, t.next()??);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days from the civil date, Howard Hinnant's algorithm: exact over the
+    // proleptic Gregorian calendar and free of any table.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
+}
+
+/// The clock a row's spans are measured against, in seconds since the epoch.
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// The corpus as one screen sees it, out of `find` and out of nothing else
@@ -174,7 +248,9 @@ impl Held {
             claims.push(Claim {
                 id: ank::text(held, "id"),
                 holder: identity.clone(),
+                claimed: ank::text(held, "claimed"),
                 expires: ank::text(held, "expires"),
+                lapsed: held.get("lapsed").and_then(|l| l.as_bool()) == Some(true),
                 mine: true,
             });
         }
@@ -182,7 +258,11 @@ impl Held {
             claims.push(Claim {
                 id: ank::text(also, "id"),
                 holder: identity.clone(),
+                claimed: ank::text(also, "claimed"),
                 expires: ank::text(also, "expires"),
+                // Only live claims are listed here: `status` drops a lapsed
+                // one from both lists, so there is no flag to read.
+                lapsed: false,
                 mine: true,
             });
         }
@@ -190,7 +270,11 @@ impl Held {
             claims.push(Claim {
                 id: ank::text(other, "id"),
                 holder: ank::text(other, "holder"),
+                claimed: ank::text(other, "claimed"),
                 expires: ank::text(other, "expires"),
+                // Only live claims are listed here: `status` drops a lapsed
+                // one from both lists, so there is no flag to read.
+                lapsed: false,
                 mine: false,
             });
         }
@@ -286,7 +370,7 @@ impl Snapshot {
 pub const ANNOTATION: &str = "log";
 
 /// Whether a kind annotates an entity rather than being one a list shows
-/// (ADR-559eebf5c6f5, TASK-3fa4892f17c0).
+/// (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0).
 ///
 /// **One predicate and every surface asks it.** A log entry is read under the
 /// entity it annotates, which makes "is this a row" a question with one answer
@@ -299,7 +383,7 @@ pub fn annotates(kind: &str) -> bool {
 }
 
 /// The rows of `find` that a list may show: everything that is not an
-/// annotation (ADR-559eebf5c6f5, TASK-3fa4892f17c0).
+/// annotation (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0).
 ///
 /// **Dropped here rather than filtered downstream**, which is the difference
 /// between a row that is hidden and a row that does not exist. Every listing
@@ -319,7 +403,7 @@ fn listed(results: &[ank::Value]) -> impl Iterator<Item = &ank::Value> {
 }
 
 /// Where a row stands in the order the reader opens on
-/// (ADR-559eebf5c6f5, TASK-b5185df7aa44).
+/// (ADR-ac6be1ebe9aa, TASK-b5185df7aa44).
 ///
 /// Three bands and they are the decision itself: the work that is alive, then
 /// what waits for a ratification, then everything else. Declared in that order
@@ -372,7 +456,7 @@ impl Band {
 }
 
 /// The rows of `find`, in the order the reader shows them
-/// (ADR-559eebf5c6f5, TASK-b5185df7aa44).
+/// (ADR-ac6be1ebe9aa, TASK-b5185df7aa44).
 ///
 /// **What is shown first is chosen here and inherited nowhere.** `find` orders
 /// by identifier -- `ank-cli/src/index.rs`, `ORDER BY id` -- and an identifier
@@ -603,7 +687,7 @@ impl Settings {
     }
 }
 
-/// One log entry, under the entity it annotates (ADR-559eebf5c6f5,
+/// One log entry, under the entity it annotates (ADR-ac6be1ebe9aa,
 /// TASK-3fa4892f17c0).
 ///
 /// The four fields `show --json` gives one, and nothing derived from them. It
@@ -650,7 +734,7 @@ pub struct Detail {
     /// the one wrong answer a reader would act on.
     pub unresolved: Vec<String>,
     /// What has been logged about this entity, in the order it was written
-    /// (ADR-559eebf5c6f5, TASK-3fa4892f17c0).
+    /// (ADR-ac6be1ebe9aa, TASK-3fa4892f17c0).
     ///
     /// **The order is `show`'s and is not re-derived here.** The verb hands the
     /// entries oldest first, which is the order they were written in, and a
@@ -956,6 +1040,66 @@ mod tests {
         assert_eq!(dag, Dag::default());
     }
 
+    /// The stamp the CLI writes, read back to the epoch second, and a span in
+    /// the largest whole unit (TASK-574432893e0f).
+    #[test]
+    fn a_claim_says_its_age_and_its_lease_in_whole_units() {
+        assert_eq!(utc("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(utc("2020-01-01T00:00:00Z"), Some(1_577_836_800));
+        assert_eq!(utc("2026-10-16T09:44:18Z"), Some(1_792_143_858));
+        assert_eq!(utc("2026-10-16"), None);
+        assert_eq!(utc(""), None);
+
+        let claim = Claim {
+            id: "TASK-574432893e0f".to_string(),
+            holder: "someone".to_string(),
+            claimed: "2026-10-16T09:00:00Z".to_string(),
+            expires: "2026-10-16T09:30:00Z".to_string(),
+            lapsed: false,
+            mine: false,
+        };
+        let at = |stamp| utc(stamp).unwrap();
+        assert_eq!(
+            claim.age(at("2026-10-16T09:00:42Z")).as_deref(),
+            Some("42s ago")
+        );
+        assert_eq!(
+            claim.age(at("2026-10-16T09:05:00Z")).as_deref(),
+            Some("5m ago")
+        );
+        assert_eq!(
+            claim.age(at("2026-10-17T08:00:00Z")).as_deref(),
+            Some("23h ago")
+        );
+        assert_eq!(
+            claim.age(at("2026-10-19T09:00:00Z")).as_deref(),
+            Some("3d ago")
+        );
+        assert_eq!(
+            claim.lease(at("2026-10-16T09:05:00Z")).as_deref(),
+            Some("25m left")
+        );
+        // Past the date on this clock and not lapsed by `status`'s account:
+        // the CLI's tolerance has not run out, and the word is not ours.
+        assert_eq!(
+            claim.lease(at("2026-10-16T09:31:00Z")).as_deref(),
+            Some("0s left")
+        );
+        let lapsed = Claim {
+            lapsed: true,
+            ..claim.clone()
+        };
+        assert_eq!(
+            lapsed.lease(at("2026-10-16T09:05:00Z")).as_deref(),
+            Some("lapsed")
+        );
+        let unread = Claim {
+            claimed: String::new(),
+            ..claim
+        };
+        assert_eq!(unread.age(0), None);
+    }
+
     const ENTITY: &str = "---\nid: TASK-49746735127f\ntype: task\ntitle: A title\nscope:\n  - crates/ank-tui/**\n  - crates/ank-cli/src/cli.rs\nblocked_by: [TASK-8108e3771ba0]\nschema: 4\n---\n\nThe body.\n";
 
     #[test]
@@ -1058,7 +1202,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // The order the reader opens on (TASK-b5185df7aa44, ADR-559eebf5c6f5)
+    // The order the reader opens on (TASK-b5185df7aa44, ADR-ac6be1ebe9aa)
     // -----------------------------------------------------------------------
 
     /// One row of `find --json`, with the four fields the order is read from.
@@ -1260,7 +1404,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // What is a row at all (TASK-3fa4892f17c0, ADR-559eebf5c6f5)
+    // What is a row at all (TASK-3fa4892f17c0, ADR-ac6be1ebe9aa)
     // -----------------------------------------------------------------------
 
     /// **No entity of kind log is a row**, whatever band its status would have

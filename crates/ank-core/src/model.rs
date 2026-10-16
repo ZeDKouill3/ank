@@ -340,6 +340,15 @@ pub struct Proof {
     /// How the entry arrived. `None` means it predates the field (§3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<ProofVia>,
+    /// Where a result `done` reused rather than ran came from: `local`, the
+    /// run registry under the git common directory (ADR-a2faf59f6ce0).
+    /// `None` is an entry produced by an execution for this task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused: Option<String>,
+    /// The identity of the run a reused entry was taken from, which is not
+    /// necessarily the one that recorded the entry. Present with `reused`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
 
 impl Proof {
@@ -518,6 +527,35 @@ impl Task {
     }
 }
 
+/// An `enforced_by` entry split into its path and its symbol, or `None` when
+/// it is not `<path>#<symbol>` (ADR-25584c56c1a7).
+///
+/// Split on the last `#`, so a path carrying one still reads, and refused when
+/// either half is empty or holds whitespace: an entry is confronted with a
+/// tracked file and a symbol it contains, and a blank half names neither.
+pub fn split_enforcement(entry: &str) -> Option<(&str, &str)> {
+    let (path, symbol) = entry.rsplit_once('#')?;
+    let blank = |s: &str| s.is_empty() || s.chars().any(char::is_whitespace);
+    (!blank(path) && !blank(symbol)).then_some((path, symbol))
+}
+
+#[cfg(test)]
+mod enforcement_tests {
+    use super::split_enforcement;
+
+    #[test]
+    fn an_entry_is_a_path_and_a_symbol() {
+        assert_eq!(
+            split_enforcement("crates/x/tests/a.rs#name"),
+            Some(("crates/x/tests/a.rs", "name"))
+        );
+        assert_eq!(split_enforcement("a#b#c"), Some(("a#b", "c")));
+        for bad in ["a.rs", "#name", "a.rs#", "a rs#name", "a.rs#na me", ""] {
+            assert_eq!(split_enforcement(bad), None, "{bad:?}");
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Adr {
     pub id: EntityId,
@@ -530,6 +568,14 @@ pub struct Adr {
     pub scope: Vec<String>,
     pub constraint: String,
     pub see: Option<String>,
+    /// What holds the rule mechanically, as `<path>#<symbol>` entries
+    /// (ADR-25584c56c1a7): a tracked file and a symbol it contains.
+    ///
+    /// Outside the ratification anchor, which covers `constraint` and `scope`
+    /// alone, so it is written on an accepted ADR as on a proposed one. It
+    /// confers nothing: the rule binds whether or not something enforces it,
+    /// and what changes is how `context` serves it, by its title.
+    pub enforced_by: Vec<String>,
     /// The ADRs this one changes in part (ADR-9ee76b578257).
     ///
     /// A declared field and never a sentence, for the reason a spec's

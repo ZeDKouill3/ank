@@ -15,12 +15,16 @@ constraint: |
   check reports the same condition as a fault, over the same walk, so a corpus can be judged without cargo and on any platform. One implementation answers both: the verb and the verifier never disagree about whether a citation is stale.
   
   A citation naming a proposed successor is not a defect and is never reported as one. It is the state this refusal exists to produce: it is honest, because ank show reports that document as proposed, and it becomes correct at the signature that follows -- where a citation of the retired document becomes wrong at that same instant.
+enforced_by:
+  - crates/ank-cli/tests/cli.rs#accept_refuses_a_supersession_the_workspace_still_cites
+  - crates/ank-cli/tests/cli.rs#check_reports_a_stale_citation_where_no_cargo_test_reaches
+  - crates/ank-cli/tests/cli.rs#a_citation_of_a_proposed_successor_is_reported_by_neither
 ratified: 67e3a44bb66f
 verified:
   - by: haksolot@vmi3223161
     at: 2026-08-26T00:07:29Z
 schema: 4
-version: 3
+version: 4
 ---
 
 `accept` already computes this. It walks the tracked files, skips every `.ank/`

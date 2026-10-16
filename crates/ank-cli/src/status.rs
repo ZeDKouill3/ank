@@ -749,7 +749,8 @@ fn corpus_verdict(
     let report = human::inspect_with(repo, cfg, None, false, origin)?;
     let verdict = Verdict {
         faults: report.faults(),
-        signals: report.signals(),
+        // A folded kind is one signal, as `check` prints it (ADR-df1035934387).
+        signals: report.clone().folded().signals(),
         unmerged: report
             .findings
             .iter()

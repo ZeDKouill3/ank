@@ -144,6 +144,17 @@ pub fn new(
                     "ank new adr --title \"<t>\" --scope \"<glob>\" --constraint \"<rule>\" --amends \"<adr>\"",
                 ));
             }
+            // Only a rule is enforced, and a task is the work done under one
+            // (ADR-25584c56c1a7).
+            if !inv.values("--enforced-by").is_empty() {
+                return Err(CliError::new(
+                    ExitCode::Generic,
+                    "--enforced-by applies to an ADR: a task is work, and only a rule is enforced",
+                )
+                .with_hint(
+                    "ank new adr --title \"<t>\" --scope \"<glob>\" --constraint \"<rule>\" --enforced-by \"<path>#<symbol>\"",
+                ));
+            }
             // A task has no `constraint` either: the rule is what an ADR is
             // for, and a task is the work done under it.
             if inv.value("--constraint").is_some() {
@@ -270,6 +281,7 @@ pub fn new(
                 scope,
                 constraint: ensure_newline(&constraint),
                 see: None,
+                enforced_by: enforced_by_of(inv, repo, "ank new adr --enforced-by")?,
                 ratified: None,
                 // A reading is recorded by whoever reads, never by `new` (§3).
                 verified: Vec::new(),
@@ -402,6 +414,13 @@ fn reject_foreign_flags(inv: &Invocation, kind: EntityKind) -> Result<()> {
         return Err(CliError::new(
             ExitCode::Generic,
             "--amends applies to an ADR: a spec describes, and only a decision amends a decision",
+        )
+        .with_hint(hint));
+    }
+    if !inv.values("--enforced-by").is_empty() {
+        return Err(CliError::new(
+            ExitCode::Generic,
+            "--enforced-by applies to an ADR: a spec describes, and only a rule is enforced",
         )
         .with_hint(hint));
     }
@@ -551,6 +570,7 @@ fn skeleton(
                 .map(ensure_newline)
                 .unwrap_or_default(),
             see: None,
+            enforced_by: Vec::new(),
             supersedes: None,
             ratified: None,
             // A reading is recorded by whoever reads, never by `new` (§3).
@@ -924,8 +944,8 @@ fn resolve_blockers(store: &Store, ids: &[EntityId], hint: &str) -> Result<()> {
 ///
 /// It names the command that declares one rather than the file to open
 /// (ADR-e64dfaafd578): a hint telling an agent to edit `.ank/config.yml` is the
-/// tool instructing it to do what ADR-e45e1a29fe91 forbids — `ank config` is
-/// the route that writes that file, and that ADR is where it is named as one.
+/// tool instructing it to do what ADR-3c8d94a0bbe0 forbids — `ank config` is
+/// the route that writes that file, and its `writes` declaration says so.
 /// The names already declared come first when there are any, because a typo is
 /// the likelier of the two mistakes and the list settles it in one line.
 fn undeclared_verifier(name: &str, cfg: &Config) -> CliError {
@@ -1165,6 +1185,44 @@ pub(crate) fn amends_of(inv: &Invocation, store: &Store) -> Result<Vec<EntityId>
         }
     }
     Ok(out)
+}
+
+/// `--enforced-by`, in the order typed and without repeats.
+///
+/// The shape is refused here, where it was typed, and the tree is not asked:
+/// a test written after the rule that names it is ordinary, and whether the
+/// path is tracked and holds the symbol is what `check` reports about the
+/// corpus as it stands (ADR-25584c56c1a7). The path half is normalised as a
+/// scope is (TASK-8dd89053fa33): `./src\\a.rs` would otherwise be stored
+/// verbatim and match no tracked file on any platform.
+pub(crate) fn enforced_by_of(inv: &Invocation, repo: &Repo, usage: &str) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in inv.values("--enforced-by") {
+        let entry = enforcement_entry(raw, repo, usage)?;
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
+    }
+    Ok(out)
+}
+
+/// One `<path>#<symbol>` entry, trimmed and its path normalised, or the
+/// refusal naming the shape.
+pub(crate) fn enforcement_entry(raw: &str, repo: &Repo, usage: &str) -> Result<String> {
+    let entry = raw.trim();
+    match ank_core::split_enforcement(entry) {
+        Some((path, symbol)) => Ok(format!(
+            "{}#{symbol}",
+            crate::context::normalised(path, repo, usage)?
+        )),
+        None => Err(CliError::new(
+            ExitCode::Generic,
+            format!(
+                "--enforced-by '{entry}' is not <path>#<symbol>: a tracked file and a symbol it contains"
+            ),
+        )
+        .with_hint("--enforced-by \"crates/x/tests/a.rs#test_name\"")),
+    }
 }
 
 /// Why that entity cannot be amended, in one sentence, for `new` and `check`.
@@ -3662,7 +3720,7 @@ mod tests {
             err.hint.as_deref(),
             Some("ank config verifiers.nope.run \"<command>\""),
             "a hint that names the file is the tool telling an agent to do \
-             what ADR-e45e1a29fe91 forbids"
+             what ADR-3c8d94a0bbe0 forbids"
         );
 
         // With verifiers already declared, the names come first -- a typo is

@@ -1,5 +1,5 @@
 //! The `tui` verb: a full-screen reader over one corpus (ADR-8bd76e8d7c4e, §4),
-//! drawn with ratatui over crossterm (ADR-559eebf5c6f5).
+//! drawn with ratatui over crossterm (ADR-ac6be1ebe9aa).
 //!
 //! **It reaches the corpus by running the CLI, and by nothing else.** Every row
 //! of corpus data on the screen arrives as a `--json` document written by
@@ -85,7 +85,7 @@
 //! a person is on included: `Tab` walks the ring, `1` to `4` name one, and Left
 //! and Right cross between the listing and the document it opens.
 //! **And so is every verb that writes**
-//! (TASK-1a415107fd56, ADR-559eebf5c6f5: a key *is* the verb it runs): `c`
+//! (TASK-1a415107fd56, ADR-ac6be1ebe9aa: a key *is* the verb it runs): `c`
 //! claims, `l` logs, `d` finishes, `r` releases, `m` amends, `a` ratifies, and
 //! `n` makes one. What each of them is bound to is [`bindings`], declared once,
 //! and every surface -- the mapping, the offer, the key list -- is computed
@@ -104,7 +104,7 @@
 //!
 //! What is left of typing is two places, and neither of them reaches a verb by
 //! being read. `/` starts a search that narrows the list on every keystroke
-//! and has nothing to submit (TASK-c94d086682f3, ADR-559eebf5c6f5): there is no
+//! and has nothing to submit (TASK-c94d086682f3, ADR-ac6be1ebe9aa): there is no
 //! line there and no grammar behind it, so there is no word for a verb to be.
 //! `n` opens the form
 //! (TASK-d832452630d2), whose fields are the flags `ank help --json` declares
@@ -117,7 +117,7 @@
 //! replaced it.** Under a line reader a slipped finger typed nothing, because a
 //! command was a word and Enter and no word was one letter. Under a keystroke
 //! reader the guarantee is the confirmation that shows the argv before anything
-//! is spawned, which ADR-559eebf5c6f5 requires and TASK-d4a882345837 built: a
+//! is spawned, which ADR-ac6be1ebe9aa requires and TASK-d4a882345837 built: a
 //! submitted line composes the command and shows it spelled as a shell would
 //! have to spell it, `y` runs that command, and every other key on the keyboard
 //! dismisses it. What writes is a person reading an argv and saying yes to it,
@@ -125,14 +125,15 @@
 //! guarantee is stated over the verbs that write rather than over the road
 //! they were reached by.
 //!
-//! # One region, and four screens reached in their turn
+//! # Four panels, beside each other where the window allows
 //!
-//! **One bordered region on the frame, at every width** (TASK-252bf02de218,
-//! ADR-559eebf5c6f5). What used to be four panels on one screen -- and, below a
-//! stated width, four stacked panels of which three were closed to their titles
-//! -- is four screens reached in their turn, drawn one at a time in the region
-//! the header sits above. Nothing else on the frame carries a border, and
-//! nothing on it collapses to a rule with nothing inside it.
+//! **The listings beside the detail on a wide frame** (TASK-cae5c8ec9a69,
+//! ADR-ac6be1ebe9aa). At [`view::DASHBOARD`] columns and over, the claims, the
+//! entities and the queue are stacked in a column on the left and the graph,
+//! or the detail once a row is opened, takes what is left of the width. Under it the same four panels are reached
+//! one at a time, drawn in the one region the header sits above
+//! (TASK-252bf02de218), and nothing on the frame collapses to a rule with
+//! nothing inside it.
 //!
 //! * [`view::Focus::Claims`], `1 CLAIMS` -- who holds what, the caller's own
 //!   marked.
@@ -149,45 +150,40 @@
 //!   arrival under it -- and again on `u`; a cursor over it spawns nothing.
 //! * [`view::Focus::Queue`], `4 QUEUE` -- what is proposed and waiting for a
 //!   signature, and which regime the corpus is in: `ank review`, run when its
-//!   person arrives at the screen and never on the reader's own initiative.
+//!   person arrives at the panel and never on the reader's own initiative.
 //!
-//! **Each is reached by a digit, and the ring walks them in that order.** `Tab`
-//! and `BackTab` walk claims, entities, graph and queue, `1` to `4` name one,
-//! and the number is on the title beside the name. `3` is the graph's; it was
-//! the document's until TASK-a9cd362ee5e2.
+//! **Each is reached by the same keys at every width.** `Tab` and `BackTab`
+//! walk claims, entities, graph and queue, `1` to `4` name one, and the number
+//! is on the panel's title beside the name. Exactly one panel has the focus,
+//! and on a wide frame a character on its title says which, the weight of its
+//! border repeating it. `3` is the graph's; it was the document's until
+//! TASK-a9cd362ee5e2.
 //!
-//! **The document is reached by opening a row, and leaving it gives that list
-//! back.** [`view::Focus::Body`] is not on the ring and no digit reaches it:
-//! Enter on a row of any of the three listings, or Right, shows the entity in
-//! the region -- what holds it, the constraints binding its declared scope, and
-//! its body, paged rather than cut -- under the title `BODY`, with no digit in
-//! front. This is the only screen `accept` can be reached from. It is also
-//! where the config pane is drawn (TASK-b08d090f699c), titled `CONFIG`: the one
-//! thing it shows that is not about an entity at all, opened with `o`, read
-//! when a person arrives at it and on no repaint. The reader remembers which
-//! listing the document was reached from, and `Back` returns there with the
-//! same row still under the cursor. Every listing keeps its own cursor and
-//! nothing moves one by being left, which is what makes a screen a place rather
+//! **Opening a row moves the focus into the detail, and leaving it gives the
+//! listing back.** [`view::Focus::Body`] is not on the ring and no digit
+//! reaches it: Enter on a row of any of the three listings, or Right, shows the
+//! entity in the detail -- what holds it, the constraints binding its declared
+//! scope, and its body, paged rather than cut -- under the title `BODY`, with
+//! no digit in front. This is the only panel `accept` can be reached from. It
+//! is also where the config pane is drawn (TASK-b08d090f699c), titled `CONFIG`:
+//! the one thing it shows that is not about an entity at all, opened with `o`,
+//! read when a person arrives at it and on no repaint. The reader remembers
+//! which listing the document was reached from, and `Back` returns there with
+//! the same row still under the cursor. Every listing keeps its own cursor and
+//! nothing moves one by being left, which is what makes a panel a place rather
 //! than a mode.
 //!
-//! On a window of [`view::DASHBOARD`] columns or more, the three listings are
-//! drawn at once in a left column, and the right panel beside them is `3 GRAPH`
+//! On a wide frame the right panel beside the column of listings is `3 GRAPH`
 //! at rest and `BODY` once a row has been opened; `Back` gives it back to the
 //! graph (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa).
-//!
-//! There is no focus to arbitrate and so no focused border: one region has
-//! nothing to be told apart from, and its rule is one weight at every window.
 //! [`view::App::arrange`] decides the whole frame from the window alone.
 //!
 //! # A person holding a phone
 //!
-//! **There is no second arrangement any more, and that is the point**
-//! (ADR-559eebf5c6f5). The reflow below `ONE_COLUMN` existed because four
-//! panels side by side could not honestly be drawn on a phone; one region is
-//! drawable at forty columns and at a hundred and fifty, so no width turns this
-//! reader into a different reader and there is no threshold to be on the wrong
-//! side of. What a narrow window costs is what a row can afford to say, which
-//! is a question about composing a row rather than about arranging a screen.
+//! **A narrow window is the same reader, one panel at a time.** Under
+//! [`view::DASHBOARD`] there is one region and it is drawable at forty columns,
+//! so what a narrow window costs is what a row can afford to say, which is a
+//! question about composing a row rather than about arranging a screen.
 //!
 //! **A tap is a mouse press, and this reader asked the terminal for them.**
 //! [`term`] turns capture on with raw mode and gives it back with it; a press
@@ -199,7 +195,7 @@
 //! a place a keyboard cannot: [`view::App::actions`] draws what the screen
 //! offers with the key beside the word, so the two roads carry one vocabulary.
 //!
-//! **No command anywhere requires a modifier chord** (ADR-559eebf5c6f5), and
+//! **No command requires a modifier chord** (ADR-ac6be1ebe9aa), and
 //! that is now measured rather than reviewed: `keys`'s own table walks every
 //! key a terminal can report against every way a modifier can be held and holds
 //! this reader to it. It is what turned `Tab` and Shift-`Tab` into the screen
@@ -222,7 +218,7 @@
 //! **`NO_COLOR` reaches this reader and takes nothing away.** The variable is
 //! read once when the screen opens, by the CLI's own rule, and what it turns
 //! off is a repetition: every distinction on this screen is already a
-//! character. Where the focus is, is `=` and `> `; where the cursor is, is
+//! character. Where the focus is, is the mark on a panel's title; where the cursor is, is
 //! `> `; whose claim a row is, is `*`; what state an entity is in, is the word
 //! spelled in its own column. `crates/ank-tui/tests/colour.rs` drives the
 //! binary on a pseudo-terminal with the variable set and with it unset, and
@@ -721,7 +717,7 @@ mod tests {
     }
 
     /// A terminal made narrower redraws to its new size, with nobody typing
-    /// (TASK-4fa385c1772d, ADR-559eebf5c6f5).
+    /// (TASK-4fa385c1772d, ADR-ac6be1ebe9aa).
     ///
     /// The only wake in the session is the resize, so a second frame existing at
     /// all is the reader answering the window rather than a command. What is

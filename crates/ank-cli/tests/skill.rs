@@ -56,7 +56,7 @@ fn push_once(verbs: &mut Vec<String>, verb: String) {
 /// **Read through the binary, and that is the point rather than a detour.** The
 /// specification is no longer a file in `docs/` — it is ten entities of kind
 /// `spec` in `.ank/` (ADR-c88f99e1c16e) — and `.ank/` is reached through the CLI
-/// and never by opening the files (ADR-e45e1a29fe91). A test that walked the
+/// and never by opening the files (ADR-3c8d94a0bbe0). A test that walked the
 /// directory would be the one reader in the repository exempt from the rule the
 /// repository enforces on every agent.
 ///
@@ -263,21 +263,21 @@ fn help_order() -> Vec<String> {
 /// was edited, in the same commit.
 ///
 /// `skills` was declared here ahead of the ratification of the §4 document
-/// that lists it, now SPEC-219033e25653, and left in the commit of
+/// that lists it, now SPEC-fe809eb257c0, and left in the commit of
 /// TASK-544ec9655570 that ships it.
 ///
-/// `update` was declared here ahead of the ratification of SPEC-219033e25653,
-/// which lists it (ADR-64f32c74a0f9), and left in the commit of
+/// `update` was declared here ahead of the ratification of the §4 document
+/// that lists it (ADR-64f32c74a0f9), and left in the commit of
 /// TASK-161c402c27fb that ships it.
 ///
-/// `archive` was declared here ahead of the ratification of SPEC-219033e25653,
-/// which lists it (ADR-467ce7e9cda1, TASK-2ffdb4cd7806), and left in the commit
+/// `archive` was declared here ahead of the ratification of the §4 document
+/// that lists it (ADR-467ce7e9cda1, TASK-2ffdb4cd7806), and left in the commit
 /// of TASK-97fd1992567a that ships it.
 ///
-/// `signers` is declared here ahead of the ratification of SPEC-14cd3e35e927,
-/// the §4 document that lists it (ADR-5c6db7a161b8), and leaves in the commit
-/// of TASK-3a7a73ccf2b7 that ships it.
-const NOT_YET_DISPATCHED: [&str; 1] = ["signers"];
+/// `signers` was declared here because SPEC-fe809eb257c0, the §4 document that
+/// lists it, declared it ahead of its dispatch (ADR-5c6db7a161b8), and it left
+/// in the commit of TASK-3a7a73ccf2b7 that ships it.
+const NOT_YET_DISPATCHED: [&str; 0] = [];
 
 /// A verb the binary answers to and §4 never mentions. `attest`, `init` and
 /// `help` were exactly that until TASK-5c868c20472f, and a reader comparing the
@@ -703,7 +703,7 @@ fn declared_revision(front: &str) -> Option<String> {
 /// the SKILL.md installed at `~/.claude/skills/ank` was byte-identical to the
 /// blob at a004ac7, two commits and nine hours behind a tree that had just
 /// withdrawn the invitation to read `.ank/` by hand -- the rule
-/// ADR-e45e1a29fe91 states today. It was not merely old, it instructed against
+/// ADR-3c8d94a0bbe0 states today. It was not merely old, it instructed against
 /// a ratified decision -- and it carried nothing by which its reader or its
 /// owner could have noticed.
 ///

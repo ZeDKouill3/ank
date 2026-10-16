@@ -13,9 +13,9 @@
 //!
 //! **Both windows, every time.** The two are not two runs of one test: eighty
 //! by twenty-four is the desk the old chrome was measured on, where it spent
-//! thirteen rows of twenty-four on furniture, and forty by thirty is the phone
-//! ADR-559eebf5c6f5 was written for. The list is longer than
-//! either of them, which is why it scrolls, and the row reading `claim` is
+//! thirteen rows of twenty-four on furniture, and forty by thirty is a phone.
+//! The list is longer than either of them, which is why it scrolls, and the
+//! row reading `claim` is
 //! below the fold at both -- so a suite that only pressed at the top would be
 //! asserting on the one part of the list a window happens to hold.
 //!
@@ -216,7 +216,7 @@ fn list_at_claim(live: &mut Live) -> (u16, u16) {
 }
 
 /// **`?` draws a bordered list over the panels, and never a note under them**
-/// (TASK-8a6578851244, ADR-559eebf5c6f5), at both windows.
+/// (TASK-8a6578851244), at both windows.
 ///
 /// The negative is the half that matters and it is why the panels are read
 /// first. A list drawn *into* the note band is what this replaces: it was on
@@ -266,7 +266,17 @@ fn the_key_list_is_a_bordered_overlay_over_the_panels_at_both_windows() {
             (title as usize) + 2 < rows.len(),
             "the key list has no rows under its title at {window:?}:\n{frame}"
         );
-        for row in &rows[title as usize..] {
+        // Every row down to the key line, which the list stops above
+        // (TASK-933fdb42c7d9): it is the last row of every frame, this one
+        // included, and it says the list's own way out.
+        let (keys, list) = rows[title as usize..]
+            .split_last()
+            .expect("the frame has rows under the title");
+        assert!(
+            keys.starts_with("[? keys]") && keys.trim_end().ends_with("[q quit]"),
+            "the key line is not under the key list at {window:?}: {keys}\n{frame}"
+        );
+        for row in list {
             let ends = row.trim_end();
             let (first, last) = (
                 ends.chars().next().expect("a drawn row has characters"),
@@ -283,7 +293,7 @@ fn the_key_list_is_a_bordered_overlay_over_the_panels_at_both_windows() {
 }
 
 /// **A press on the row reading `claim` raises the claim confirmation**
-/// (TASK-8a6578851244, ADR-559eebf5c6f5), at both windows.
+/// (TASK-8a6578851244), at both windows.
 ///
 /// This is the whole of "a line of the list is the key it names", and it is
 /// stated through the wire because that is the only place it can be: whether a

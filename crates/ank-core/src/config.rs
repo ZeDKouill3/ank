@@ -17,6 +17,10 @@ pub const DEFAULT_CLAIM_TTL_MAX: &str = "2h";
 /// What `claim` grants without `--ttl` (§3).
 pub const DEFAULT_CLAIM_TTL: &str = "30m";
 pub const DEFAULT_VERIFIER_TIMEOUT: &str = "10m";
+/// How old a passing run of the local registry may be and still be reused by
+/// `done` (ADR-a2faf59f6ce0): long enough to span a working day, short enough
+/// that a toolchain upgraded on the machine meanwhile is not trusted for long.
+pub const DEFAULT_PROOF_REUSE_MAX_AGE: &str = "24h";
 /// The hot corpus a reader pays per file for, as `init` declares it
 /// (ADR-467ce7e9cda1). Measured on 2026-09-14, this repository held 1979 files
 /// under `.ank/entities/`; 3000 leaves it half again, which at August's rate of
@@ -124,28 +128,10 @@ pub static KEYS: &[ConfigKey] = &[
         "the files whose content can change the result, relative to the root; absent, the whole tree; written as one flow sequence, never empty",
     ),
     key(
-        "verifiers.<name>.env.image",
-        "string",
-        Absent::None,
-        "the OCI image the verifier is meant to run in, pinned as `<name>@sha256:<digest>`; a tag is refused; ank never runs it",
-    ),
-    key(
-        "verifiers.<name>.env.platform",
-        "string",
-        Absent::None,
-        "`os/arch`, required with `env.image`",
-    ),
-    key(
-        "verifiers.<name>.env.network",
-        "`none` or `open`",
-        Absent::None,
-        "absent, `none` under an image and the host's network without one",
-    ),
-    key(
-        "verifiers.<name>.env.vars.<var>",
-        "string",
-        Absent::None,
-        "a variable with a fixed value; nothing is passed through from the caller",
+        "proof.reuse_max_age",
+        "duration",
+        Absent::Text(DEFAULT_PROOF_REUSE_MAX_AGE),
+        "how old a passing run recorded under `<git-common-dir>/ank/runs/` may be for `done` to reuse it rather than run the verifier again; `done --fresh` reuses nothing",
     ),
     key(
         "verifier_jobs",
@@ -182,5 +168,23 @@ pub static KEYS: &[ConfigKey] = &[
         "integer",
         Absent::Number(DEFAULT_WEIGHT_PLANE_BYTES),
         "`check` signals claim and proof records weighing more bytes",
+    ),
+    key(
+        "signers.<principal>.keys[].key",
+        "string",
+        Absent::Required,
+        "a key allowed to ratify, `gpg <fingerprint>` or `<ssh key type> <base64>`; the block is written by `ank signers`, never by `ank config` (ADR-5c6db7a161b8)",
+    ),
+    key(
+        "signers.<principal>.keys[].note",
+        "string",
+        Absent::None,
+        "what the key is, for the reader; `ank signers migrate` puts the comments of a former `.ank/allowed_signers` here",
+    ),
+    key(
+        "signers.<principal>.keys[].valid_before",
+        "date",
+        Absent::None,
+        "`YYYY-MM-DD`: the key ratifies nothing committed from that day on, UTC, and what it signed before stays verified; absent, the key has no end",
     ),
 ];
