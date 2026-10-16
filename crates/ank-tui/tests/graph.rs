@@ -1933,16 +1933,19 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
             header(t).contains(&cell(ank_tui::bindings::Fold::Open))
                 && graph_rows(t, columns).len() == 11
         });
-        assert_eq!(
-            graph_rows(&back, columns)
+        // The two samples are taken at different ticks, so the task under
+        // way may breathe between them (TASK-54bb5cddc671): its cell is
+        // masked and nothing else is.
+        let rows_of = |frame: &str| {
+            graph_rows(frame, columns)
                 .into_iter()
                 .map(|r| r.text)
-                .collect::<Vec<_>>(),
-            graph_rows(&moved, columns)
-                .into_iter()
-                .map(|r| r.text)
-                .collect::<Vec<_>>(),
-            "the second press is not the graph as it was at {columns}x{rows}:\n{back}"
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(
+            crate::terminal::same_but_the_pulse(&rows_of(&back), &rows_of(&moved)),
+            "the second press is not the graph as it was at {columns}x{rows}:\n{back}\n{moved}"
         );
         assert_eq!(
             header(&back),
