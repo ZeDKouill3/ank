@@ -564,8 +564,9 @@ fn drive(
             app.reload_rest(ank);
             continue;
         }
-        // A resize onto the wide frame with no graph held owes it one read,
-        // as the opening does (TASK-afcd4f0f56ad): the frame above said it is
+        // A resize onto the wide frame owes one read per listing it does not
+        // hold -- the claims, the queue, the graph -- as the opening does
+        // (TASK-afcd4f0f56ad, TASK-e532c7a1d984): the frame above said it is
         // reading, and this is what makes that true.
         if app.read_asked(ank) {
             continue;
