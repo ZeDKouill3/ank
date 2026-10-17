@@ -22,3 +22,9 @@ test-group = 'pty-serial'
 # for the matrix.
 [profile.ci]
 fail-fast = false
+
+# The cold-readers test runs twenty rounds under CI and prints one line per
+# round (TASK-4a819896815a); shown on a pass, so the count is in the job log.
+[[profile.ci.overrides]]
+filter = 'package(ank-cli) & binary(integration) & test(=cli::concurrent_readers_of_a_cold_corpus_of_this_size_all_answer)'
+success-output = "final"

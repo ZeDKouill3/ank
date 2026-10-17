@@ -4086,17 +4086,49 @@ fn copy_tree(from: &Path, to: &Path) {
 /// `the_walk_reaches_a_crate_that_is_not_this_one` both go through
 /// `superseded_ids`, which is `find --status superseded --all`, and cargo runs
 /// them on the same pool.
+///
+/// **Run [`cold_rounds`] times, each on a fresh cold copy** (TASK-4a819896815a):
+/// once in the ordinary suite, twenty under CI, so one run of the matrix is
+/// twenty measurements per platform. Every round prints one line, which the
+/// `ci` profile of .config/nextest.toml shows on a pass, so the count is read
+/// off the job log rather than inferred from a green.
 #[test]
 fn concurrent_readers_of_a_cold_corpus_of_this_size_all_answer() {
-    let refused = cold_readers_refused(None);
+    let rounds = cold_rounds();
+    let mut failed = Vec::new();
+    for round in 1..=rounds {
+        let refused = cold_readers_refused(None);
+        println!(
+            "cold readers round {round}/{rounds}: {} refused of 8",
+            refused.len()
+        );
+        if !refused.is_empty() {
+            failed.push(format!("round {round}:\n{}", refused.join("\n")));
+        }
+    }
     assert!(
-        refused.is_empty(),
-        "readers of a cold corpus of this size refused each other. The index is \
-         derived, disposable and rebuildable (§6), so a reader that loses the \
-         race for it waits and answers; it never fails, and it never deletes \
-         the database the others are holding open:\n{}",
-        refused.join("\n")
+        failed.is_empty(),
+        "readers of a cold corpus of this size refused each other in {} of {rounds} \
+         rounds. The index is derived, disposable and rebuildable (§6), so a reader \
+         that loses the race for it waits and answers; it never fails, and it never \
+         deletes the database the others are holding open:\n{}",
+        failed.len(),
+        failed.join("\n")
     );
+}
+
+/// How many rounds the test above runs: `ANK_TEST_COLD_ROUNDS` when set, twenty
+/// under CI (`CI`, which every GitHub runner sets), one otherwise, so the
+/// ordinary suite and `ank done` pay for a single round.
+fn cold_rounds() -> u32 {
+    match std::env::var("ANK_TEST_COLD_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        Some(n) => n,
+        None if std::env::var_os("CI").is_some() => 20,
+        None => 1,
+    }
 }
 
 /// The same cold readers, behind a writer that outlasts the busy wall
