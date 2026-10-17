@@ -837,17 +837,32 @@ pub fn focused(title: &str) -> String {
     format!("{}{title}", ank_tui::view::BOXES.focus())
 }
 
-// No lock serialises the sessions, and none is missing. Eight suites used to
-// take `ONE_AT_A_TIME`, and `.config/nextest.toml` held the same tests in a
-// `pty-serial` group, because `pty::open` read the slave's path out of
-// `ptsname(3)`'s static buffer and two sessions opened at once could be told one
-// terminal (LOG-3b0bc419c884). `pty::open` reads it with `ptsname_r` now, and
-// `every_terminal_opened_at_once_is_told_its_own_slave` pins that. With both
-// gone, measured on Linux over 10 runs each of the 125 tests (TASK-adea229723df):
-// 1 red under cargo test and 2 under nextest, all three in keyline.rs, which
-// never took the lock and fails run alone too; with both in place, 1 red under
-// cargo test, in dashboard.rs, which never took it either. Nothing the lock
-// held back was left to hold.
+/// One pseudo-terminal suite at a time, across every suite that takes it.
+///
+/// **Kept because macOS hangs with these suites concurrent, and no longer
+/// because of `ptsname(3)`.** The lock was first taken because `pty::open` read
+/// the slave's path out of `ptsname(3)`'s static buffer, so two sessions opened
+/// at once could be told one terminal (LOG-3b0bc419c884). It reads it with
+/// `ptsname_r` now, and `every_terminal_opened_at_once_is_told_its_own_slave`
+/// pins that (TASK-adea229723df). With that cause gone the lock and the
+/// `pty-serial` group of `.config/nextest.toml` were removed, and on Linux,
+/// over 10 runs of the 125 tests under each runner, the only failures were in
+/// suites that never took the lock. On macos-latest the
+/// `cargo nextest run --workspace --profile ci` step then never finished: run
+/// 39060806985 (head 21c9e74) sat 46 minutes until a push superseded it, run
+/// 39064235334 (head 8c1954e) 30 minutes until it was cancelled, while
+/// ubuntu-latest and windows-latest passed both. So both came back, on every
+/// platform: the hang is not diagnosed, and ten Linux runs do not show Linux
+/// needs neither. Those two heads also carried the `ptsname_r` read and its
+/// thirty-two-thousand-open test, so the removal is the likely cause and not a
+/// measured one.
+///
+/// One lock and not one per suite: the suites are modules of one test binary,
+/// so under `cargo test` they share one process and a lock per suite would
+/// let two of them open a session at once. Under nextest every test is its own
+/// process and this lock serialises nothing, so `.config/nextest.toml` names
+/// the same tests in its `pty-serial` group.
+pub static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // The terminal

@@ -27,7 +27,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{ids_of, short_of, Live, Repo};
+use crate::terminal::{ids_of, short_of, Live, Repo, ONE_AT_A_TIME};
 use ank_tui::view::SEARCH;
 
 /// Wide enough that the title's arithmetic and the needle both fit whole. What
@@ -74,6 +74,9 @@ fn an_identifier(repo: &Repo) -> String {
 /// left the needle in force on Escape would pass the first two.
 #[test]
 fn the_list_narrows_as_the_needle_is_typed_and_escape_gives_it_back() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm();
     let needle = an_identifier(&repo);
@@ -152,6 +155,9 @@ fn the_list_narrows_as_the_needle_is_typed_and_escape_gives_it_back() {
 /// here is a corpus compared byte for byte afterwards.
 #[test]
 fn enter_ends_the_search_keeping_the_list_narrowed_and_writes_nothing() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm();
     let refs = repo.refs();

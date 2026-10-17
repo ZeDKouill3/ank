@@ -33,7 +33,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{Live, Repo};
+use crate::terminal::{Live, Repo, ONE_AT_A_TIME};
 use ank_tui::bindings::{self, BINDINGS};
 
 /// A panel's vertical border, at either weight, as characters.
@@ -73,6 +73,9 @@ const WIDE: (u16, u16) = (200, 60);
 /// nothing it does not** (TASK-4d2eb2b4e193).
 #[test]
 fn the_key_the_list_is_named_after_draws_every_binding_and_no_other() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let mut live = Live::open(&repo, WIDE.0, WIDE.1);
     live.until("the session to open", |t| t.contains("2 ENTITIES"));
@@ -168,6 +171,9 @@ const EIGHTY: (u16, u16) = (80, 24);
 /// list on it. `tests/overlay.rs` states what the overlay itself is.
 #[test]
 fn the_key_list_fits_the_window_it_is_asked_for_on() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let mut live = Live::open(&repo, EIGHTY.0, EIGHTY.1);
     live.until("the session to open", |t| t.contains("2 ENTITIES"));

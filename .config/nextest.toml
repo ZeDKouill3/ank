@@ -2,10 +2,28 @@
 # job (ADR-8c12a38531e3): one pool for every test of every binary, so the
 # binaries no longer wait for each other.
 
-# No test group: the pseudo-terminal suites of ank-tui ran one at a time only
-# because the harness read the slave's path out of `ptsname(3)`'s static buffer,
-# and it reads it with `ptsname_r` now (TASK-adea229723df; the measurement is
-# where the lock stood, in crates/ank-tui/tests/terminal/mod.rs).
+# Eight suites of ank-tui open pseudo-terminals, and they run one at a time:
+# under `cargo test` through the in-process `terminal::ONE_AT_A_TIME` lock, and
+# here, where every test is its own process and that lock serialises nothing,
+# through this group. The lock was first taken because `ptsname(3)` answered out
+# of a static buffer (LOG-3b0bc419c884); `pty::open` reads the slave with
+# `ptsname_r` now (TASK-adea229723df), and that is not why the group stays.
+# **macOS hangs with these suites concurrent**: with the group and the lock
+# removed, the `cargo nextest run --workspace --profile ci` step on macos-latest
+# never finished, in run 39060806985 (head 21c9e74, 46 minutes until a push
+# superseded it) and run 39064235334 (head 8c1954e, 30 minutes until
+# cancelled), while ubuntu-latest and windows-latest passed both and main's
+# macOS leg passes in about 7 minutes. The hang is not diagnosed (those heads
+# also carried the `ptsname_r` read and its test), and Linux is not shown to
+# need the group either way, so it stays on every platform. The suites
+# are modules of the one `integration` target (TASK-22af5b0918a4), so they are
+# named by test path and not by binary.
+[test-groups]
+pty-serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(ank-tui) & binary(integration) & test(/^(bindings|claims|colour|edit|graph|overlay|search|verbs)::/)'
+test-group = 'pty-serial'
 
 # CI runs every test to the end: whether a failure is one platform's or every
 # platform's is the information a run is for, as `fail-fast: false` already says

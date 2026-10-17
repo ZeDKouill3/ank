@@ -20,7 +20,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use crate::terminal::{ids_of, short_of, Live, Repo, AGENT};
+use crate::terminal::{ids_of, short_of, Live, Repo, AGENT, ONE_AT_A_TIME};
 
 /// Wide enough for the dashboard, so the claims panel is drawn beside the
 /// others and its rows can be read while another panel has the focus -- and
@@ -154,6 +154,9 @@ fn opened(repo: &Repo) -> Live {
 
 #[test]
 fn a_claims_row_says_whose_since_when_and_how_long_it_has_left() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let (repo, mine, theirs) = two_holders();
     // Taken years ago by the other identity, which is a claimed stamp nobody
     // can wait for and the one the age is read off.
@@ -193,6 +196,9 @@ fn a_claims_row_says_whose_since_when_and_how_long_it_has_left() {
 
 #[test]
 fn a_lapsed_claim_says_lapsed_and_walking_the_claims_moves_no_ref() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let (repo, mine, _) = two_holders();
     forge(&repo, &mine, "expires", "2020-01-01T00:00:00Z");
     let status = repo.stdout(&["status", "--json"]);
@@ -223,6 +229,9 @@ fn a_lapsed_claim_says_lapsed_and_walking_the_claims_moves_no_ref() {
 
 #[test]
 fn the_search_narrows_the_focused_claims_as_it_is_typed() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let (repo, _, theirs) = two_holders();
     let mut live = opened(&repo);
     live.send("1");
@@ -265,6 +274,9 @@ fn the_search_narrows_the_focused_claims_as_it_is_typed() {
 
 #[test]
 fn the_queue_offers_the_search_it_answers() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm_find();
     let mut live = Live::open(&repo, WIDE.0, WIDE.1);

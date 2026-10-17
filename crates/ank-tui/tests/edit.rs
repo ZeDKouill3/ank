@@ -34,7 +34,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{short_of, Editor, Live, Repo};
+use crate::terminal::{short_of, Editor, Live, Repo, ONE_AT_A_TIME};
 use ank_tui::view::{ABOUT, DISMISSED, NOTHING_NAMED};
 
 /// Wide enough that a composed `ank edit <id> --title ...` fits one row, so an
@@ -211,6 +211,9 @@ fn dismiss(live: &mut Live, what: &str) -> String {
 /// it.
 #[test]
 fn e_raises_a_form_that_names_a_field_and_never_composes_a_bare_edit() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let editor = Editor::beside(&repo);
     let task = repo.only(&["--type", "task"]);
@@ -324,6 +327,9 @@ fn e_raises_a_form_that_names_a_field_and_never_composes_a_bare_edit() {
 /// reaches the CLI at all.
 #[test]
 fn a_confirmed_edit_writes_the_field_it_named_and_no_editor_was_opened() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let editor = Editor::beside(&repo);
     repo.warm();
@@ -400,6 +406,9 @@ fn no_letter_of_the_table_spells_the_three_verbs_the_list_opens() {
 /// not for the intent.
 #[test]
 fn the_three_verbs_the_list_opens_reach_the_confirmation_and_dismissing_writes_nothing() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let editor = Editor::beside(&repo);
     repo.warm();
@@ -515,6 +524,9 @@ fn the_three_verbs_the_list_opens_reach_the_confirmation_and_dismissing_writes_n
 /// `ank show`'s answer and nothing else.
 #[test]
 fn a_touch_on_a_row_of_the_list_opens_it_and_confirming_runs_the_verb() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let editor = Editor::beside(&repo);
     repo.warm();
@@ -587,6 +599,9 @@ fn a_touch_on_a_row_of_the_list_opens_it_and_confirming_runs_the_verb() {
 /// a reader with no way in.
 #[test]
 fn a_form_that_names_an_entity_refuses_in_front_of_itself_and_new_still_opens() {
+    let _one = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let editor = Editor::beside(&repo);
     repo.warm();
