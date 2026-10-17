@@ -208,7 +208,9 @@ jobs:
       - run: cargo fmt --check
         if: env.RUN == 'true'
 
-      # The `ci` profile of .config/nextest.toml runs every test to the end.
+      # The `ci` profile of .config/nextest.toml runs every test to the end, and
+      # kills one still running after 600s, so a hang is a red leg naming the
+      # test rather than a job held to the six-hour limit (TASK-8cb5af6607f5).
       #
       # Under bash, on every platform, and on windows-latest that is load-bearing
       # (TASK-d08e4110f6c1). Git for Windows mounts /tmp from the TEMP of the

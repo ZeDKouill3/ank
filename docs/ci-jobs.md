@@ -30,6 +30,16 @@ why the merge method is load-bearing.
   `windows-latest`, and the three required checks named after them. It checks
   out the whole history, because `ank check` walks it, and runs the three gates.
   The Linux leg keeps the binary it built for `attest`.
+
+  The suite runs under the `ci` profile of `.config/nextest.toml`, which runs
+  every test to the end and bounds each one at 600 seconds, about twice the
+  slowest test that passes (the bound and the measurement are written beside the
+  setting). A line `SLOW [> 60.000s]` in the log is a test still running at that
+  mark and is not a failure. A line `TIMEOUT` is a test nextest killed when it
+  reached the bound: it counts as a failure, the leg is red, and the line names
+  the test. Read it as a hang, a test waiting on something that will never come,
+  rather than as a slow runner, and look at that test on that platform before
+  rerunning the job.
 - **`attest / ubuntu-latest`** runs on a push to `main` only, after the matrix.
   It anchors every task `check` reports as `done with no test proof` to this
   run, with `ank attest --proof test:<run-id> --detached`, and it is the only
