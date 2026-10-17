@@ -5970,10 +5970,10 @@ pub fn accept(
         .with_hint(format!("git switch {default_branch} && ank accept {asked}")));
     }
 
-    // **Every id is prepared before any is committed** (ADR-2a63c0c87691). A
-    // refusal on the third id after the first two were signed would leave the
-    // caller holding half of what they asked for, with no verb to finish it:
-    // the two signed ones now refuse a second `accept`. Preparing reads and
+    // **Every id is prepared before any is committed.** A refusal on the
+    // third id after the first two were signed would leave the caller
+    // holding half of what they asked for, with no verb to finish it: the
+    // two signed ones now refuse a second `accept`. Preparing reads and
     // writes nothing, so the whole list is judged first.
     let store = Store::new(&repo.ank);
     let mut prepared: Vec<Ratification> = Vec::new();
@@ -6107,7 +6107,7 @@ pub fn accept(
                 c.branch, c.remote
             );
             // Printed and never run: the merge commit, and the review before
-            // it, stay a human's (ADR-2a63c0c87691).
+            // it, stay a human's.
             let _ = writeln!(out, "merge it with a merge commit: {}", c.merge);
         }
     } else if let Some(c) = &carried {
@@ -6249,8 +6249,8 @@ struct Carry {
     branch: String,
 }
 
-/// The `--pr` prerequisites, every one checked before the first commit
-/// (ADR-2a63c0c87691), cheapest and most local first.
+/// The `--pr` prerequisites, every one checked before the first commit,
+/// cheapest and most local first.
 ///
 /// **Level with the upstream is a prerequisite of the reset, not an extra
 /// rule.** The reset is `update-ref` and not `reset --hard`: porcelain is
@@ -6417,7 +6417,8 @@ struct Carried {
 }
 
 /// Carries the commits `accept` has just made to a pull request, and never
-/// merges it (ADR-2a63c0c87691).
+/// merges it. This is the recipe the tree runs today; ADR-5e47007a75be,
+/// proposed, makes the ratification a signed ref and retires `--pr` with it.
 ///
 /// The branch first, and the order is the argument the manual recipe makes:
 /// once a ref holds the ratifications, putting the default branch back is a
@@ -10745,8 +10746,8 @@ mod tests {
             );
         }
         // One flag and no other, and it bypasses nothing: `--pr` adds refusals
-        // before the commit and acts only after it (ADR-2a63c0c87691). A second
-        // flag is a change to that decision, not to this list.
+        // before the commit and acts only after it. A second flag is a
+        // decision, not an edit to this list.
         let names: Vec<&str> = spec.flags.iter().map(|f| f.name).collect();
         assert_eq!(
             names,

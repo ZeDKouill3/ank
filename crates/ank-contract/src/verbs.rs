@@ -1433,8 +1433,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         subcommands: &[],
         kinds: &[],
         // As many ids as the caller names, each its own commit: the subject
-        // `ratify <id>` is the anchor, so two ratifications never share one
-        // (ADR-2a63c0c87691).
+        // `ratify <id>` is the anchor, so two ratifications never share one.
         max_positionals: usize::MAX,
         positional_help: "<id>...",
         flags: &[switch("--pr")],
@@ -1454,9 +1453,9 @@ pub const COMMANDS: &[CommandSpec] = &[
                 ExitCode::Environment,
                 "the default branch cannot be determined, from config.yml or from origin",
             ),
-            // The --pr prerequisites, every one checked before the first commit
-            // (ADR-2a63c0c87691): 9 where the environment needs repairing, 7
-            // where the tree is not in the state the carry needs.
+            // The --pr prerequisites, every one checked before the first commit:
+            // 9 where the environment needs repairing, 7 where the tree is not
+            // in the state the carry needs.
             refuses(
                 ExitCode::Environment,
                 "--pr: the default branch has no upstream to reset to and push beside",

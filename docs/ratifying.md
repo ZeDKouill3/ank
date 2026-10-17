@@ -15,8 +15,10 @@ geometry and a ratification hash that depends on where it is read.
 
 That rule is about where you stand when you sign. It is not a licence to push to
 `main`. The ratification commit reaches `main` through a pull request like every
-other change, and CI sees it before it lands. `ank accept --pr` carries it there
-(ADR-2a63c0c87691):
+other change, and CI sees it before it lands. `ank accept --pr` carries it there.
+This is the recipe the tree runs today: ADR-5e47007a75be, proposed, makes the
+ratification a signed ref under `refs/ank/ratify/` and retires `--pr`, and this
+page follows once it is ratified.
 
     git switch main && git pull
     ank accept <id>... --pr          # one commit per id, then the pull request
