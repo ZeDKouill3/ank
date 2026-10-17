@@ -4183,10 +4183,11 @@ impl App {
     /// included, so what is drawn here is what the table declares and there is
     /// no row this has to leave out for want of a key to name.
     pub fn actions(&self) -> Vec<Action> {
-        bindings::offered(self.holding())
+        let holding = self.holding();
+        bindings::offered(holding)
             .map(|binding| Action {
                 key: binding.key,
-                does: binding.word,
+                does: binding.said(holding),
             })
             .collect()
     }

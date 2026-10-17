@@ -320,3 +320,41 @@ fn a_tap_on_a_panel_title_presses_its_digit() {
     );
     live.quit();
 }
+
+/// On GRAPH the key `f` walks the fold rather than the kind, and the line says
+/// so in the word the key table declares for it (TASK-f8e0d82e25bd); on the
+/// tasks listing the same key still says kind.
+#[test]
+fn on_the_graph_f_is_named_by_the_fold_it_walks() {
+    let repo = Repo::seeded();
+    for (columns, rows) in BOTH {
+        let mut live = Live::open(&repo, columns, rows);
+        let frame = opened(&live);
+        let line = last_row(&frame);
+        assert!(
+            line.contains("[f kind]") && !line.contains("[f fold]"),
+            "{columns}x{rows}: on the tasks listing f still says kind: {line}\n{frame}"
+        );
+        live.send("3");
+        let title = match columns >= WIDE.0 {
+            true => crate::terminal::focused("3 GRAPH"),
+            false => "3 GRAPH".to_string(),
+        };
+        let frame = live.until("the graph to be drawn with the focus on it", |t| {
+            t.contains(&title)
+                && t.contains("tasks in the corpus)")
+                && !t.contains("(reading)")
+                && last_row(t).ends_with(QUIT)
+        });
+        let line = last_row(&frame);
+        assert!(
+            entries(&line).iter().any(|e| e == "[f fold]"),
+            "{columns}x{rows}: on GRAPH f is named by the fold it walks: {line}\n{frame}"
+        );
+        assert!(
+            !frame.contains("[f kind]"),
+            "{columns}x{rows}: nothing on GRAPH calls f kind: {line}\n{frame}"
+        );
+        live.quit();
+    }
+}
