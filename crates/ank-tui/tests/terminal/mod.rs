@@ -153,6 +153,43 @@ fn a_fixture_repository_is_not_maintained_under_the_test() {
     }
 }
 
+/// A reader holds its own terminal and no other (TASK-4952001e9596).
+///
+/// A second session is opened before the reader and kept open across the
+/// spawn, which is the condition under which a master leaked at all: before
+/// `pty::open` set close-on-exec, the reader inherited that master and its
+/// own, and every `ank` it ran inherited both in turn. The count is taken off
+/// `/proc/<pid>/fd` because that is the kernel's own list of what the child
+/// holds, which is why this runs on Linux only; the fix it pins is the same
+/// call on every Unix.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reader_holds_no_terminal_but_its_own() {
+    let repo = Repo::seeded();
+    let (_elsewhere, _its_path) = pty::open();
+    let live = Live::open(&repo, 120, 30);
+    live.until("the session to open", |t| t.contains("2 ENTITIES"));
+    let held: Vec<String> = std::fs::read_dir(format!("/proc/{}/fd", live.child.id()))
+        .expect("the child's descriptor table is listed under /proc")
+        .map(|entry| {
+            std::fs::read_link(entry.expect("an entry").path())
+                .map(|target| target.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+        .collect();
+    let own = held.iter().filter(|t| t.starts_with("/dev/pts/")).count();
+    assert!(
+        own >= 3,
+        "the reader's own terminal is not on 0, 1 and 2, so this measures nothing: {held:?}"
+    );
+    let masters = held.iter().filter(|t| t.ends_with("/ptmx")).count();
+    assert_eq!(
+        masters, 0,
+        "the reader inherited {masters} pseudo-terminal master(s): {held:?}"
+    );
+    live.quit();
+}
+
 /// The terminal every session but [`Live::dumb`] is opened on.
 ///
 /// Stated rather than inherited: this suite runs under whatever the developer
@@ -828,9 +865,14 @@ mod pty {
         fn unlockpt(fd: c_int) -> c_int;
         fn ptsname(fd: c_int) -> *mut c_char;
         fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+        fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
     }
 
     const O_RDWR: c_int = 2;
+    /// `fcntl`'s set-descriptor-flags command and the one flag it has, the
+    /// same two numbers on Linux and macOS.
+    const F_SETFD: c_int = 2;
+    const FD_CLOEXEC: c_int = 1;
 
     /// Not POSIX, and spelled per platform because it is per platform: an
     /// `ioctl` number encodes the direction and the size of its argument, and
@@ -848,6 +890,28 @@ mod pty {
         y_pixels: u16,
     }
 
+    /// The master side as a `File`, closed on exec, and the path of the
+    /// slave to hand the child.
+    ///
+    /// **Close-on-exec is set here because `posix_openpt` does not set it**
+    /// (TASK-4952001e9596). Every descriptor this harness otherwise hands a
+    /// child is `O_CLOEXEC` already -- `OpenOptions` opens the slaves that
+    /// way, `File::try_clone` duplicates the drain's copy that way, and the
+    /// three the child is given are moved onto 0, 1 and 2 by `Command` --
+    /// so the master was the one descriptor that crossed an exec. It crossed
+    /// into every reader spawned while the session was open, and from there
+    /// into every `ank` the reader ran: measured on 2026-10-17, two to five
+    /// `/dev/ptmx` links per reader on the dashboard suite alone. None of
+    /// them was the hang seen once on 2026-10-14 (the log of the task has
+    /// the measurement that was), but a child holding another session's
+    /// terminal keeps it allocated after that session ended, and a
+    /// descriptor nobody meant to hand over is not one to keep handing over.
+    ///
+    /// `fcntl(F_SETFD)` rather than an `O_CLOEXEC` bit in the open flags:
+    /// the flag is documented for `posix_openpt` on Linux and merely passed
+    /// through on macOS, where the two numbers below are the same as here.
+    /// Set before anything else is done with the descriptor, so there is no
+    /// spawn it could miss.
     pub fn open() -> (File, PathBuf) {
         // SAFETY: the four calls are the POSIX pseudo-terminal sequence, in
         // order, and every return is checked before the next is made. The
@@ -856,6 +920,12 @@ mod pty {
         unsafe {
             let master = posix_openpt(O_RDWR);
             assert!(master >= 0, "posix_openpt failed");
+            assert_eq!(
+                fcntl(master, F_SETFD, FD_CLOEXEC),
+                0,
+                "the master could not be made close-on-exec: {}",
+                std::io::Error::last_os_error()
+            );
             assert_eq!(grantpt(master), 0, "grantpt failed");
             assert_eq!(unlockpt(master), 0, "unlockpt failed");
             let name = ptsname(master);
