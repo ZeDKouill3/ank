@@ -2,20 +2,10 @@
 # job (ADR-8c12a38531e3): one pool for every test of every binary, so the
 # binaries no longer wait for each other.
 
-# Eight suites of ank-tui open pseudo-terminals, and under `cargo test` they take
-# them in turn through the in-process `terminal::ONE_AT_A_TIME` lock:
-# `ptsname(3)` answers out of a static buffer, so two sessions opened at once in
-# one process can be handed the same slave path (LOG-3b0bc419c884). Under
-# nextest every test is its own process and that lock serialises nothing, so
-# the group carries the constraint instead. The suites are modules of the one
-# `integration` target (TASK-22af5b0918a4), so they are named by test path and
-# not by binary.
-[test-groups]
-pty-serial = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = 'package(ank-tui) & binary(integration) & test(/^(bindings|claims|colour|edit|graph|overlay|search|verbs)::/)'
-test-group = 'pty-serial'
+# No test group: the pseudo-terminal suites of ank-tui ran one at a time only
+# because the harness read the slave's path out of `ptsname(3)`'s static buffer,
+# and it reads it with `ptsname_r` now (TASK-adea229723df; the measurement is
+# where the lock stood, in crates/ank-tui/tests/terminal/mod.rs).
 
 # CI runs every test to the end: whether a failure is one platform's or every
 # platform's is the information a run is for, as `fail-fast: false` already says

@@ -39,7 +39,7 @@
 #![cfg_attr(not(unix), allow(dead_code))]
 
 #[cfg(unix)]
-use crate::terminal::{short_of, Graphed, Live, Repo, ONE_AT_A_TIME};
+use crate::terminal::{short_of, Graphed, Live, Repo};
 
 /// The desk, under the dashboard's width: one region.
 const DESK: (u16, u16) = (80, 24);
@@ -530,9 +530,6 @@ fn declared_scopes(shown: &str) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&fixture.repo, columns, rows);
@@ -700,9 +697,6 @@ fn three_reaches_the_graph_which_draws_one_row_per_open_task_above_its_blockers(
 #[cfg(unix)]
 #[test]
 fn the_cell_says_finished_open_or_under_way() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     let glyph = |g: ank_tui::graph::Glyph| ank_tui::graph::Alphabet::Boxes.glyph(g);
     for (columns, rows) in WINDOWS {
@@ -760,9 +754,6 @@ fn the_cell_says_finished_open_or_under_way() {
 #[cfg(unix)]
 #[test]
 fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut painted = Live::painting(&fixture.repo, columns, rows);
@@ -884,9 +875,6 @@ fn phases(frames: &[String], columns: u16, under_way: &str) -> std::collections:
 #[cfg(unix)]
 #[test]
 fn a_task_under_way_pulses_through_its_four_phases_and_the_pulse_reads_nothing() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     fixture.repo.warm_find();
     for (columns, rows) in WINDOWS {
@@ -928,9 +916,6 @@ fn a_task_under_way_pulses_through_its_four_phases_and_the_pulse_reads_nothing()
 #[cfg(unix)]
 #[test]
 fn a_dumb_terminal_pulses_in_the_ascii_alphabet() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut live = Live::dumb(&fixture.repo, columns, rows);
@@ -995,9 +980,6 @@ fn taller() -> Graphed {
 #[cfg(unix)]
 #[test]
 fn off_the_page_under_a_document_or_with_nothing_in_progress_nothing_is_painted() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = taller();
     let under_way = short_of(&fixture.under_way);
     for (columns, rows) in WINDOWS {
@@ -1086,9 +1068,6 @@ fn a_screen_whose_only_motion_is_the_pulse_is_settled() {
 #[cfg(unix)]
 #[test]
 fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     use ank_tui::graph::Glyph;
     let ascii = |g: Glyph| ank_tui::graph::Alphabet::Ascii.glyph(g);
@@ -1169,9 +1148,6 @@ fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
 #[cfg(unix)]
 #[test]
 fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_graph_again() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     fixture.repo.warm_find();
     for (columns, rows) in WINDOWS {
@@ -1419,9 +1395,6 @@ fn the_cursor_walks_the_rows_enter_opens_a_task_and_nothing_but_u_reads_the_grap
 #[cfg(unix)]
 #[test]
 fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&fixture.repo, columns, rows);
@@ -1455,9 +1428,6 @@ fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
 #[cfg(unix)]
 #[test]
 fn tab_from_the_entities_walks_graph_queue_claims() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&repo, columns, rows);
@@ -1485,9 +1455,6 @@ fn tab_from_the_entities_walks_graph_queue_claims() {
 #[cfg(unix)]
 #[test]
 fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     for (columns, rows) in WINDOWS {
         let mut live = Live::open(&repo, columns, rows);
@@ -1536,9 +1503,6 @@ fn enter_opens_the_document_and_b_gives_the_listing_back_on_the_same_row() {
 #[cfg(unix)]
 #[test]
 fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     let (columns, rows) = WIDE;
     let mut live = Live::open(&repo, columns, rows);
@@ -1591,9 +1555,6 @@ fn on_the_wide_frame_the_right_panel_is_the_graph_and_then_the_document() {
 #[cfg(unix)]
 #[test]
 fn a_graph_row_says_ready_waits_n_in_progress_done_or_closed_and_never_open() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let (fixture, history) = historied();
     let key = cycle_key();
     for (columns, rows) in UNFOLDED_WINDOWS {
@@ -1665,9 +1626,6 @@ fn a_graph_row_says_ready_waits_n_in_progress_done_or_closed_and_never_open() {
 #[cfg(unix)]
 #[test]
 fn the_graphed_fixture_is_a_chain_a_diamond_a_closed_blocker_and_a_lone_task() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let fixture = Repo::graphed();
     let doc = fixture.repo.stdout(&["graph", "--json"]);
     let ids = crate::terminal::ids_of(&doc);
@@ -1843,9 +1801,6 @@ fn settled_on_graph(
 #[cfg(unix)]
 #[test]
 fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let (fixture, history) = historied();
     fixture.repo.warm_find();
     let key = cycle_key();
@@ -1973,9 +1928,6 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
 #[cfg(unix)]
 #[test]
 fn a_search_narrows_the_graph_to_one_task_and_escape_gives_the_fold_back() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let (fixture, history) = historied();
     fixture.repo.warm_find();
     let every = every_task(&fixture, &history);

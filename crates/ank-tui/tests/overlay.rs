@@ -27,7 +27,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{Live, Repo, ONE_AT_A_TIME};
+use crate::terminal::{Live, Repo};
 use ank_tui::bindings::{self, Runs};
 use ank_tui::input::Command;
 use ank_tui::keys::Press;
@@ -226,9 +226,6 @@ fn list_at_claim(live: &mut Live) -> (u16, u16) {
 /// still exactly the window it was.
 #[test]
 fn the_key_list_is_a_bordered_overlay_over_the_panels_at_both_windows() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     for window in WINDOWS {
         let repo = Repo::seeded();
         let mut live = opened(&repo, window);
@@ -307,9 +304,6 @@ fn the_key_list_is_a_bordered_overlay_over_the_panels_at_both_windows() {
 /// line, drawn, with the key that would run it -- and nothing run.
 #[test]
 fn a_press_on_the_row_reading_claim_raises_the_claim_confirmation_at_both_windows() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     for window in WINDOWS {
         let repo = Repo::seeded();
         repo.warm();
@@ -359,9 +353,6 @@ fn a_press_on_the_row_reading_claim_raises_the_claim_confirmation_at_both_window
 /// characters.
 #[test]
 fn esc_closes_the_list_and_leaves_the_frame_the_one_it_was_at_both_windows() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     for window in WINDOWS {
         let repo = Repo::seeded();
         let mut live = opened(&repo, window);
@@ -400,9 +391,6 @@ fn esc_closes_the_list_and_leaves_the_frame_the_one_it_was_at_both_windows() {
 /// reader and not a key list.
 #[test]
 fn a_press_while_a_command_waits_dismisses_it_and_opens_no_list_at_both_windows() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     for window in WINDOWS {
         let repo = Repo::seeded();
         repo.warm();

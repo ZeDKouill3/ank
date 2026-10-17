@@ -190,6 +190,62 @@ fn a_reader_holds_no_terminal_but_its_own() {
     live.quit();
 }
 
+/// Every terminal opened at once is told its own slave (TASK-adea229723df).
+///
+/// Several threads open sessions together, a handful each held at a time, and
+/// once every thread holds its handful the slave each was told is asked again
+/// for the same master, by one thread alone: `TIOCGPTN` on Linux, the kernel's
+/// own number for the descriptor, and `ptsname_r` elsewhere. Read out of
+/// `ptsname(3)`'s static buffer, two threads asking at once could both copy
+/// the answer meant for one of them, and two sessions then shared a terminal:
+/// one `q` written, one reader exits and the other waits forever, which is
+/// the hang seen once in `dashboard.rs` on 2026-10-14. The barrier is what
+/// makes it measurable: every round starts every thread on its `open` at the
+/// same instant, which is the race the suites only ever ran into by luck.
+#[test]
+fn every_terminal_opened_at_once_is_told_its_own_slave() {
+    const THREADS: usize = 8;
+    const PER_THREAD: usize = 4000;
+    const HELD: usize = 8;
+    let start = std::sync::Barrier::new(THREADS);
+    let checked = std::sync::Barrier::new(THREADS);
+    let crossed = std::sync::Mutex::new(Vec::<(PathBuf, PathBuf)>::new());
+    let held = std::sync::Mutex::new(Vec::<(std::fs::File, PathBuf)>::new());
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS {
+            let (start, checked, crossed, held) = (&start, &checked, &crossed, &held);
+            scope.spawn(move || {
+                for _ in 0..PER_THREAD / HELD {
+                    start.wait();
+                    let mine: Vec<_> = (0..HELD).map(|_| pty::open()).collect();
+                    held.lock()
+                        .expect("no thread panics holding it")
+                        .extend(mine);
+                    // One thread re-asks while every master is held, so no
+                    // number has been given back to the kernel and handed on.
+                    if checked.wait().is_leader() {
+                        let mut held = held.lock().expect("no thread panics holding it");
+                        let mut crossed = crossed.lock().expect("no thread panics holding it");
+                        for (master, told) in held.drain(..) {
+                            let own = pty::asked_again(&master);
+                            if own != told {
+                                crossed.push((told, own));
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let crossed = crossed.into_inner().expect("no thread panicked");
+    assert!(
+        crossed.is_empty(),
+        "{} of {} terminals were told another's slave (told, own): {crossed:?}",
+        crossed.len(),
+        THREADS * PER_THREAD
+    );
+}
+
 /// The terminal every session but [`Live::dumb`] is opened on.
 ///
 /// Stated rather than inherited: this suite runs under whatever the developer
@@ -781,25 +837,17 @@ pub fn focused(title: &str) -> String {
     format!("{}{title}", ank_tui::view::BOXES.focus())
 }
 
-/// One pseudo-terminal open at a time, across every suite that takes it.
-///
-/// **Not a slow test being polite: `ptsname(3)` answers out of a static
-/// buffer.** `pty::open` calls `posix_openpt` and then asks `ptsname` for the
-/// slave's path, and two threads doing that at once can both read the same
-/// answer -- so two sessions attach to one terminal, one of them resizes it to
-/// the other's window, and the second child is left writing down a pipe nobody
-/// is draining. `tests/bindings.rs` tripped it first, being the first suite to
-/// open two sessions at *different* sizes, which is what makes a crossed path
-/// visible rather than merely wrong.
-///
-/// One lock and not one per suite: the suites are modules of one test binary,
-/// so under `cargo test` they share one process and a lock per suite would
-/// let two of them open a session at once. Under nextest every test is its own
-/// process and this lock serialises nothing, so `.config/nextest.toml` names
-/// the same tests in its `pty-serial` group. The defect is the harness's and
-/// the fix belongs in `pty::open` (`ptsname_r`, or a lock around the four
-/// calls); LOG-3b0bc419c884 records it.
-pub static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// No lock serialises the sessions, and none is missing. Eight suites used to
+// take `ONE_AT_A_TIME`, and `.config/nextest.toml` held the same tests in a
+// `pty-serial` group, because `pty::open` read the slave's path out of
+// `ptsname(3)`'s static buffer and two sessions opened at once could be told one
+// terminal (LOG-3b0bc419c884). `pty::open` reads it with `ptsname_r` now, and
+// `every_terminal_opened_at_once_is_told_its_own_slave` pins that. With both
+// gone, measured on Linux over 10 runs each of the 125 tests (TASK-adea229723df):
+// 1 red under cargo test and 2 under nextest, all three in keyline.rs, which
+// never took the lock and fails run alone too; with both in place, 1 red under
+// cargo test, in dashboard.rs, which never took it either. Nothing the lock
+// held back was left to hold.
 
 // ---------------------------------------------------------------------------
 // The terminal
@@ -863,7 +911,7 @@ mod pty {
         fn posix_openpt(flags: c_int) -> c_int;
         fn grantpt(fd: c_int) -> c_int;
         fn unlockpt(fd: c_int) -> c_int;
-        fn ptsname(fd: c_int) -> *mut c_char;
+        fn ptsname_r(fd: c_int, buffer: *mut c_char, length: usize) -> c_int;
         fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
         fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
     }
@@ -881,6 +929,10 @@ mod pty {
     const TIOCSWINSZ: c_ulong = 0x5414;
     #[cfg(not(target_os = "linux"))]
     const TIOCSWINSZ: c_ulong = 0x8008_7467;
+    /// The slave's number, Linux's own ioctl and the one `ptsname_r` is built
+    /// on there: `_IOR('T', 0x30, unsigned int)`.
+    #[cfg(target_os = "linux")]
+    const TIOCGPTN: c_ulong = 0x8004_5430;
 
     #[repr(C)]
     struct WinSize {
@@ -912,11 +964,34 @@ mod pty {
     /// through on macOS, where the two numbers below are the same as here.
     /// Set before anything else is done with the descriptor, so there is no
     /// spawn it could miss.
+    /// The slave of `master`, asked again by a road that owns its answer:
+    /// the kernel's number for the descriptor on Linux, `ptsname_r` into a
+    /// buffer of this frame's elsewhere. The instrument of
+    /// `every_terminal_opened_at_once_is_told_its_own_slave`.
+    #[cfg(target_os = "linux")]
+    pub fn asked_again(master: &File) -> PathBuf {
+        let mut number: u32 = 0;
+        // SAFETY: the descriptor is open and owned by `master`, and the third
+        // argument points at an `unsigned int`, which is what TIOCGPTN writes.
+        let asked = unsafe { ioctl(master.as_raw_fd(), TIOCGPTN, &mut number) };
+        assert_eq!(
+            asked,
+            0,
+            "the kernel did not say which slave this is: {}",
+            std::io::Error::last_os_error()
+        );
+        PathBuf::from(format!("/dev/pts/{number}"))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn asked_again(master: &File) -> PathBuf {
+        named(master.as_raw_fd())
+    }
+
     pub fn open() -> (File, PathBuf) {
         // SAFETY: the four calls are the POSIX pseudo-terminal sequence, in
         // order, and every return is checked before the next is made. The
-        // pointer `ptsname` answers with is owned by the C library and is
-        // copied out before anything else can invalidate it.
+        // slave's name is read into a buffer of this call's, see [`named`].
         unsafe {
             let master = posix_openpt(O_RDWR);
             assert!(master >= 0, "posix_openpt failed");
@@ -928,16 +1003,33 @@ mod pty {
             );
             assert_eq!(grantpt(master), 0, "grantpt failed");
             assert_eq!(unlockpt(master), 0, "unlockpt failed");
-            let name = ptsname(master);
-            assert!(!name.is_null(), "ptsname answered nothing");
-            let path = PathBuf::from(
-                CStr::from_ptr(name)
-                    .to_str()
-                    .expect("a device path is UTF-8")
-                    .to_string(),
-            );
+            let path = named(master);
             (File::from_raw_fd(master), path)
         }
+    }
+
+    /// The slave's path, read with `ptsname_r` into a buffer this frame owns.
+    ///
+    /// **Never `ptsname(3)`: it answers out of one static buffer per
+    /// process**, and two threads opening a terminal at once could both copy
+    /// the path meant for one of them, so two sessions attached to one slave
+    /// (TASK-adea229723df: 8 threads, 32000 opens, one to six crossed per run
+    /// before this). `ptsname_r` is in glibc and in macOS since 10.13.4; it
+    /// answers zero on success on both, an error number on one and `-1` on
+    /// the other, which is why only zero is read.
+    fn named(master: c_int) -> PathBuf {
+        let mut buffer = [0 as c_char; 128];
+        // SAFETY: the buffer is this frame's and its length is the one given.
+        let asked = unsafe { ptsname_r(master, buffer.as_mut_ptr(), buffer.len()) };
+        assert_eq!(
+            asked,
+            0,
+            "ptsname_r answered nothing: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: on success `ptsname_r` wrote a terminated string into it.
+        let name = unsafe { CStr::from_ptr(buffer.as_ptr()) };
+        PathBuf::from(name.to_str().expect("a device path is UTF-8"))
     }
 
     /// The window, stated on the slave side.

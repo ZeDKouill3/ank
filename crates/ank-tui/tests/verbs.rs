@@ -30,7 +30,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{short_of, Live, Repo, ONE_AT_A_TIME};
+use crate::terminal::{short_of, Live, Repo};
 use ank_tui::view::{ABOUT, DISMISSED};
 
 /// Wide enough that a composed command line fits one row, so an assertion about
@@ -125,9 +125,6 @@ fn open(live: &mut Live, id: &str) {
 /// sentence on a screen.
 #[test]
 fn each_of_the_six_verbs_is_a_letter_that_spells_the_panels_entity_and_waits() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm();
     let task = repo.only(&["--type", "task"]);
@@ -208,9 +205,6 @@ fn each_of_the_six_verbs_is_a_letter_that_spells_the_panels_entity_and_waits() {
 /// write would be composing a command against one entity and showing another.
 #[test]
 fn the_four_letters_the_verbs_cost_move_nothing_on_the_screen() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm();
     let mut live = Live::open(&repo, WINDOW.0, WINDOW.1);
@@ -289,9 +283,6 @@ fn the_four_letters_the_verbs_cost_move_nothing_on_the_screen() {
 /// `close` without `--reason` would be teaching a command the CLI refuses.
 #[test]
 fn the_key_past_the_six_names_the_verbs_with_no_letter_of_their_own() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm();
     let refs = repo.refs();
@@ -352,9 +343,6 @@ fn the_key_past_the_six_names_the_verbs_with_no_letter_of_their_own() {
 /// fails here rather than passing quietly.
 #[test]
 fn no_word_typed_anywhere_reaches_a_verb() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     repo.warm();
     let refs = repo.refs();

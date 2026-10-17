@@ -49,7 +49,7 @@
 
 use crate::terminal;
 
-use crate::terminal::{ids_of, printed_at_a_terminal, Live, Repo, ONE_AT_A_TIME};
+use crate::terminal::{ids_of, printed_at_a_terminal, Live, Repo};
 
 /// The window every session here opens on. Wide enough that the two panels in
 /// the middle both draw rows, which is where the painted fields are.
@@ -264,9 +264,6 @@ fn painted(raw: &[u8]) -> Vec<Vec<usize>> {
 /// this crate rather than of crossterm -- see the header.
 #[test]
 fn with_no_color_set_no_sequence_the_reader_sends_paints_anything() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     with_a_retired_row(&repo);
     let (frame, raw) = driven(Live::open(&repo, WINDOW.0, WINDOW.1));
@@ -298,9 +295,6 @@ fn with_no_color_set_no_sequence_the_reader_sends_paints_anything() {
 /// now (TASK-252bf02de218) -- so where a person is, is the name on its title.
 #[test]
 fn with_no_color_set_the_screen_still_says_everything_it_has_to_say() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     with_a_retired_row(&repo);
     let live = Live::open(&repo, WINDOW.0, WINDOW.1);
@@ -348,9 +342,6 @@ fn with_no_color_set_the_screen_still_says_everything_it_has_to_say() {
 /// nothing to do with colour.
 #[test]
 fn without_no_color_it_paints_and_the_two_screens_are_the_same_characters() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     with_a_retired_row(&repo);
     // Warmed first: `.ank/index.db` is written by the first search of a corpus,
@@ -417,9 +408,6 @@ fn without_no_color_it_paints_and_the_two_screens_are_the_same_characters() {
 /// and the status that moved are all on the opening screen.
 #[test]
 fn an_identifier_is_painted_by_its_kind_on_the_wire() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     with_a_retired_row(&repo);
     let (_, raw) = driven(Live::painting(&repo, WINDOW.0, WINDOW.1));
@@ -456,9 +444,6 @@ fn an_identifier_is_painted_by_its_kind_on_the_wire() {
 /// person running `ank find` is actually sent.
 #[test]
 fn find_at_a_terminal_paints_each_kind_its_own_way() {
-    let _one = ONE_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|held| held.into_inner());
     let repo = Repo::seeded();
     with_a_retired_row(&repo);
     // One listing per filter, joined: what is asserted is each row's paint,

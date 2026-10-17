@@ -4,8 +4,7 @@
 //! this file, so a new suite is a new `mod` line here and never a new binary.
 //!
 //! `terminal` is declared here, once, and only on Unix, where the suites that
-//! drive a pseudo-terminal run; each reaches it as `crate::terminal`, and the
-//! ones that open a session take its `ONE_AT_A_TIME` lock.
+//! drive a pseudo-terminal run; each reaches it as `crate::terminal`.
 
 #[cfg(unix)]
 mod terminal;
