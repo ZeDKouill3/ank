@@ -4086,8 +4086,90 @@ fn copy_tree(from: &Path, to: &Path) {
 /// `the_walk_reaches_a_crate_that_is_not_this_one` both go through
 /// `superseded_ids`, which is `find --status superseded --all`, and cargo runs
 /// them on the same pool.
+///
+/// **Run [`cold_rounds`] times, each on a fresh cold copy** (TASK-4a819896815a):
+/// once in the ordinary suite, twenty under CI, so one run of the matrix is
+/// twenty measurements per platform. Every round prints one line, which the
+/// `ci` profile of .config/nextest.toml shows on a pass, so the count is read
+/// off the job log rather than inferred from a green.
 #[test]
 fn concurrent_readers_of_a_cold_corpus_of_this_size_all_answer() {
+    let rounds = cold_rounds();
+    let mut failed = Vec::new();
+    for round in 1..=rounds {
+        let refused = cold_readers_refused(None);
+        println!(
+            "cold readers round {round}/{rounds}: {} refused of 8",
+            refused.len()
+        );
+        if !refused.is_empty() {
+            failed.push(format!("round {round}:\n{}", refused.join("\n")));
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "readers of a cold corpus of this size refused each other in {} of {rounds} \
+         rounds. The index is derived, disposable and rebuildable (§6), so a reader \
+         that loses the race for it waits and answers; it never fails, and it never \
+         deletes the database the others are holding open:\n{}",
+        failed.len(),
+        failed.join("\n")
+    );
+}
+
+/// How many rounds the test above runs: `ANK_TEST_COLD_ROUNDS` when set, twenty
+/// under CI (`CI`, which every GitHub runner sets), one otherwise, so the
+/// ordinary suite and `ank done` pay for a single round.
+fn cold_rounds() -> u32 {
+    match std::env::var("ANK_TEST_COLD_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        Some(n) => n,
+        None if std::env::var_os("CI").is_some() => 20,
+        None => 1,
+    }
+}
+
+/// The same cold readers, behind a writer that outlasts the busy wall
+/// (TASK-4a819896815a).
+///
+/// The test above failed on `windows-latest` (run 39060575360, 21.8s against
+/// 10.6s for the retry that passed): three readers refused with `another
+/// process is writing the index (database is locked)`. Every refusal was the
+/// refresh's `BEGIN IMMEDIATE`, after the busy handler had waited the whole
+/// wall out, behind the one reader writing the rebuild. The wall was five
+/// seconds whatever that writer had to write, and on a runner where 3184 rows
+/// hold the lock longer than that, everybody queued behind it was refused.
+///
+/// A wall of 50ms is that runner, deterministically, on any platform: a tenth
+/// of what the rebuild holds the lock for on Linux. Measured before the fix
+/// with the wall at 100ms, eight cold readers in five rounds: 35 of 40
+/// refused, each having waited 100.6ms against a writer holding the lock for
+/// 550ms. What a reader waits for now is bounded by the rebuild it is itself
+/// about to write, so the base wall no longer decides whether it answers.
+///
+/// Not zero, and the reason is measured: at zero, one reader in 120 is refused
+/// on its very first read of a file whose creator is committing the schema
+/// while the file is still in the rollback journal. That commit is a few
+/// milliseconds of nobody's rebuild, which the wall exists to cover.
+#[test]
+fn cold_readers_wait_for_a_writer_that_outlasts_the_busy_wall() {
+    let refused = cold_readers_refused(Some("50"));
+    assert!(
+        refused.is_empty(),
+        "readers of a cold corpus were refused behind a writer that held the \
+         lock longer than the busy wall. The writer is rebuilding exactly what \
+         they need, so they wait for it, bounded by that rebuild, and answer \
+         from it:\n{}",
+        refused.join("\n")
+    );
+}
+
+/// Eight readers of a cold copy of this repository's corpus, run together,
+/// and what every one that did not answer said. `busy_ms` is the busy wall
+/// each of them is given, `None` for the default.
+fn cold_readers_refused(busy_ms: Option<&'static str>) -> Vec<String> {
     let r = Repo::new();
     copy_tree(&workspace_root().join(".ank"), &r.0.join(".ank"));
     // Cold, which is the state CI starts every run in: the index is gitignored,
@@ -4117,14 +4199,16 @@ fn concurrent_readers_of_a_cold_corpus_of_this_size_all_answer() {
                 .map(|a| (*a).to_string())
                 .collect();
             std::thread::spawn(move || {
-                let out = ank_command()
-                    .args(&args)
+                let mut cmd = ank_command();
+                cmd.args(&args)
                     .arg("--repo")
                     .arg(&corpus)
                     .env("ANK_AGENT", format!("agent-{i}@host"))
-                    .current_dir(std::env::temp_dir())
-                    .output()
-                    .expect("the binary must have been built");
+                    .current_dir(std::env::temp_dir());
+                if let Some(ms) = busy_ms {
+                    cmd.env("ANK_INDEX_BUSY_MS", ms);
+                }
+                let out = cmd.output().expect("the binary must have been built");
                 (args.join(" "), code(&out), stderr(&out))
             })
         })
@@ -4140,14 +4224,7 @@ fn concurrent_readers_of_a_cold_corpus_of_this_size_all_answer() {
             refused.push(format!("#{i} `ank {verb}` exited {code}: {}", err.trim()));
         }
     }
-    assert!(
-        refused.is_empty(),
-        "readers of a cold corpus of this size refused each other. The index is \
-         derived, disposable and rebuildable (§6), so a reader that loses the \
-         race for it waits and answers; it never fails, and it never deletes \
-         the database the others are holding open:\n{}",
-        refused.join("\n")
-    );
+    refused
 }
 
 /// A corpus is keyed on its root commit, so a path cannot change what it is
