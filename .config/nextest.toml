@@ -38,3 +38,20 @@ success-output = 'immediate'
 # for the matrix.
 [profile.ci]
 fail-fast = false
+
+# A test still running after ten minutes is killed and counted as a failure,
+# so a hang turns its leg red within the bound plus the suite instead of holding
+# the job to GitHub's six-hour limit: on 2026-10-17 the macOS leg of PR #640 sat
+# 46, 30 and 26 minutes in this step across three heads and was cancelled by
+# hand each time (TASK-8cb5af6607f5). nextest prints SLOW every `period` and
+# terminates at `period` times `terminate-after`: 60s times 10, a bound of 600s.
+# The slowest honest test, measured from the five green runs of main
+# 39059985353 to 39068855928, is
+# `cli::a_failing_verifier_answers_as_it_would_sequentially_and_leaves_nothing_running`
+# on windows-latest at 327.623s (about 20s in the other three runs); the
+# 1000-process scratch-root test,
+# `scratch::tests::a_root_is_locked_before_a_sibling_sweep_can_see_its_lock_file`,
+# took at most 54.325s on windows-latest and 61.582s on macos-latest. The bound
+# is 1.8 times the slowest pass seen; under 328s it would have turned two of
+# those five green runs red.
+slow-timeout = { period = "60s", terminate-after = 10 }
