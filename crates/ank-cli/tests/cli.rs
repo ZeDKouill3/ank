@@ -14032,7 +14032,7 @@ const NOT_A_PATH: [&str; 44] = [
     // (ADR-a2faf59f6ce0).
     "--fresh",
     // Carries no value at all: `accept --pr` names nothing, it carries the
-    // ratifications to a pull request (ADR-2a63c0c87691).
+    // ratifications to a pull request.
     "--pr",
     // Carries no value at all: the directory it writes is made under the
     // temporary directory by the verb, and nothing about it comes off the

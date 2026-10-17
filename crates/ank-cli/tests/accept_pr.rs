@@ -1,5 +1,6 @@
 //! `ank accept` takes several ids, and `--pr` carries them to a pull request
-//! (ADR-2a63c0c87691, TASK-68db19c9ed93).
+//! (TASK-68db19c9ed93). This is the recipe the tree runs today;
+//! ADR-5e47007a75be, proposed, retires `--pr` with the commit anchor.
 //!
 //! Through the binary, over a bare origin reached by `file://`, with `gh`
 //! replaced on `PATH` by a stub that records every invocation and answers
@@ -352,7 +353,7 @@ fn pr_carries_the_ratifications_to_a_pull_request_and_never_merges() {
 }
 
 /// The three prerequisites, each refused before the first commit, with the
-/// code ADR-2a63c0c87691 gives it and the tree as it was.
+/// code the contract declares for it and the tree as it was.
 #[test]
 fn pr_refuses_before_any_commit_when_a_prerequisite_is_missing() {
     let cases: [(&str, Gh, fn(&Corpus), i32, &str); 4] = [
