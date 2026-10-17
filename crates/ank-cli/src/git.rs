@@ -1286,13 +1286,21 @@ pub fn output_with_stdin(cwd: &Path, args: &[&str], input: &[u8]) -> Result<Outp
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(fail)?;
-    // Written before the output is collected, and the result is deliberately
-    // ignored: git closing stdin early is how it says it has read enough, and a
-    // broken pipe there is an answer rather than a failure.
-    if let Some(mut sink) = child.stdin.take() {
-        let _ = sink.write_all(input);
-    }
-    child.wait_with_output().map_err(fail)
+    // Written from a thread of its own while this one collects the output
+    // (TASK-f2b8aedcd9a4): written whole first, git blocks on a full stdout
+    // pipe while this side blocks on a full stdin pipe, which hung `done` at
+    // 3194 paths of 40 bytes, two 64 KiB pipes' worth. The result is
+    // deliberately ignored: git closing stdin early is how it says it has read
+    // enough, and a broken pipe there is an answer rather than a failure.
+    let sink = child.stdin.take();
+    std::thread::scope(|s| {
+        if let Some(mut sink) = sink {
+            s.spawn(move || {
+                let _ = sink.write_all(input);
+            });
+        }
+        child.wait_with_output().map_err(fail)
+    })
 }
 
 /// Reads many objects in one process.

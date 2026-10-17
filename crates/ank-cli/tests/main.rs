@@ -26,6 +26,7 @@ mod cli;
 mod context_since;
 mod corpora_schema;
 mod doc_replay;
+mod done_stdin_pipe;
 mod guide;
 mod help_new;
 mod index_per_schema;
