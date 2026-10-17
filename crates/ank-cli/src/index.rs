@@ -137,6 +137,41 @@ fn busy_timeout() -> std::time::Duration {
     }
 }
 
+/// What a refresh with rows to write waits for the write lock beyond the wall
+/// above, per row it is about to write (TASK-4a819896815a).
+///
+/// **The wall alone is a wait sized for nobody's work.** A reader of a cold
+/// corpus that loses the race for the write lock is queued behind the one
+/// writing the rebuild, and that writer holds the lock for as long as the
+/// rebuild takes: measured on Linux, 550ms for 3184 rows, and on
+/// `windows-latest` long enough past five seconds that three readers of eight
+/// were refused (run 39060575360). The loser then re-reads under the lock and
+/// writes nothing, so what it waits for is one writer, writing at most what the
+/// loser itself would have written, since both read the same files. Its own
+/// rows are therefore the bound, and the bound grows with the corpus instead of
+/// being outgrown by it.
+///
+/// Ten milliseconds a row is sixty times what Linux measured, so 3184 rows
+/// allow some thirty seconds more: a wait, bounded, and still an error rather
+/// than a verb that never returns when the writer is gone wrong.
+const ROW_WAIT: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// The wait for the write lock of a refresh about to write `rows` rows.
+fn write_wait(rows: usize) -> std::time::Duration {
+    busy_timeout() + ROW_WAIT * u32::try_from(rows).unwrap_or(u32::MAX)
+}
+
+/// The files a rebuild of the corpus at `ank` would write, live and archived,
+/// counted and not read: the bound [`Index::ensure_schema`] waits on before it
+/// knows anything else about the corpus.
+fn corpus_files(ank: &Path) -> usize {
+    [Store::ENTITIES_DIR, Store::ARCHIVE_DIR]
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(ank.join(dir)).ok())
+        .map(|entries| entries.count())
+        .sum()
+}
+
 // `entities.archived` defaults to 0, and that is not for this build's writes,
 // which always name it. A verb of the previous build that opened the index
 // before a newer one rebuilt it under the same file -- `ank done` from an older
@@ -833,6 +868,17 @@ impl Index {
             return Ok(());
         }
 
+        // **Waited for as long as a rebuild of this corpus can take**
+        // (TASK-4a819896815a). The holder of the lock is either another process
+        // installing the schema or the first one through it, already writing
+        // the rebuild, and [`write_wait`] says why the wall alone is not enough
+        // for the second. Measured with the wall at zero, eight cold readers in
+        // five rounds: eighteen refused at this begin and one at the commit
+        // below, which in a file still in the rollback journal needs every
+        // reader out, so the wait is held until the commit and put back after.
+        self.conn
+            .busy_timeout(write_wait(corpus_files(&self.ank)))
+            .map_err(|e| db_error(e, &self.ank))?;
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -857,7 +903,10 @@ impl Index {
                 .map_err(|e| db_error(e, &self.ank))?;
             }
         }
-        tx.commit().map_err(|e| db_error(e, &self.ank))
+        tx.commit().map_err(|e| db_error(e, &self.ank))?;
+        self.conn
+            .busy_timeout(busy_timeout())
+            .map_err(|e| db_error(e, &self.ank))
     }
 
     fn schema_version(&self) -> Result<Option<u32>> {
@@ -1020,9 +1069,30 @@ impl Index {
         // measured: twelve concurrent readers, eight refused, in under a
         // second. Taking the write lock at `BEGIN` is what puts the wait back
         // on the path that needs it.
+        //
+        // **And waited for as long as the work queued ahead can take**
+        // (TASK-4a819896815a): [`write_wait`] says why the wall alone is not
+        // that. Set for this begin only, and put back once the lock is held, so
+        // the wall every other statement waits on is the one it always was; a
+        // begin that still failed is an error every caller propagates, so the
+        // connection it leaves behind answers nothing more.
+        //
+        // Only rows to index count: a restat or a removal is never what a
+        // rebuild is made of, and a reader whose only writes are those still
+        // meets the wall it always did, which is what keeps
+        // `readers_of_a_warm_corpus_take_no_write_lock` able to see one.
+        let rows = writes
+            .iter()
+            .filter(|w| matches!(w, Write::Index(..) | Write::Unreadable(..)))
+            .count();
+        self.conn
+            .busy_timeout(write_wait(rows))
+            .map_err(|e| db_error(e, &self.ank))?;
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| db_error(e, &self.ank))?;
+        tx.busy_timeout(busy_timeout())
             .map_err(|e| db_error(e, &self.ank))?;
 
         // **Asked again under the lock, and this is what stops the queue from
