@@ -202,47 +202,112 @@ fn a_reader_holds_no_terminal_but_its_own() {
 /// the hang seen once in `dashboard.rs` on 2026-10-14. The barrier is what
 /// makes it measurable: every round starts every thread on its `open` at the
 /// same instant, which is the race the suites only ever ran into by luck.
+///
+/// **No thread can leave the others waiting.** A barrier that one thread
+/// never reaches holds the rest for ever, and a panic is how a thread stops
+/// reaching it: measured on Linux under `ulimit -n 60`, the first version of
+/// this test, which panicked on a failed open, was still waiting after 60
+/// seconds, and macos-latest held the job for 26 minutes. So an open that
+/// fails is recorded rather than unwound, every thread reaches every barrier,
+/// and one flag read after the barrier stops them all on the same round, on a
+/// failure or on the deadline alike. The window held is sized off the system's
+/// own ceiling, an eighth of it across every thread and never more than eight
+/// each, since macOS hands out a few hundred terminals where Linux hands out
+/// thousands; eight thousand opens per thread on Linux, where the race was
+/// measured (red 9 runs of 10 against the `ptsname(3)` read, 1 to 7 crossed
+/// per 64000), and a thousand elsewhere.
 #[test]
 fn every_terminal_opened_at_once_is_told_its_own_slave() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Barrier, Mutex, MutexGuard};
+    use std::time::{Duration, Instant};
+
     const THREADS: usize = 8;
-    const PER_THREAD: usize = 4000;
-    const HELD: usize = 8;
-    let start = std::sync::Barrier::new(THREADS);
-    let checked = std::sync::Barrier::new(THREADS);
-    let crossed = std::sync::Mutex::new(Vec::<(PathBuf, PathBuf)>::new());
-    let held = std::sync::Mutex::new(Vec::<(std::fs::File, PathBuf)>::new());
+    #[cfg(target_os = "linux")]
+    const PER_THREAD: usize = 8000;
+    #[cfg(not(target_os = "linux"))]
+    const PER_THREAD: usize = 1000;
+    let ceiling = pty::ceiling();
+    let each = (ceiling.unwrap_or(256) / 8 / THREADS).clamp(1, 8);
+    let rounds = PER_THREAD.div_ceil(each);
+    let began = Instant::now();
+    let deadline = began + Duration::from_secs(120);
+
+    // A poisoned lock is taken anyway: nothing here may panic and strand a
+    // thread short of a barrier.
+    fn take<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+        lock.lock().unwrap_or_else(|held| held.into_inner())
+    }
+    let start = Barrier::new(THREADS);
+    let checked = Barrier::new(THREADS);
+    let stop = AtomicBool::new(false);
+    let opened = AtomicUsize::new(0);
+    let failed = Mutex::new(Vec::<String>::new());
+    let crossed = Mutex::new(Vec::<(PathBuf, PathBuf)>::new());
+    let held = Mutex::new(Vec::<(std::fs::File, PathBuf)>::new());
     std::thread::scope(|scope| {
         for _ in 0..THREADS {
-            let (start, checked, crossed, held) = (&start, &checked, &crossed, &held);
+            let (start, checked, stop, opened) = (&start, &checked, &stop, &opened);
+            let (failed, crossed, held) = (&failed, &crossed, &held);
             scope.spawn(move || {
-                for _ in 0..PER_THREAD / HELD {
+                for _ in 0..rounds {
                     start.wait();
-                    let mine: Vec<_> = (0..HELD).map(|_| pty::open()).collect();
-                    held.lock()
-                        .expect("no thread panics holding it")
-                        .extend(mine);
+                    // Set by the leader before it reached this barrier, so
+                    // every thread reads the same answer on the same round.
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let mut mine = Vec::with_capacity(each);
+                    for _ in 0..each {
+                        match pty::try_open() {
+                            Ok(pair) => mine.push(pair),
+                            Err(error) => {
+                                take(failed).push(error.to_string());
+                                break;
+                            }
+                        }
+                    }
+                    opened.fetch_add(mine.len(), Ordering::Relaxed);
+                    take(held).extend(mine);
                     // One thread re-asks while every master is held, so no
                     // number has been given back to the kernel and handed on.
                     if checked.wait().is_leader() {
-                        let mut held = held.lock().expect("no thread panics holding it");
-                        let mut crossed = crossed.lock().expect("no thread panics holding it");
-                        for (master, told) in held.drain(..) {
-                            let own = pty::asked_again(&master);
-                            if own != told {
-                                crossed.push((told, own));
+                        for (master, told) in take(held).drain(..) {
+                            match pty::asked_again(&master) {
+                                Ok(own) if own != told => take(crossed).push((told, own)),
+                                Ok(_) => {}
+                                Err(error) => take(failed).push(error.to_string()),
                             }
+                        }
+                        if !take(failed).is_empty() || Instant::now() > deadline {
+                            stop.store(true, Ordering::Release);
                         }
                     }
                 }
             });
         }
     });
-    let crossed = crossed.into_inner().expect("no thread panicked");
+    let failed = failed.into_inner().unwrap_or_else(|held| held.into_inner());
+    assert!(
+        failed.is_empty(),
+        "{} of the opens failed, the system's ceiling being {ceiling:?} and {each} held \
+         per thread: {failed:?}",
+        failed.len()
+    );
+    let opened = opened.into_inner();
+    assert!(
+        opened >= THREADS * PER_THREAD,
+        "{opened} of {} opens done in {:?}, the deadline: this asserts too little",
+        THREADS * PER_THREAD,
+        began.elapsed()
+    );
+    let crossed = crossed
+        .into_inner()
+        .unwrap_or_else(|held| held.into_inner());
     assert!(
         crossed.is_empty(),
-        "{} of {} terminals were told another's slave (told, own): {crossed:?}",
-        crossed.len(),
-        THREADS * PER_THREAD
+        "{} of {opened} terminals were told another's slave (told, own): {crossed:?}",
+        crossed.len()
     );
 }
 
@@ -839,8 +904,8 @@ pub fn focused(title: &str) -> String {
 
 /// One pseudo-terminal suite at a time, across every suite that takes it.
 ///
-/// **Kept because macOS hangs with these suites concurrent, and no longer
-/// because of `ptsname(3)`.** The lock was first taken because `pty::open` read
+/// **Kept until macOS is measured without it, and no longer because of
+/// `ptsname(3)`.** The lock was first taken because `pty::open` read
 /// the slave's path out of `ptsname(3)`'s static buffer, so two sessions opened
 /// at once could be told one terminal (LOG-3b0bc419c884). It reads it with
 /// `ptsname_r` now, and `every_terminal_opened_at_once_is_told_its_own_slave`
@@ -853,9 +918,11 @@ pub fn focused(title: &str) -> String {
 /// 39064235334 (head 8c1954e) 30 minutes until it was cancelled, while
 /// ubuntu-latest and windows-latest passed both. So both came back, on every
 /// platform: the hang is not diagnosed, and ten Linux runs do not show Linux
-/// needs neither. Those two heads also carried the `ptsname_r` read and its
-/// thirty-two-thousand-open test, so the removal is the likely cause and not a
-/// measured one.
+/// needs neither. Those two heads also carried
+/// `every_terminal_opened_at_once_is_told_its_own_slave`, and a third, 4dda9b9,
+/// hung the same way with the lock and the group back: the hang was that
+/// test's, which left its threads at a barrier when one open failed. So the
+/// removal was never measured on macOS, and the lock stays until it is.
 ///
 /// One lock and not one per suite: the suites are modules of one test binary,
 /// so under `cargo test` they share one process and a lock per suite would
@@ -931,6 +998,17 @@ mod pty {
         fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
     }
 
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            value: *mut std::ffi::c_void,
+            length: *mut usize,
+            new_value: *mut std::ffi::c_void,
+            new_length: usize,
+        ) -> c_int;
+    }
+
     const O_RDWR: c_int = 2;
     /// `fcntl`'s set-descriptor-flags command and the one flag it has, the
     /// same two numbers on Linux and macOS.
@@ -979,47 +1057,50 @@ mod pty {
     /// through on macOS, where the two numbers below are the same as here.
     /// Set before anything else is done with the descriptor, so there is no
     /// spawn it could miss.
-    /// The slave of `master`, asked again by a road that owns its answer:
-    /// the kernel's number for the descriptor on Linux, `ptsname_r` into a
-    /// buffer of this frame's elsewhere. The instrument of
-    /// `every_terminal_opened_at_once_is_told_its_own_slave`.
-    #[cfg(target_os = "linux")]
-    pub fn asked_again(master: &File) -> PathBuf {
-        let mut number: u32 = 0;
-        // SAFETY: the descriptor is open and owned by `master`, and the third
-        // argument points at an `unsigned int`, which is what TIOCGPTN writes.
-        let asked = unsafe { ioctl(master.as_raw_fd(), TIOCGPTN, &mut number) };
-        assert_eq!(
-            asked,
-            0,
-            "the kernel did not say which slave this is: {}",
-            std::io::Error::last_os_error()
-        );
-        PathBuf::from(format!("/dev/pts/{number}"))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn asked_again(master: &File) -> PathBuf {
-        named(master.as_raw_fd())
-    }
-
     pub fn open() -> (File, PathBuf) {
+        try_open().unwrap_or_else(|failed| {
+            panic!(
+                "a pseudo-terminal could not be opened: {failed} (EAGAIN or ENOSPC from \
+                 posix_openpt is the system's table of them full)"
+            )
+        })
+    }
+
+    /// [`open`], answering the error rather than panicking on it.
+    ///
+    /// **Nothing here retries.** A full table answers `EAGAIN` or `ENOSPC`
+    /// and that answer is handed back at once: a caller that has to stay in
+    /// step with other threads, as
+    /// `every_terminal_opened_at_once_is_told_its_own_slave` does, can then
+    /// say so and stop, where a panic in one of its threads would leave the
+    /// others waiting on a barrier for ever.
+    pub fn try_open() -> std::io::Result<(File, PathBuf)> {
+        let failed = |call: &str| {
+            let error = std::io::Error::last_os_error();
+            std::io::Error::new(error.kind(), format!("{call}: {error}"))
+        };
         // SAFETY: the four calls are the POSIX pseudo-terminal sequence, in
         // order, and every return is checked before the next is made. The
-        // slave's name is read into a buffer of this call's, see [`named`].
+        // descriptor is owned by `master` from the moment it exists, so an
+        // early return closes it. The slave's name is read into a buffer of
+        // this call's, see [`named`].
         unsafe {
-            let master = posix_openpt(O_RDWR);
-            assert!(master >= 0, "posix_openpt failed");
-            assert_eq!(
-                fcntl(master, F_SETFD, FD_CLOEXEC),
-                0,
-                "the master could not be made close-on-exec: {}",
-                std::io::Error::last_os_error()
-            );
-            assert_eq!(grantpt(master), 0, "grantpt failed");
-            assert_eq!(unlockpt(master), 0, "unlockpt failed");
-            let path = named(master);
-            (File::from_raw_fd(master), path)
+            let fd = posix_openpt(O_RDWR);
+            if fd < 0 {
+                return Err(failed("posix_openpt"));
+            }
+            let master = File::from_raw_fd(fd);
+            if fcntl(fd, F_SETFD, FD_CLOEXEC) != 0 {
+                return Err(failed("fcntl(F_SETFD, FD_CLOEXEC)"));
+            }
+            if grantpt(fd) != 0 {
+                return Err(failed("grantpt"));
+            }
+            if unlockpt(fd) != 0 {
+                return Err(failed("unlockpt"));
+            }
+            let path = named(fd)?;
+            Ok((master, path))
         }
     }
 
@@ -1032,19 +1113,81 @@ mod pty {
     /// before this). `ptsname_r` is in glibc and in macOS since 10.13.4; it
     /// answers zero on success on both, an error number on one and `-1` on
     /// the other, which is why only zero is read.
-    fn named(master: c_int) -> PathBuf {
+    fn named(master: c_int) -> std::io::Result<PathBuf> {
         let mut buffer = [0 as c_char; 128];
         // SAFETY: the buffer is this frame's and its length is the one given.
-        let asked = unsafe { ptsname_r(master, buffer.as_mut_ptr(), buffer.len()) };
-        assert_eq!(
-            asked,
-            0,
-            "ptsname_r answered nothing: {}",
-            std::io::Error::last_os_error()
-        );
+        if unsafe { ptsname_r(master, buffer.as_mut_ptr(), buffer.len()) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("ptsname_r: {error}"),
+            ));
+        }
         // SAFETY: on success `ptsname_r` wrote a terminated string into it.
         let name = unsafe { CStr::from_ptr(buffer.as_ptr()) };
-        PathBuf::from(name.to_str().expect("a device path is UTF-8"))
+        Ok(PathBuf::from(
+            name.to_str().expect("a device path is UTF-8"),
+        ))
+    }
+
+    /// The slave of `master`, asked again by a road that owns its answer:
+    /// the kernel's number for the descriptor on Linux, `ptsname_r` into a
+    /// buffer of this frame's elsewhere. The instrument of
+    /// `every_terminal_opened_at_once_is_told_its_own_slave`.
+    #[cfg(target_os = "linux")]
+    pub fn asked_again(master: &File) -> std::io::Result<PathBuf> {
+        let mut number: u32 = 0;
+        // SAFETY: the descriptor is open and owned by `master`, and the third
+        // argument points at an `unsigned int`, which is what TIOCGPTN writes.
+        if unsafe { ioctl(master.as_raw_fd(), TIOCGPTN, &mut number) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("TIOCGPTN: {error}"),
+            ));
+        }
+        Ok(PathBuf::from(format!("/dev/pts/{number}")))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn asked_again(master: &File) -> std::io::Result<PathBuf> {
+        named(master.as_raw_fd())
+    }
+
+    /// How many pseudo-terminals the system hands out at once, where it says:
+    /// `/proc/sys/kernel/pty/max` on Linux (4096 by default) and
+    /// `kern.tty.ptmx_max` on macOS (511 on recent systems, a few hundred on
+    /// older ones). `None` where neither is read.
+    pub fn ceiling() -> Option<usize> {
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_to_string("/proc/sys/kernel/pty/max")
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut value: c_int = 0;
+            let mut length = std::mem::size_of::<c_int>();
+            // SAFETY: the name is a terminated string, and `value` and
+            // `length` are this frame's, sized for the `int` the key holds.
+            let asked = unsafe {
+                sysctlbyname(
+                    c"kern.tty.ptmx_max".as_ptr(),
+                    (&mut value as *mut c_int).cast(),
+                    &mut length,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            (asked == 0 && value > 0).then_some(value as usize)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
     }
 
     /// The window, stated on the slave side.

@@ -443,9 +443,25 @@ mod pty {
         // slave's name is read into a buffer of this call's, see [`named`].
         unsafe {
             let master = posix_openpt(O_RDWR);
-            assert!(master >= 0, "posix_openpt failed");
-            assert_eq!(grantpt(master), 0, "grantpt failed");
-            assert_eq!(unlockpt(master), 0, "unlockpt failed");
+            // Nothing retries: a full table answers EAGAIN or ENOSPC, and the
+            // error is the message.
+            assert!(
+                master >= 0,
+                "posix_openpt failed: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(
+                grantpt(master),
+                0,
+                "grantpt failed: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(
+                unlockpt(master),
+                0,
+                "unlockpt failed: {}",
+                std::io::Error::last_os_error()
+            );
             let path = named(master);
             (File::from_raw_fd(master), path)
         }
