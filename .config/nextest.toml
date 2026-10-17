@@ -25,6 +25,14 @@ pty-serial = { max-threads = 1 }
 filter = 'package(ank-tui) & binary(integration) & test(/^(bindings|claims|colour|edit|graph|overlay|search|verbs)::/)'
 test-group = 'pty-serial'
 
+# The pseudo-terminal test prints every open it had to retry, with its errno,
+# and its output is shown on success too: a refusal macOS recovered from is a
+# fact read off the job log, not one the passing test swallows
+# (TASK-adea229723df).
+[[profile.default.overrides]]
+filter = 'package(ank-tui) & binary(integration) & test(=terminal::every_terminal_opened_at_once_is_told_its_own_slave)'
+success-output = 'immediate'
+
 # CI runs every test to the end: whether a failure is one platform's or every
 # platform's is the information a run is for, as `fail-fast: false` already says
 # for the matrix.

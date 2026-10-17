@@ -216,6 +216,14 @@ fn a_reader_holds_no_terminal_but_its_own() {
 /// thousands; eight thousand opens per thread on Linux, where the race was
 /// measured (red 9 runs of 10 against the `ptsname(3)` read, 1 to 7 crossed
 /// per 64000), and a thousand elsewhere.
+///
+/// **A refused open is retried, and only one refused every time fails.** On
+/// macos-latest, run 39069664222, one `posix_openpt` of 8000 failed with 7
+/// masters held per thread and a ceiling of 511: a refusal that is not the
+/// table full and not what this test is for, which is the path each master
+/// is told. So a refusal is counted and printed with its errno, the open is
+/// tried again after a short wait, and the test fails only on an open
+/// refused `ATTEMPTS` times running.
 #[test]
 fn every_terminal_opened_at_once_is_told_its_own_slave() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -227,6 +235,9 @@ fn every_terminal_opened_at_once_is_told_its_own_slave() {
     const PER_THREAD: usize = 8000;
     #[cfg(not(target_os = "linux"))]
     const PER_THREAD: usize = 1000;
+    /// Tries per open before a refusal is a failure, waiting 2, 4, 8 and 16 ms
+    /// between them.
+    const ATTEMPTS: u32 = 5;
     let ceiling = pty::ceiling();
     let each = (ceiling.unwrap_or(256) / 8 / THREADS).clamp(1, 8);
     let rounds = PER_THREAD.div_ceil(each);
@@ -242,13 +253,14 @@ fn every_terminal_opened_at_once_is_told_its_own_slave() {
     let checked = Barrier::new(THREADS);
     let stop = AtomicBool::new(false);
     let opened = AtomicUsize::new(0);
+    let refused = Mutex::new(Vec::<String>::new());
     let failed = Mutex::new(Vec::<String>::new());
     let crossed = Mutex::new(Vec::<(PathBuf, PathBuf)>::new());
     let held = Mutex::new(Vec::<(std::fs::File, PathBuf)>::new());
     std::thread::scope(|scope| {
         for _ in 0..THREADS {
             let (start, checked, stop, opened) = (&start, &checked, &stop, &opened);
-            let (failed, crossed, held) = (&failed, &crossed, &held);
+            let (refused, failed, crossed, held) = (&refused, &failed, &crossed, &held);
             scope.spawn(move || {
                 for _ in 0..rounds {
                     start.wait();
@@ -258,12 +270,21 @@ fn every_terminal_opened_at_once_is_told_its_own_slave() {
                         break;
                     }
                     let mut mine = Vec::with_capacity(each);
-                    for _ in 0..each {
-                        match pty::try_open() {
-                            Ok(pair) => mine.push(pair),
-                            Err(error) => {
-                                take(failed).push(error.to_string());
-                                break;
+                    'open: for _ in 0..each {
+                        for attempt in 1..=ATTEMPTS {
+                            match pty::try_open() {
+                                Ok(pair) => {
+                                    mine.push(pair);
+                                    continue 'open;
+                                }
+                                Err(error) if attempt < ATTEMPTS => {
+                                    take(refused).push(error.to_string());
+                                    std::thread::sleep(Duration::from_millis(1 << attempt));
+                                }
+                                Err(error) => {
+                                    take(failed).push(error.to_string());
+                                    break 'open;
+                                }
                             }
                         }
                     }
@@ -287,11 +308,22 @@ fn every_terminal_opened_at_once_is_told_its_own_slave() {
             });
         }
     });
+    // Printed whether or not the test passes: `.config/nextest.toml` shows
+    // this test's output on success, so a refusal macOS recovered from is
+    // still read off the job log.
+    let refused = refused
+        .into_inner()
+        .unwrap_or_else(|held| held.into_inner());
+    eprintln!(
+        "{} open(s) refused and retried, the system's ceiling being {ceiling:?} and {each} \
+         held per thread: {refused:?}",
+        refused.len()
+    );
     let failed = failed.into_inner().unwrap_or_else(|held| held.into_inner());
     assert!(
         failed.is_empty(),
-        "{} of the opens failed, the system's ceiling being {ceiling:?} and {each} held \
-         per thread: {failed:?}",
+        "{} of the opens were refused {ATTEMPTS} times running, the system's ceiling \
+         being {ceiling:?} and {each} held per thread: {failed:?}",
         failed.len()
     );
     let opened = opened.into_inner();
@@ -1075,10 +1107,6 @@ mod pty {
     /// say so and stop, where a panic in one of its threads would leave the
     /// others waiting on a barrier for ever.
     pub fn try_open() -> std::io::Result<(File, PathBuf)> {
-        let failed = |call: &str| {
-            let error = std::io::Error::last_os_error();
-            std::io::Error::new(error.kind(), format!("{call}: {error}"))
-        };
         // SAFETY: the four calls are the POSIX pseudo-terminal sequence, in
         // order, and every return is checked before the next is made. The
         // descriptor is owned by `master` from the moment it exists, so an
@@ -1087,21 +1115,30 @@ mod pty {
         unsafe {
             let fd = posix_openpt(O_RDWR);
             if fd < 0 {
-                return Err(failed("posix_openpt"));
+                return Err(refusal("posix_openpt"));
             }
             let master = File::from_raw_fd(fd);
             if fcntl(fd, F_SETFD, FD_CLOEXEC) != 0 {
-                return Err(failed("fcntl(F_SETFD, FD_CLOEXEC)"));
+                return Err(refusal("fcntl(F_SETFD, FD_CLOEXEC)"));
             }
             if grantpt(fd) != 0 {
-                return Err(failed("grantpt"));
+                return Err(refusal("grantpt"));
             }
             if unlockpt(fd) != 0 {
-                return Err(failed("unlockpt"));
+                return Err(refusal("unlockpt"));
             }
             let path = named(fd)?;
             Ok((master, path))
         }
+    }
+
+    /// The error `call` just left in `errno`, with the call named and the raw
+    /// number spelled out beside the platform's text for it: on macos-latest
+    /// one refusal printed as "Unknown error", which names nothing.
+    fn refusal(call: &str) -> std::io::Error {
+        let error = std::io::Error::last_os_error();
+        let code = error.raw_os_error().unwrap_or_default();
+        std::io::Error::new(error.kind(), format!("{call}: errno {code}, {error}"))
     }
 
     /// The slave's path, read with `ptsname_r` into a buffer this frame owns.
@@ -1117,11 +1154,7 @@ mod pty {
         let mut buffer = [0 as c_char; 128];
         // SAFETY: the buffer is this frame's and its length is the one given.
         if unsafe { ptsname_r(master, buffer.as_mut_ptr(), buffer.len()) } != 0 {
-            let error = std::io::Error::last_os_error();
-            return Err(std::io::Error::new(
-                error.kind(),
-                format!("ptsname_r: {error}"),
-            ));
+            return Err(refusal("ptsname_r"));
         }
         // SAFETY: on success `ptsname_r` wrote a terminated string into it.
         let name = unsafe { CStr::from_ptr(buffer.as_ptr()) };
@@ -1140,11 +1173,7 @@ mod pty {
         // SAFETY: the descriptor is open and owned by `master`, and the third
         // argument points at an `unsigned int`, which is what TIOCGPTN writes.
         if unsafe { ioctl(master.as_raw_fd(), TIOCGPTN, &mut number) } != 0 {
-            let error = std::io::Error::last_os_error();
-            return Err(std::io::Error::new(
-                error.kind(),
-                format!("TIOCGPTN: {error}"),
-            ));
+            return Err(refusal("TIOCGPTN"));
         }
         Ok(PathBuf::from(format!("/dev/pts/{number}")))
     }
