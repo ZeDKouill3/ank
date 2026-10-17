@@ -43,13 +43,17 @@ const PREFIX: &str = "ank-it-";
 /// The lock file, inside each root.
 const OWNER: &str = ".owner";
 
+/// Where the lock file is created and locked before it is renamed to `OWNER`;
+/// no sweep ever opens this name.
+const STAGING: &str = ".owner.tmp";
+
 /// How long a root with no `.owner` yet is left alone.
 ///
-/// A root is created and then locked, and cargo runs test binaries
-/// concurrently, so another binary's sweep can see a directory in the
-/// microseconds before its lock exists. Without this it would delete a root
-/// whose owner was about to claim it. Sixty seconds is far longer than that
-/// window and far shorter than the gap between runs.
+/// A root is created and then its lock is taken and renamed into place, and
+/// cargo runs test binaries concurrently, so another binary's sweep can see a
+/// directory in the microseconds before `.owner` exists. Without this it would
+/// delete a root whose owner was about to claim it. Sixty seconds is far longer
+/// than that window and far shorter than the gap between runs.
 const GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The lock, held open for the life of the process. Dropping it would tell
@@ -66,9 +70,19 @@ pub fn root() -> &'static Path {
         // this process's problem: it is about to answer for the name.
         let _ = fs::remove_dir_all(&mine);
         fs::create_dir_all(&mine).expect("the temporary directory must be writable");
-        let lock = File::create(mine.join(OWNER)).expect("the root must take its own lock file");
+        // Locked before it is visible at the name a sweep opens. Created at
+        // `OWNER` and locked afterwards, the file spends a few microseconds
+        // unlocked where a sibling's `abandoned` can find it: it takes the
+        // lock first, and `try_lock` here gets `WouldBlock`, or it unlocks
+        // and removes a root whose owner is alive (TASK-8e79eca6e5de,
+        // measured at 524 of 1000 on Linux). A rename moves the directory
+        // entry and not the lock, so the file is already held when it
+        // appears, and until then the root has no `OWNER` and GRACE keeps it.
+        let staging = mine.join(STAGING);
+        let lock = File::create(&staging).expect("the root must take its own lock file");
         lock.try_lock()
-            .expect("a fresh root cannot already be locked by somebody else");
+            .expect("a lock file nobody else can name cannot already be locked");
+        fs::rename(&staging, mine.join(OWNER)).expect("the lock file must take its name");
         let _ = HELD.set(lock);
         sweep(&base, &mine);
         mine
@@ -232,5 +246,99 @@ mod tests {
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| n == format!("{PREFIX}{}", std::process::id())));
+    }
+
+    /// Set in the environment of a process the race test below spawns, and
+    /// in no other: it tells `a_child_takes_its_root` to do its half.
+    const RACE_CHILD: &str = "ANK_SCRATCH_RACE_CHILD";
+
+    /// The child half of the race test: in a process the parent spawned, take
+    /// this process's root the way every test process does, then report
+    /// whether it is still there. A no-op in the suite proper, where the
+    /// variable is unset.
+    #[test]
+    fn a_child_takes_its_root() {
+        if std::env::var_os(RACE_CHILD).is_none() {
+            return;
+        }
+        let mine = root().to_path_buf();
+        // A sweep that judged this root abandoned a moment before the lock was
+        // taken is still removing it; give it time to land, then look.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert!(
+            mine.join(OWNER).exists(),
+            "a live root lost its lock file to a sibling's sweep: {}",
+            mine.display()
+        );
+    }
+
+    /// `root()` creates its lock file and then locks it, and cargo runs test
+    /// binaries concurrently, so a sibling's sweep can open that file in
+    /// between and take the lock first: `root()` then panics with
+    /// `WouldBlock`, or the sibling judges the root abandoned and removes a
+    /// live one (TASK-8e79eca6e5de, seen on macOS CI). This runs `root()` in a
+    /// fresh process while this process sweeps the same base from several
+    /// threads, many times over, and expects every root to come through
+    /// locked and whole.
+    #[test]
+    fn a_root_is_locked_before_a_sibling_sweep_can_see_its_lock_file() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        const RUNS: usize = 1000;
+        const SWEEPERS: usize = 4;
+
+        let base = dir("scratch-race");
+        let stop = Arc::new(AtomicBool::new(false));
+        let sweepers: Vec<_> = (0..SWEEPERS)
+            .map(|_| {
+                let base = base.clone();
+                let stop = Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        sweep(&base, Path::new("nothing-is-mine-here"));
+                    }
+                })
+            })
+            .collect();
+
+        let exe = std::env::current_exe().expect("the test binary knows its own path");
+        let mut failures = Vec::new();
+        for run in 0..RUNS {
+            let out = std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "scratch::tests::a_child_takes_its_root",
+                    "--test-threads=1",
+                    "-q",
+                ])
+                .env(RACE_CHILD, "1")
+                // `temp_dir()` reads TMPDIR on Unix and TMP then TEMP on
+                // Windows, so the child's root lands in the base being swept.
+                .env("TMPDIR", &base)
+                .env("TMP", &base)
+                .env("TEMP", &base)
+                .output()
+                .expect("the test binary can be run again");
+            if !out.status.success() {
+                failures.push(format!(
+                    "run {run}: {}\n{}{}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        for s in sweepers {
+            s.join().unwrap();
+        }
+
+        assert!(
+            failures.is_empty(),
+            "{} of {RUNS} roots were locked or swept by a sibling between creation and lock:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 }

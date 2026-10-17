@@ -5,7 +5,7 @@ slug: a-test-process-s-scratch-root-cannot-be-locked-o
 title: A test process's scratch root cannot be locked or swept by a sibling between its creation and its lock
 created: 2026-10-17T13:42:56Z
 author: haksolot@omarchy
-status: open
+status: done
 scope:
   - crates/ank-cli/tests/scratch/mod.rs
 blocked_by: []
@@ -14,8 +14,57 @@ done_criteria: |
 criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 method: diagnose
+proof:
+  - type: test
+    ref: local/e3b0c44298fc@75f0570
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
+  - type: test
+    ref: local/eeadb4f6a6f5@33c9ccb
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: test-ank-core@11c0192e3520
+    via: verifier
+    reused: local
+    by: haksolot@omarchy
+  - type: test
+    ref: local/3fe5a5528e92@33c9ccb
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: test-ank-contract@60b1ecdf7b92
+    via: verifier
+    reused: local
+    by: haksolot@omarchy
+  - type: test
+    ref: local/f10c807593fb@33c9ccb
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: test-ank-daemon@c8f40b42bd7b
+    via: verifier
+    reused: local
+    by: haksolot@omarchy
+  - type: test
+    ref: local/b4686049e752@75f0570
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: test-ank-mcp@23a803416bc4
+    via: verifier
+  - type: test
+    ref: local/4e5e0f5cac96@75f0570
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: test-ank-tui@06060d7e7df5
+    via: verifier
+  - type: test
+    ref: local/094d87a2dd81@75f0570
+    tree: scope/ecbe871d1a90
+    criteria: 0f1e050477c0
+    verifier: test-ank-cli@b817bb082d2d
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Seen on macOS CI for PR #624 (run 39023341364, job 117369363108): amend_amends::a_task_and_a_spec_refuse_both_flags panicked at tests/scratch/mod.rs:71 with 'a fresh root cannot already be locked by somebody else: WouldBlock'. The PR changed only one .ank file.
