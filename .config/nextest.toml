@@ -2,20 +2,36 @@
 # job (ADR-8c12a38531e3): one pool for every test of every binary, so the
 # binaries no longer wait for each other.
 
-# Eight suites of ank-tui open pseudo-terminals, and under `cargo test` they take
-# them in turn through the in-process `terminal::ONE_AT_A_TIME` lock:
-# `ptsname(3)` answers out of a static buffer, so two sessions opened at once in
-# one process can be handed the same slave path (LOG-3b0bc419c884). Under
-# nextest every test is its own process and that lock serialises nothing, so
-# the group carries the constraint instead. The suites are modules of the one
-# `integration` target (TASK-22af5b0918a4), so they are named by test path and
-# not by binary.
+# Eight suites of ank-tui open pseudo-terminals, and they run one at a time:
+# under `cargo test` through the in-process `terminal::ONE_AT_A_TIME` lock, and
+# here, where every test is its own process and that lock serialises nothing,
+# through this group. The lock was first taken because `ptsname(3)` answered out
+# of a static buffer (LOG-3b0bc419c884); `pty::open` reads the slave with
+# `ptsname_r` now (TASK-adea229723df), and that is not why the group stays.
+# With the group and the lock removed, the `cargo nextest run --workspace --profile ci` step on macos-latest
+# never finished, in run 39060806985 (head 21c9e74, 46 minutes until a push
+# superseded it) and run 39064235334 (head 8c1954e, 30 minutes until
+# cancelled), while ubuntu-latest and windows-latest passed both and main's
+# macOS leg passes in about 7 minutes. A third head, 4dda9b9, hung the same way
+# with the group back: the hang was the new test's, whose threads waited at a
+# barrier for ever once one open failed. So the removal was never measured on
+# macOS, and the group stays on every platform until it is. The suites
+# are modules of the one `integration` target (TASK-22af5b0918a4), so they are
+# named by test path and not by binary.
 [test-groups]
 pty-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(ank-tui) & binary(integration) & test(/^(bindings|claims|colour|edit|graph|overlay|search|verbs)::/)'
 test-group = 'pty-serial'
+
+# The pseudo-terminal test prints every open it had to retry, with its errno,
+# and its output is shown on success too: a refusal macOS recovered from is a
+# fact read off the job log, not one the passing test swallows
+# (TASK-adea229723df).
+[[profile.default.overrides]]
+filter = 'package(ank-tui) & binary(integration) & test(=terminal::every_terminal_opened_at_once_is_told_its_own_slave)'
+success-output = 'immediate'
 
 # CI runs every test to the end: whether a failure is one platform's or every
 # platform's is the information a run is for, as `fail-fast: false` already says

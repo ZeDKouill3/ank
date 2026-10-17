@@ -190,6 +190,159 @@ fn a_reader_holds_no_terminal_but_its_own() {
     live.quit();
 }
 
+/// Every terminal opened at once is told its own slave (TASK-adea229723df).
+///
+/// Several threads open sessions together, a handful each held at a time, and
+/// once every thread holds its handful the slave each was told is asked again
+/// for the same master, by one thread alone: `TIOCGPTN` on Linux, the kernel's
+/// own number for the descriptor, and `ptsname_r` elsewhere. Read out of
+/// `ptsname(3)`'s static buffer, two threads asking at once could both copy
+/// the answer meant for one of them, and two sessions then shared a terminal:
+/// one `q` written, one reader exits and the other waits forever, which is
+/// the hang seen once in `dashboard.rs` on 2026-10-14. The barrier is what
+/// makes it measurable: every round starts every thread on its `open` at the
+/// same instant, which is the race the suites only ever ran into by luck.
+///
+/// **No thread can leave the others waiting.** A barrier that one thread
+/// never reaches holds the rest for ever, and a panic is how a thread stops
+/// reaching it: measured on Linux under `ulimit -n 60`, the first version of
+/// this test, which panicked on a failed open, was still waiting after 60
+/// seconds, and macos-latest held the job for 26 minutes. So an open that
+/// fails is recorded rather than unwound, every thread reaches every barrier,
+/// and one flag read after the barrier stops them all on the same round, on a
+/// failure or on the deadline alike. The window held is sized off the system's
+/// own ceiling, an eighth of it across every thread and never more than eight
+/// each, since macOS hands out a few hundred terminals where Linux hands out
+/// thousands; eight thousand opens per thread on Linux, where the race was
+/// measured (red 9 runs of 10 against the `ptsname(3)` read, 1 to 7 crossed
+/// per 64000), and a thousand elsewhere.
+///
+/// **A refused open is retried, and only one refused every time fails.** On
+/// macos-latest, run 39069664222, one `posix_openpt` of 8000 failed with 7
+/// masters held per thread and a ceiling of 511: a refusal that is not the
+/// table full and not what this test is for, which is the path each master
+/// is told. So a refusal is counted and printed with its errno, the open is
+/// tried again after a short wait, and the test fails only on an open
+/// refused `ATTEMPTS` times running.
+#[test]
+fn every_terminal_opened_at_once_is_told_its_own_slave() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Barrier, Mutex, MutexGuard};
+    use std::time::{Duration, Instant};
+
+    const THREADS: usize = 8;
+    #[cfg(target_os = "linux")]
+    const PER_THREAD: usize = 8000;
+    #[cfg(not(target_os = "linux"))]
+    const PER_THREAD: usize = 1000;
+    /// Tries per open before a refusal is a failure, waiting 2, 4, 8 and 16 ms
+    /// between them.
+    const ATTEMPTS: u32 = 5;
+    let ceiling = pty::ceiling();
+    let each = (ceiling.unwrap_or(256) / 8 / THREADS).clamp(1, 8);
+    let rounds = PER_THREAD.div_ceil(each);
+    let began = Instant::now();
+    let deadline = began + Duration::from_secs(120);
+
+    // A poisoned lock is taken anyway: nothing here may panic and strand a
+    // thread short of a barrier.
+    fn take<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+        lock.lock().unwrap_or_else(|held| held.into_inner())
+    }
+    let start = Barrier::new(THREADS);
+    let checked = Barrier::new(THREADS);
+    let stop = AtomicBool::new(false);
+    let opened = AtomicUsize::new(0);
+    let refused = Mutex::new(Vec::<String>::new());
+    let failed = Mutex::new(Vec::<String>::new());
+    let crossed = Mutex::new(Vec::<(PathBuf, PathBuf)>::new());
+    let held = Mutex::new(Vec::<(std::fs::File, PathBuf)>::new());
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS {
+            let (start, checked, stop, opened) = (&start, &checked, &stop, &opened);
+            let (refused, failed, crossed, held) = (&refused, &failed, &crossed, &held);
+            scope.spawn(move || {
+                for _ in 0..rounds {
+                    start.wait();
+                    // Set by the leader before it reached this barrier, so
+                    // every thread reads the same answer on the same round.
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let mut mine = Vec::with_capacity(each);
+                    'open: for _ in 0..each {
+                        for attempt in 1..=ATTEMPTS {
+                            match pty::try_open() {
+                                Ok(pair) => {
+                                    mine.push(pair);
+                                    continue 'open;
+                                }
+                                Err(error) if attempt < ATTEMPTS => {
+                                    take(refused).push(error.to_string());
+                                    std::thread::sleep(Duration::from_millis(1 << attempt));
+                                }
+                                Err(error) => {
+                                    take(failed).push(error.to_string());
+                                    break 'open;
+                                }
+                            }
+                        }
+                    }
+                    opened.fetch_add(mine.len(), Ordering::Relaxed);
+                    take(held).extend(mine);
+                    // One thread re-asks while every master is held, so no
+                    // number has been given back to the kernel and handed on.
+                    if checked.wait().is_leader() {
+                        for (master, told) in take(held).drain(..) {
+                            match pty::asked_again(&master) {
+                                Ok(own) if own != told => take(crossed).push((told, own)),
+                                Ok(_) => {}
+                                Err(error) => take(failed).push(error.to_string()),
+                            }
+                        }
+                        if !take(failed).is_empty() || Instant::now() > deadline {
+                            stop.store(true, Ordering::Release);
+                        }
+                    }
+                }
+            });
+        }
+    });
+    // Printed whether or not the test passes: `.config/nextest.toml` shows
+    // this test's output on success, so a refusal macOS recovered from is
+    // still read off the job log.
+    let refused = refused
+        .into_inner()
+        .unwrap_or_else(|held| held.into_inner());
+    eprintln!(
+        "{} open(s) refused and retried, the system's ceiling being {ceiling:?} and {each} \
+         held per thread: {refused:?}",
+        refused.len()
+    );
+    let failed = failed.into_inner().unwrap_or_else(|held| held.into_inner());
+    assert!(
+        failed.is_empty(),
+        "{} of the opens were refused {ATTEMPTS} times running, the system's ceiling \
+         being {ceiling:?} and {each} held per thread: {failed:?}",
+        failed.len()
+    );
+    let opened = opened.into_inner();
+    assert!(
+        opened >= THREADS * PER_THREAD,
+        "{opened} of {} opens done in {:?}, the deadline: this asserts too little",
+        THREADS * PER_THREAD,
+        began.elapsed()
+    );
+    let crossed = crossed
+        .into_inner()
+        .unwrap_or_else(|held| held.into_inner());
+    assert!(
+        crossed.is_empty(),
+        "{} of {opened} terminals were told another's slave (told, own): {crossed:?}",
+        crossed.len()
+    );
+}
+
 /// The terminal every session but [`Live::dumb`] is opened on.
 ///
 /// Stated rather than inherited: this suite runs under whatever the developer
@@ -781,24 +934,33 @@ pub fn focused(title: &str) -> String {
     format!("{}{title}", ank_tui::view::BOXES.focus())
 }
 
-/// One pseudo-terminal open at a time, across every suite that takes it.
+/// One pseudo-terminal suite at a time, across every suite that takes it.
 ///
-/// **Not a slow test being polite: `ptsname(3)` answers out of a static
-/// buffer.** `pty::open` calls `posix_openpt` and then asks `ptsname` for the
-/// slave's path, and two threads doing that at once can both read the same
-/// answer -- so two sessions attach to one terminal, one of them resizes it to
-/// the other's window, and the second child is left writing down a pipe nobody
-/// is draining. `tests/bindings.rs` tripped it first, being the first suite to
-/// open two sessions at *different* sizes, which is what makes a crossed path
-/// visible rather than merely wrong.
+/// **Kept until macOS is measured without it, and no longer because of
+/// `ptsname(3)`.** The lock was first taken because `pty::open` read
+/// the slave's path out of `ptsname(3)`'s static buffer, so two sessions opened
+/// at once could be told one terminal (LOG-3b0bc419c884). It reads it with
+/// `ptsname_r` now, and `every_terminal_opened_at_once_is_told_its_own_slave`
+/// pins that (TASK-adea229723df). With that cause gone the lock and the
+/// `pty-serial` group of `.config/nextest.toml` were removed, and on Linux,
+/// over 10 runs of the 125 tests under each runner, the only failures were in
+/// suites that never took the lock. On macos-latest the
+/// `cargo nextest run --workspace --profile ci` step then never finished: run
+/// 39060806985 (head 21c9e74) sat 46 minutes until a push superseded it, run
+/// 39064235334 (head 8c1954e) 30 minutes until it was cancelled, while
+/// ubuntu-latest and windows-latest passed both. So both came back, on every
+/// platform: the hang is not diagnosed, and ten Linux runs do not show Linux
+/// needs neither. Those two heads also carried
+/// `every_terminal_opened_at_once_is_told_its_own_slave`, and a third, 4dda9b9,
+/// hung the same way with the lock and the group back: the hang was that
+/// test's, which left its threads at a barrier when one open failed. So the
+/// removal was never measured on macOS, and the lock stays until it is.
 ///
 /// One lock and not one per suite: the suites are modules of one test binary,
 /// so under `cargo test` they share one process and a lock per suite would
 /// let two of them open a session at once. Under nextest every test is its own
 /// process and this lock serialises nothing, so `.config/nextest.toml` names
-/// the same tests in its `pty-serial` group. The defect is the harness's and
-/// the fix belongs in `pty::open` (`ptsname_r`, or a lock around the four
-/// calls); LOG-3b0bc419c884 records it.
+/// the same tests in its `pty-serial` group.
 pub static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ---------------------------------------------------------------------------
@@ -863,9 +1025,20 @@ mod pty {
         fn posix_openpt(flags: c_int) -> c_int;
         fn grantpt(fd: c_int) -> c_int;
         fn unlockpt(fd: c_int) -> c_int;
-        fn ptsname(fd: c_int) -> *mut c_char;
+        fn ptsname_r(fd: c_int, buffer: *mut c_char, length: usize) -> c_int;
         fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
         fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
+    }
+
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn sysctlbyname(
+            name: *const c_char,
+            value: *mut std::ffi::c_void,
+            length: *mut usize,
+            new_value: *mut std::ffi::c_void,
+            new_length: usize,
+        ) -> c_int;
     }
 
     const O_RDWR: c_int = 2;
@@ -881,6 +1054,10 @@ mod pty {
     const TIOCSWINSZ: c_ulong = 0x5414;
     #[cfg(not(target_os = "linux"))]
     const TIOCSWINSZ: c_ulong = 0x8008_7467;
+    /// The slave's number, Linux's own ioctl and the one `ptsname_r` is built
+    /// on there: `_IOR('T', 0x30, unsigned int)`.
+    #[cfg(target_os = "linux")]
+    const TIOCGPTN: c_ulong = 0x8004_5430;
 
     #[repr(C)]
     struct WinSize {
@@ -913,30 +1090,132 @@ mod pty {
     /// Set before anything else is done with the descriptor, so there is no
     /// spawn it could miss.
     pub fn open() -> (File, PathBuf) {
+        try_open().unwrap_or_else(|failed| {
+            panic!(
+                "a pseudo-terminal could not be opened: {failed} (EAGAIN or ENOSPC from \
+                 posix_openpt is the system's table of them full)"
+            )
+        })
+    }
+
+    /// [`open`], answering the error rather than panicking on it.
+    ///
+    /// **Nothing here retries.** A full table answers `EAGAIN` or `ENOSPC`
+    /// and that answer is handed back at once: a caller that has to stay in
+    /// step with other threads, as
+    /// `every_terminal_opened_at_once_is_told_its_own_slave` does, can then
+    /// say so and stop, where a panic in one of its threads would leave the
+    /// others waiting on a barrier for ever.
+    pub fn try_open() -> std::io::Result<(File, PathBuf)> {
         // SAFETY: the four calls are the POSIX pseudo-terminal sequence, in
         // order, and every return is checked before the next is made. The
-        // pointer `ptsname` answers with is owned by the C library and is
-        // copied out before anything else can invalidate it.
+        // descriptor is owned by `master` from the moment it exists, so an
+        // early return closes it. The slave's name is read into a buffer of
+        // this call's, see [`named`].
         unsafe {
-            let master = posix_openpt(O_RDWR);
-            assert!(master >= 0, "posix_openpt failed");
-            assert_eq!(
-                fcntl(master, F_SETFD, FD_CLOEXEC),
-                0,
-                "the master could not be made close-on-exec: {}",
-                std::io::Error::last_os_error()
-            );
-            assert_eq!(grantpt(master), 0, "grantpt failed");
-            assert_eq!(unlockpt(master), 0, "unlockpt failed");
-            let name = ptsname(master);
-            assert!(!name.is_null(), "ptsname answered nothing");
-            let path = PathBuf::from(
-                CStr::from_ptr(name)
-                    .to_str()
-                    .expect("a device path is UTF-8")
-                    .to_string(),
-            );
-            (File::from_raw_fd(master), path)
+            let fd = posix_openpt(O_RDWR);
+            if fd < 0 {
+                return Err(refusal("posix_openpt"));
+            }
+            let master = File::from_raw_fd(fd);
+            if fcntl(fd, F_SETFD, FD_CLOEXEC) != 0 {
+                return Err(refusal("fcntl(F_SETFD, FD_CLOEXEC)"));
+            }
+            if grantpt(fd) != 0 {
+                return Err(refusal("grantpt"));
+            }
+            if unlockpt(fd) != 0 {
+                return Err(refusal("unlockpt"));
+            }
+            let path = named(fd)?;
+            Ok((master, path))
+        }
+    }
+
+    /// The error `call` just left in `errno`, with the call named and the raw
+    /// number spelled out beside the platform's text for it: on macos-latest
+    /// one refusal printed as "Unknown error", which names nothing.
+    fn refusal(call: &str) -> std::io::Error {
+        let error = std::io::Error::last_os_error();
+        let code = error.raw_os_error().unwrap_or_default();
+        std::io::Error::new(error.kind(), format!("{call}: errno {code}, {error}"))
+    }
+
+    /// The slave's path, read with `ptsname_r` into a buffer this frame owns.
+    ///
+    /// **Never `ptsname(3)`: it answers out of one static buffer per
+    /// process**, and two threads opening a terminal at once could both copy
+    /// the path meant for one of them, so two sessions attached to one slave
+    /// (TASK-adea229723df: 8 threads, 32000 opens, one to six crossed per run
+    /// before this). `ptsname_r` is in glibc and in macOS since 10.13.4; it
+    /// answers zero on success on both, an error number on one and `-1` on
+    /// the other, which is why only zero is read.
+    fn named(master: c_int) -> std::io::Result<PathBuf> {
+        let mut buffer = [0 as c_char; 128];
+        // SAFETY: the buffer is this frame's and its length is the one given.
+        if unsafe { ptsname_r(master, buffer.as_mut_ptr(), buffer.len()) } != 0 {
+            return Err(refusal("ptsname_r"));
+        }
+        // SAFETY: on success `ptsname_r` wrote a terminated string into it.
+        let name = unsafe { CStr::from_ptr(buffer.as_ptr()) };
+        Ok(PathBuf::from(
+            name.to_str().expect("a device path is UTF-8"),
+        ))
+    }
+
+    /// The slave of `master`, asked again by a road that owns its answer:
+    /// the kernel's number for the descriptor on Linux, `ptsname_r` into a
+    /// buffer of this frame's elsewhere. The instrument of
+    /// `every_terminal_opened_at_once_is_told_its_own_slave`.
+    #[cfg(target_os = "linux")]
+    pub fn asked_again(master: &File) -> std::io::Result<PathBuf> {
+        let mut number: u32 = 0;
+        // SAFETY: the descriptor is open and owned by `master`, and the third
+        // argument points at an `unsigned int`, which is what TIOCGPTN writes.
+        if unsafe { ioctl(master.as_raw_fd(), TIOCGPTN, &mut number) } != 0 {
+            return Err(refusal("TIOCGPTN"));
+        }
+        Ok(PathBuf::from(format!("/dev/pts/{number}")))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn asked_again(master: &File) -> std::io::Result<PathBuf> {
+        named(master.as_raw_fd())
+    }
+
+    /// How many pseudo-terminals the system hands out at once, where it says:
+    /// `/proc/sys/kernel/pty/max` on Linux (4096 by default) and
+    /// `kern.tty.ptmx_max` on macOS (511 on recent systems, a few hundred on
+    /// older ones). `None` where neither is read.
+    pub fn ceiling() -> Option<usize> {
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_to_string("/proc/sys/kernel/pty/max")
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut value: c_int = 0;
+            let mut length = std::mem::size_of::<c_int>();
+            // SAFETY: the name is a terminated string, and `value` and
+            // `length` are this frame's, sized for the `int` the key holds.
+            let asked = unsafe {
+                sysctlbyname(
+                    c"kern.tty.ptmx_max".as_ptr(),
+                    (&mut value as *mut c_int).cast(),
+                    &mut length,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            (asked == 0 && value > 0).then_some(value as usize)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
         }
     }
 

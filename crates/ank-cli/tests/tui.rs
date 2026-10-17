@@ -406,7 +406,7 @@ mod pty {
         fn posix_openpt(flags: c_int) -> c_int;
         fn grantpt(fd: c_int) -> c_int;
         fn unlockpt(fd: c_int) -> c_int;
-        fn ptsname(fd: c_int) -> *mut c_char;
+        fn ptsname_r(fd: c_int, buffer: *mut c_char, length: usize) -> c_int;
         fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
         fn kill(pid: c_int, signal: c_int) -> c_int;
     }
@@ -440,23 +440,55 @@ mod pty {
     pub fn open() -> (File, PathBuf) {
         // SAFETY: the four calls are the POSIX pseudo-terminal sequence, in
         // order, and every return is checked before the next is made. The
-        // pointer `ptsname` answers with is owned by the C library and is
-        // copied out before anything else can invalidate it.
+        // slave's name is read into a buffer of this call's, see [`named`].
         unsafe {
             let master = posix_openpt(O_RDWR);
-            assert!(master >= 0, "posix_openpt failed");
-            assert_eq!(grantpt(master), 0, "grantpt failed");
-            assert_eq!(unlockpt(master), 0, "unlockpt failed");
-            let name = ptsname(master);
-            assert!(!name.is_null(), "ptsname answered nothing");
-            let path = PathBuf::from(
-                CStr::from_ptr(name)
-                    .to_str()
-                    .expect("a device path is UTF-8")
-                    .to_string(),
+            // Nothing retries: a full table answers EAGAIN or ENOSPC, and the
+            // error is the message.
+            assert!(
+                master >= 0,
+                "posix_openpt failed: {}",
+                std::io::Error::last_os_error()
             );
+            assert_eq!(
+                grantpt(master),
+                0,
+                "grantpt failed: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(
+                unlockpt(master),
+                0,
+                "unlockpt failed: {}",
+                std::io::Error::last_os_error()
+            );
+            let path = named(master);
             (File::from_raw_fd(master), path)
         }
+    }
+
+    /// The slave's path, read with `ptsname_r` into a buffer this frame owns.
+    ///
+    /// **Never `ptsname(3)`: it answers out of one static buffer per
+    /// process**, and two threads opening a terminal at once could both copy
+    /// the path meant for one of them, so two sessions attached to one slave
+    /// (TASK-adea229723df: 8 threads, 32000 opens, one to six crossed per run
+    /// before this). `ptsname_r` is in glibc and in macOS since 10.13.4; it
+    /// answers zero on success on both, an error number on one and `-1` on
+    /// the other, which is why only zero is read.
+    fn named(master: c_int) -> PathBuf {
+        let mut buffer = [0 as c_char; 128];
+        // SAFETY: the buffer is this frame's and its length is the one given.
+        let asked = unsafe { ptsname_r(master, buffer.as_mut_ptr(), buffer.len()) };
+        assert_eq!(
+            asked,
+            0,
+            "ptsname_r answered nothing: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: on success `ptsname_r` wrote a terminated string into it.
+        let name = unsafe { CStr::from_ptr(buffer.as_ptr()) };
+        PathBuf::from(name.to_str().expect("a device path is UTF-8"))
     }
 
     /// The window, stated on the slave side.
