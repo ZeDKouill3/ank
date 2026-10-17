@@ -23,6 +23,9 @@ why the merge method is load-bearing.
 
 ## ci.yml
 
+- **`changes`**, first, says whether the pull request touches anything outside
+  `.ank/`. It diffs the merge commit against its base and writes `code=true`
+  when any path outside `.ank/` changed, or on a push, where everything runs.
 - **`test`**, a matrix over `ubuntu-latest`, `macos-latest` and
   `windows-latest`, and the three required checks named after them. It checks
   out the whole history, because `ank check` walks it, and runs the three gates.
@@ -46,6 +49,16 @@ why the merge method is load-bearing.
   catch a floor that differed per target.
 - **`msrv is tight / ubuntu-latest`** requires the minor below the floor to fail.
   Both MSRV jobs are [The MSRV](msrv.md).
+
+**A pull request that changes only `.ank/` runs the ubuntu leg whole and nothing
+else.** The corpus is judged by `ank check`, which that leg runs, and by the
+tests that read the live repository, which that leg runs too; the macOS and
+Windows legs, both MSRV jobs and the version check have nothing to learn from a
+corpus diff and used to cost it thirteen minutes. They are skipped by a condition
+on the job, or on every step of a matrix job, never by a `paths:` filter on the
+workflow: a job skipped by its condition reports success to the ruleset, where a
+workflow filtered out leaves its required checks pending and the pull request
+unmergeable. `docs/` counts as code: the suite replays the pages.
 
 Pull request runs superseded by a new push are cancelled. Runs on `main` are
 queued and never cancelled, because two `attest` jobs racing on

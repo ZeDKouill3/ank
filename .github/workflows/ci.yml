@@ -11,6 +11,22 @@ name: ci
 # is worth naming: that branch now gets its first answer when the pull request
 # exists. `attest` is unaffected and still fires, it already asked for a push on
 # the default branch.
+# A pull request that changes nothing outside `.ank/` is a change to the corpus
+# and not to the code, and it is most pull requests here: four of the last five
+# on 2026-10-17. For such a diff the `changes` job below answers `code=false`,
+# and every job but the ubuntu leg of `test` runs no step, where it used to run
+# thirteen minutes of a matrix that a corpus change cannot affect (757 s of it
+# the Windows suite). The ubuntu leg still runs whole, because fourteen test
+# files read the live repository through CARGO_MANIFEST_DIR/../.. and a corpus
+# diff can break them, and `ank check` is what judges the corpus anyway.
+#
+# The skipping is done by conditions on jobs and steps, never by a `paths:`
+# filter on the workflow: a job skipped by its `if:` reports success to the
+# ruleset that requires it, where a workflow filtered out leaves its checks
+# pending and the pull request unmergeable. `matrix` is not readable from a
+# job-level `if:`, so the two matrix jobs gate their steps instead and report
+# under the names the ruleset requires. `docs/` is code for this purpose: the
+# pages are replayed by the suite (TASK-383e2a207869).
 on:
   push:
     branches: [main]
@@ -33,9 +49,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether anything outside `.ank/` changed. On a pull request the checkout is
+  # the merge commit of the branch onto its base, so `HEAD^1` is the base and
+  # the diff between the two is exactly what the pull request brings; two
+  # commits of depth are enough to hold both. A push is always code: the
+  # default branch runs everything, `attest` included, as it always did.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+
+      - name: paths outside .ank/
+        id: diff
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "push: everything runs"
+            exit 0
+          fi
+          outside=$(git diff --name-only HEAD^1 HEAD | grep -v '^\.ank/' || true)
+          if [ -n "$outside" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code changed:"
+            echo "$outside"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "corpus only: the ubuntu leg runs, every other job runs no step"
+          fi
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    needs: [changes]
     strategy:
       # Without fail-fast, a failure on one platform does not cancel the other
       # two. Knowing whether a defect is OS-specific or general is exactly the
@@ -51,6 +103,10 @@ jobs:
     # paths are named once, because the restore at the top and the save at the
     # bottom have to agree on them to the byte.
     env:
+      # Every step below is gated on this: the ubuntu leg always, the other two
+      # only when code changed. The job still exists and reports on a corpus
+      # diff, which is what the ruleset needs from it.
+      RUN: ${{ needs.changes.outputs.code == 'true' || matrix.os == 'ubuntu-latest' }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
       CARGO_CACHE_PATHS: |
@@ -66,6 +122,7 @@ jobs:
       # that it cannot verify and verify nothing -- green and empty, which is a
       # worse failure than the red it replaces (TASK-2ce5554d6ed0).
       - uses: actions/checkout@v5
+        if: env.RUN == 'true'
         with:
           fetch-depth: 0
 
@@ -84,6 +141,7 @@ jobs:
       # merge ref no other run reads, up to 1.3 GiB each, and pushed main's own
       # out of the 10 GiB the repository gets.
       - name: restore the cargo cache
+        if: env.RUN == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CARGO_CACHE_PATHS }}
@@ -96,6 +154,7 @@ jobs:
       # included. A third-party toolchain action would be one more dependency
       # in the supply chain, for a need the image already covers.
       - name: versions
+        if: env.RUN == 'true'
         run: |
           rustc --version
           cargo --version
@@ -105,6 +164,7 @@ jobs:
       # out in LF. This is the step that would have caught the CRLF bug, and
       # `ank check` below is what proves it.
       - name: line endings in .ank/
+        if: env.RUN == 'true'
         shell: bash
         run: |
           # One file is exempt, and it is exempt in .gitattributes too: the CRLF
@@ -132,6 +192,7 @@ jobs:
       # run. Installed from its published binary at a pinned version, for the
       # reason the cache and the toolchain above give: no third-party action.
       - name: cargo-nextest
+        if: env.RUN == 'true'
         shell: bash
         env:
           NEXTEST_VERSION: 0.9.148
@@ -145,6 +206,7 @@ jobs:
           cargo nextest --version
 
       - run: cargo fmt --check
+        if: env.RUN == 'true'
 
       # The `ci` profile of .config/nextest.toml runs every test to the end.
       #
@@ -158,6 +220,7 @@ jobs:
       # step's bash is that long-lived process, holding the runner's TEMP, as
       # `sh -c` already is when the `cargo-test` verifier runs this suite.
       - run: cargo nextest run --workspace --profile ci
+        if: env.RUN == 'true'
         shell: bash
 
       # The tool validates its own corpus with its own command. This is the same
@@ -167,6 +230,7 @@ jobs:
       #
       # Exit 8 means findings, and that is a failure here. Signals exit 0.
       - run: cargo run -q --bin ank -- check
+        if: env.RUN == 'true'
 
       # The other half of the restore at the top, and the only place this job
       # writes a cache: a push to main, once the suite and `check` have passed,
@@ -348,6 +412,8 @@ jobs:
   version-check:
     name: version check / ubuntu-latest
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v5
@@ -386,6 +452,11 @@ jobs:
   msrv:
     name: msrv / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    needs: [changes]
+    # A matrix job cannot read `matrix` in its own `if:`, so its steps are
+    # gated instead, and each leg reports under its required name.
+    env:
+      RUN: ${{ needs.changes.outputs.code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -393,8 +464,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        if: env.RUN == 'true'
 
       - name: the declared MSRV
+        if: env.RUN == 'true'
         id: floor
         shell: bash
         run: |
@@ -424,12 +497,14 @@ jobs:
       # and no new supply-chain surface — the same argument the job above makes
       # for using the image's toolchain.
       - name: install the declared MSRV
+        if: env.RUN == 'true'
         shell: bash
         env:
           DECLARED: ${{ steps.floor.outputs.declared }}
         run: rustup toolchain install "$DECLARED" --profile minimal
 
       - name: versions
+        if: env.RUN == 'true'
         shell: bash
         env:
           DECLARED: ${{ steps.floor.outputs.declared }}
@@ -447,6 +522,7 @@ jobs:
       # Written from main only, as in `test` and for its reason: an entry a pull
       # request writes serves no other run and evicts one of main's.
       - name: restore the cargo cache
+        if: env.RUN == 'true'
         id: msrv-cache
         uses: actions/cache/restore@v4
         with:
@@ -459,6 +535,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-msrv-
 
       - name: build on the declared MSRV
+        if: env.RUN == 'true'
         shell: bash
         env:
           DECLARED: ${{ steps.floor.outputs.declared }}
@@ -513,6 +590,8 @@ jobs:
   msrv-tight:
     name: msrv is tight / ubuntu-latest
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
 
     steps:
       - uses: actions/checkout@v5
