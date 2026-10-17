@@ -935,6 +935,19 @@ impl Binding {
         let folds: Vec<&str> = Fold::EVERY.iter().map(|fold| fold.word()).collect();
         format!("{said}; {} on {}", folds.join(" or "), Focus::Graph.name())
     }
+
+    /// The word the key line calls it by, on the screen holding this.
+    ///
+    /// The row's own word everywhere but one place: on GRAPH the key that
+    /// walks the kind walks the fold, and a target saying `[f kind]` there
+    /// offers what the panel does not (TASK-f8e0d82e25bd, ADR-ac6be1ebe9aa).
+    /// The word is [`Fold::NAME`], read there rather than spelled again.
+    pub fn said(&self, holding: Holding) -> &'static str {
+        match (&self.runs, holding) {
+            (Runs::Press(Press::Cycle), Holding::Panel(Focus::Graph)) => Fold::NAME,
+            _ => self.word,
+        }
+    }
 }
 
 /// How much of the corpus the graph lays out: what the key that cycles the
@@ -960,6 +973,10 @@ pub enum Fold {
 }
 
 impl Fold {
+    /// What the key that walks the folds is called by on GRAPH: the key
+    /// line's word for it there, where elsewhere it says kind.
+    pub const NAME: &'static str = "fold";
+
     /// Every fold, in the order the key walks them.
     pub const EVERY: [Fold; 2] = [Fold::Open, Fold::All];
 
