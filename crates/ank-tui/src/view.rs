@@ -1,5 +1,6 @@
-//! The panels, the region each is drawn in, and the state between them
-//! (TASK-252bf02de218, TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa).
+//! The panels, the region each is drawn in, the document a row opens into,
+//! and the state between them (TASK-252bf02de218, TASK-cae5c8ec9a69,
+//! ADR-ac6be1ebe9aa, TASK-a9cd362ee5e2).
 //!
 //! [`App`] holds what was read, where each cursor is, what is filtered and
 //! which panel has the focus. It reads by calling [`Ank`] and by
@@ -66,27 +67,56 @@
 //! * **2 ENTITIES** -- every entity of every kind with its status, filtered by
 //!   `f` and `/`, windowed. Where a session opens, because it is the question a
 //!   reader arrives with.
-//! * **3 BODY** -- one entity, whole: its frontmatter as a block of labelled
-//!   fields, who holds it, the constraints binding its declared scope, and its
-//!   prose under them, paged rather than cut (TASK-082301b40a27). `s` swaps it
-//!   for the constraints alone, and `o` for what `ank config` declares
-//!   (TASK-b08d090f699c) -- the one screen here that names no entity at all.
+//! * **3 GRAPH** -- the `blocked_by` DAG (TASK-a9cd362ee5e2,
+//!   TASK-643611645dea, TASK-de02dbcf9965), one `ank graph --json` joined by
+//!   id with the listing for its order and its `created` and with the claims
+//!   for `[held]`, laid out in lanes by [`crate::graph`] one block per group
+//!   of linked tasks, and drawn one row per task through [`compose`]. What
+//!   is shown by default is the work that is alive and every task it
+//!   directly waits on, whatever that task's status; the rest of the corpus
+//!   is history. The cell says finished, open or under way -- and under way
+//!   it pulses, a phase per tick while it is on the screen
+//!   (TASK-54bb5cddc671) -- the word beside
+//!   the identifier says ready, waits N, in progress, done or closed, and
+//!   the lanes are the layout's own alphabet, box-drawing or ASCII with the
+//!   border set. A junction row, the blank between two blocks and the
+//!   heading over the tasks linked to nothing are lines of the panel and
+//!   never rows: the cursor walks task rows only. Read where the panel is
+//!   first on the frame and on `u` ([`App::regraph`]), and never by a cursor
+//!   moving over it.
 //! * **4 QUEUE** -- what is proposed and waiting for a signature, and which
 //!   regime the corpus is in. Asked for rather than kept current, for the
 //!   claims' reason with `ank review`'s price behind it.
 //!
-//! **A digit is how a person reaches one, and it is the digit each already
-//! had.** `Tab` walks the ring, `1` to `4` name one, and the number is written
-//! on the region's title beside its name, which is the whole of what the change
-//! costs a reader who knew the old frame.
+//! **A digit is how a person reaches one.** `Tab` and `BackTab` walk the ring
+//! in that order, `1` to `4` name one, and the number is written on the title
+//! beside the name. `1`, `2` and `4` are the digits those screens always had;
+//! `3` is the graph's, and it was the document's until TASK-a9cd362ee5e2.
 //!
-//! **Opening a row moves the focus into the document it names.** Enter on a
-//! row of any of the three listings shows that entity in the detail panel --
-//! beside the listings on a wide frame, in the one region under [`DASHBOARD`];
-//! [`App::from`] remembers which listing it was reached from, and `Back` gives
-//! that listing back with the row still under the cursor. No cursor is ever
-//! moved by leaving a screen, which is what makes a screen a place rather than
-//! a mode.
+//! **The document is not on the ring: it is what a row opens into.** Enter on a
+//! row of any of the three listings -- or Right, which reaches the same screen
+//! -- moves the focus into that entity, whole: its frontmatter as a block of
+//! labelled fields, who holds it, the constraints binding its declared scope,
+//! and its prose under them, paged rather than cut (TASK-082301b40a27). Its
+//! title is `BODY` with no digit in front, because no digit reaches it: a key
+//! that went straight to it went to a screen with nothing on it until a row
+//! had been opened. `s` swaps it for the constraints alone and `o` for what
+//! `ank config` declares (TASK-b08d090f699c), and those two keep the headings
+//! they carry, `CONSTRAINTS` and `CONFIG`. [`App::from`] remembers which
+//! listing the document was reached from, and `Back` gives that listing back
+//! with the row still under the cursor. No cursor is ever moved by leaving a
+//! screen, which is what makes a screen a place rather than a mode, and `Tab`
+//! from the document steps along the ring from where the graph stands, so the
+//! ring never leads back into it.
+//!
+//! **From [`DASHBOARD`] columns on, the screens are panels drawn at once**
+//! (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa): the claims, the entities and the
+//! queue in a column on the left, and the right panel beside them. That panel
+//! is `3 GRAPH` at rest and `BODY` once a row has been opened; `Back` gives it
+//! back to the graph ([`App::beside`]). The listings stay in the left column
+//! throughout, and the focused panel is the only one that draws a cursor.
+//! Under that width the document is drawn in the one region, in place of the
+//! listing it was opened from.
 //!
 //! **The chrome is not a screen and cannot be reached.** The two bands that
 //! stay full width and unbordered -- the header, and whatever the reader is
@@ -222,13 +252,26 @@
 //! puts the identifier the focused panel names in front of the verb the key
 //! composed, asks [`Ank::spelling`] for the command line that argv is, and
 //! **stops**. Nothing else here writes, and nothing runs that a person did not
-//! press twice -- nothing in this crate runs on a clock, and [`App::frame`] is
-//! a pure function of what the last command left behind. The one clock this
-//! file reads is [`App::tapped`]'s, and what it decides is whether a press is
-//! the second of a pair (TASK-42de0df951a4): it starts nothing, it wakes
-//! nothing, and no frame is drawn because time passed. `pressed` takes the
-//! instant rather than reading it, so the rule is stated to the suite instead
-//! of being waited out by it.
+//! press twice -- no verb in this crate runs on a clock, and [`App::frame`] is
+//! a pure function of what the last command left behind and of the pulse's
+//! phase.
+//!
+//! **One clock paints, and the frame reads a counter rather than the time**
+//! (TASK-54bb5cddc671). A task in progress on the graph is drawn at
+//! [`App::tick`]'s phase, `· • ● •` or `. o O o`, and a tick moves that
+//! counter by one and nothing else: it reads nothing, spawns no verb, renews
+//! nothing, and the frame after it differs from the one before in the cells
+//! of the tasks in progress alone. [`App::pulse_due`] is when it may: while
+//! an `in_progress` row stands inside the graph panel's page, so the clock
+//! stops when none is on the screen. The tick itself arrives from
+//! [`crate::term::ticker`]; nothing in this file reads the time.
+//!
+//! What [`App::tapped`] decides is whether a press is the second of a pair
+//! (TASK-42de0df951a4), and the instant it is handed is
+//! [`crate::term::Moment`]'s, read at the terminal's edge: it starts nothing,
+//! it wakes nothing, and no frame is drawn because time passed. `pressed`
+//! takes the instant rather than reading it, so the rule is stated to the
+//! suite instead of being waited out by it.
 //!
 //! # The confirmation, which is the fourth act
 //!
@@ -309,13 +352,17 @@
 //! it.
 
 use crate::ank::{Ank, Failed, Ran};
-use crate::bindings::{self, Binding, Holding, Runs};
+use crate::bindings::{self, Binding, Fold, Holding, Runs};
 use crate::form::{Filled, Form, SET as SETTING};
+use crate::graph::{self, Alphabet, Mark, Node};
 use crate::input::{Act, Command, Subject};
 use crate::keys::{self, Narrowing, Press};
-use crate::model::{self, short_of, Detail, Held, Queue, Row, Setting, Settings, Snapshot};
+use crate::model::{
+    self, short_of, Dag, DagTask, Detail, Held, Queue, Row, Setting, Settings, Snapshot,
+};
 use crate::paint::{self, role_of_id, Composed, Ink};
 use crate::stream::Stream;
+use crate::term::Moment;
 use crate::text::{self, fit, pad, window, wrap};
 use ank_contract::meaning::{role_of_kind, role_of_status, Role};
 use ratatui::buffer::Buffer;
@@ -327,64 +374,113 @@ use ratatui::widgets::{
     Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
     Widget,
 };
-use std::time::{Duration, Instant};
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
-/// Which panel has the focus (TASK-252bf02de218, TASK-cae5c8ec9a69).
+/// Which panel has the focus (TASK-252bf02de218, TASK-cae5c8ec9a69,
+/// TASK-a9cd362ee5e2).
 ///
 /// Exactly one does, and under [`DASHBOARD`] it is also the one the region is
-/// showing (ADR-ac6be1ebe9aa). The order is the order `Tab` walks and the order
-/// the digits name, on both sides of that width, so the digit that reaches a
-/// panel drawn beside the others is the digit that reaches it drawn alone. The
-/// number is written on the panel's title beside the name, which is the whole
-/// of what "a digit names a panel" costs a person to learn.
+/// showing (ADR-ac6be1ebe9aa). **Four panels on the ring, and the document
+/// beside it.** The ring is what `Tab` walks and what the digits name -- the
+/// claims, the entities, the graph and the queue, `1` to `4` -- on both sides
+/// of that width, so the digit that reaches a panel drawn beside the others is
+/// the digit that reaches it drawn alone. The number is written on the panel's
+/// title beside the name, which is the whole of what "a digit names a panel"
+/// costs a person to learn. The document is not on the ring. It is what a row
+/// *opens into*, so it is reached by Enter on a row and left by `Back`, and a
+/// digit that reached it directly reached a screen with nothing to show until
+/// a row had been opened -- which is why `3` went to the graph and the
+/// document kept no digit at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Claims,
     Entities,
-    Body,
+    Graph,
     Queue,
+    Body,
 }
 
 impl Focus {
-    /// Every screen, in the order `Tab` walks them.
-    pub const ALL: [Focus; 4] = [Focus::Claims, Focus::Entities, Focus::Body, Focus::Queue];
+    /// Every screen the reader draws: the ring in the order `Tab` walks it,
+    /// then the document.
+    pub const ALL: [Focus; 5] = [
+        Focus::Claims,
+        Focus::Entities,
+        Focus::Graph,
+        Focus::Queue,
+        Focus::Body,
+    ];
 
-    /// The digit that names this screen, which is the key that reaches it.
-    pub fn number(self) -> usize {
+    /// The ring: the screens `Tab` walks and the digits name, in that order.
+    pub const RING: [Focus; 4] = [Focus::Claims, Focus::Entities, Focus::Graph, Focus::Queue];
+
+    /// The digit that names this screen, which is the key that reaches it, and
+    /// `None` on the document, which no digit reaches.
+    pub fn number(self) -> Option<usize> {
         match self {
-            Focus::Claims => 1,
-            Focus::Entities => 2,
-            Focus::Body => 3,
-            Focus::Queue => 4,
+            Focus::Claims => Some(1),
+            Focus::Entities => Some(2),
+            Focus::Graph => Some(3),
+            Focus::Queue => Some(4),
+            Focus::Body => None,
         }
     }
 
-    /// The screen a digit names, or `None` where the digit names none.
-    pub fn of_digit(c: char) -> Option<Focus> {
-        let n = c.to_digit(10)? as usize;
-        Focus::ALL.into_iter().find(|f| f.number() == n)
+    /// Where this screen's cursor and rectangle are kept: its place in
+    /// [`Focus::ALL`].
+    ///
+    /// Not the digit, which the document has none of: an index that was the
+    /// digit less one would have nowhere to put the one screen a digit does
+    /// not reach.
+    fn slot(self) -> usize {
+        match self {
+            Focus::Claims => 0,
+            Focus::Entities => 1,
+            Focus::Graph => 2,
+            Focus::Queue => 3,
+            Focus::Body => 4,
+        }
     }
 
-    /// The screen `by` steps along, wrapping.
+    /// The screen a digit names, or `None` where the digit names none -- which
+    /// it never does of the document.
+    pub fn of_digit(c: char) -> Option<Focus> {
+        let n = c.to_digit(10)? as usize;
+        Focus::RING.into_iter().find(|f| f.number() == Some(n))
+    }
+
+    /// The screen `by` steps along the ring, wrapping.
     ///
     /// Wrapping and not clamping, unlike a cursor: the four are a ring a person
     /// walks with one key, and a `Tab` that stopped on the last of them would
     /// be a key that does nothing every fourth press.
+    ///
+    /// **It never lands on the document.** The document stands where the graph
+    /// stands -- on a wide frame it is drawn in the graph's own panel -- so a
+    /// step from it is a step from there: `Tab` reaches the queue and `BackTab`
+    /// the entities, and nothing on the ring leads back into it.
     pub fn stepped(self, by: isize) -> Focus {
-        let len = Focus::ALL.len() as isize;
-        let at = (self.number() as isize - 1 + by).rem_euclid(len);
-        Focus::ALL[at as usize]
+        let from = match self {
+            Focus::Body => Focus::Graph,
+            ring => ring,
+        };
+        let len = Focus::RING.len() as isize;
+        let at = (from.slot() as isize + by).rem_euclid(len);
+        Focus::RING[at as usize]
     }
 
     /// Whether this screen holds the rows of a *listing*.
     ///
-    /// Three of the four do. The body is the one that does not, and what
-    /// answers for it is everything written for a listing: the digit that names
-    /// a row, the tap that selects one, the shared clamp. A document is not a
-    /// list -- the window over it is an offset into lines, because paging it is
-    /// what "whole rather than cut" means.
+    /// Four of the five do. The body is the one that does not, and what
+    /// answers for it is everything written for a listing: the digit that
+    /// names a row, the tap that selects one, the shared clamp. A document is
+    /// not a list -- the window over it is an offset into lines, because
+    /// paging it is what "whole rather than cut" means. The graph is a listing
+    /// since TASK-643611645dea: one row per task drawn, and a row of it opens
+    /// that task exactly as a row of the entities does.
     ///
-    /// It still has a cursor of its own, over the rows of its field block
+    /// The body still has a cursor of its own, over the rows of its field block
     /// (TASK-082301b40a27), kept inside that window by [`App::clamp_body`]. Two
     /// cursors and one rule: a listing's is a row of an answer, and the body's
     /// is a place in a document.
@@ -392,13 +488,14 @@ impl Focus {
         self != Focus::Body
     }
 
-    /// The name on the region's title when this screen is the one in it.
-    fn name(self) -> &'static str {
+    /// The name on the title when this screen is the one drawn.
+    pub fn name(self) -> &'static str {
         match self {
             Focus::Claims => "CLAIMS",
             Focus::Entities => "ENTITIES",
-            Focus::Body => "BODY",
+            Focus::Graph => "GRAPH",
             Focus::Queue => "QUEUE",
+            Focus::Body => "BODY",
         }
     }
 }
@@ -551,7 +648,7 @@ struct Chosen {
     /// The row it chose.
     row: usize,
     /// When it landed, which is the only instant this crate holds.
-    at: Instant,
+    at: Moment,
 }
 
 /// What the key list did with a key pressed over it (TASK-8a6578851244).
@@ -603,11 +700,11 @@ pub struct App {
     held: Option<Held>,
     detail: Option<Detail>,
     note: Option<String>,
-    /// One cursor per panel, indexed by [`Focus::number`] less one. The body's
+    /// One cursor per screen, indexed by [`Focus::slot`]. The body's
     /// slot carries only its `at`: the window over a document is `offset`, and
     /// what the cursor is for there is the row of the field block Enter opens
     /// (TASK-082301b40a27).
-    cursors: [Cursor; 4],
+    cursors: [Cursor; 5],
     kind: Option<String>,
     search: Option<String>,
     /// The first line of the body panel on screen.
@@ -620,6 +717,34 @@ pub struct App {
     /// before that. Never loaded on the reader's own initiative: `review` is
     /// the one read here that inspects the whole corpus.
     queue: Option<Queue>,
+    /// The `blocked_by` graph, as `ank graph --json` answered it, and `None`
+    /// until it has (TASK-643611645dea).
+    ///
+    /// **One read, taken when the panel is first needed and on `u`.** On a
+    /// wide frame the panel is on the opening, so [`App::reload_rest`] reads
+    /// it in the same pass as the claims and the queue; under that width the
+    /// first arrival at the graph reads it and later arrivals do not, because
+    /// nothing in a repaint reaches it (ADR-ac6be1ebe9aa, ADR-0bb7ea8991bc).
+    /// Moving the cursor over it spawns nothing, as moving one over the
+    /// entities spawns nothing.
+    dag: Option<Dag>,
+    /// Where the read of the graph stands while [`App::dag`] is `None`, and
+    /// meaningless once one is held (TASK-afcd4f0f56ad). Three states and
+    /// not a width: a wide frame with no graph is not necessarily reading
+    /// one -- the read may have been refused, or the frame may have been
+    /// narrow when the graph was dropped and widened since.
+    graphing: Graphing,
+    /// The graph laid out in lanes, held beside the [`Dag`] it was computed
+    /// from and recomputed when that or the listing's order moves -- never
+    /// per frame. A few hundred rows and a dozen lanes is cheap to hold and
+    /// would not be cheap to lay out on every keystroke.
+    drawn: Drawn,
+    /// How much of the graph is laid out: the open work and what it directly
+    /// waits on, or every task (TASK-67583993ef0d). What the key that cycles
+    /// the kind elsewhere cycles on GRAPH, and what the header's cell says
+    /// there. Changing it lays [`App::drawn`] out again from the graph already
+    /// held and reads nothing.
+    fold: Fold,
     /// Every key `ank config` declares with what it is set to, once somebody
     /// has opened the pane that draws them, and `None` before that
     /// (TASK-b08d090f699c).
@@ -748,6 +873,11 @@ pub struct App {
     /// carry: which row is selected is drawn on the screen, and how it came to
     /// be selected is not.
     chosen: Option<Chosen>,
+    /// The pulse's phase (TASK-54bb5cddc671): how many ticks this screen has
+    /// answered, and the only clock a frame reads. A task in progress is
+    /// drawn at this phase taken modulo four ([`Mark::cell`]); [`App::tick`]
+    /// is what moves it, and nothing else does.
+    phase: usize,
 }
 
 impl App {
@@ -765,12 +895,22 @@ impl App {
             detail: None,
             note: None,
             unreadable: false,
-            cursors: [Cursor::default(); 4],
+            cursors: [Cursor::default(); 5],
             kind: None,
             search: None,
             offset: 0,
             stream,
             queue: None,
+            dag: None,
+            // A wide frame's opening reads the graph in the pass after the
+            // rows, so from the first frame it is owed; a narrow one reads it
+            // on the first arrival at GRAPH, so until then nobody asked.
+            graphing: match size.0 >= DASHBOARD as usize {
+                true => Graphing::Reading,
+                false => Graphing::Unasked,
+            },
+            drawn: Drawn::default(),
+            fold: Fold::default(),
             config: None,
             needle: None,
             pending: None,
@@ -786,6 +926,7 @@ impl App {
             form: None,
             beyond: None,
             chosen: None,
+            phase: 0,
         }
     }
 
@@ -837,6 +978,7 @@ impl App {
     /// person was already looking at.
     pub fn reload_rows(&mut self, ank: &Ank) -> bool {
         let held = self.selected_id(Focus::Entities);
+        let on_graph = self.selected_id(Focus::Graph);
         match Snapshot::load(ank) {
             Ok(snapshot) => {
                 self.snapshot = Some(snapshot);
@@ -844,9 +986,14 @@ impl App {
                 self.note = None;
                 if let Some(id) = held {
                     if let Some(at) = self.entity_rows().iter().position(|r| r.id == id) {
-                        self.cursors[Focus::Entities.number() - 1].at = at;
+                        self.cursors[Focus::Entities.slot()].at = at;
                     }
                 }
+                // The graph is handed the listing's order, so a listing that
+                // moved is a graph laid out again -- from the graph already
+                // read, and with no second read of it.
+                self.relayout();
+                self.keep_graph_on(on_graph);
                 self.clamp_all();
                 true
             }
@@ -858,10 +1005,12 @@ impl App {
         }
     }
 
-    /// The second half: the claims and the queue, where the frame draws them.
+    /// The second half: the claims, the queue and the graph, where the frame
+    /// draws them.
     pub fn reload_rest(&mut self, ank: &Ank) {
         self.rehold(ank);
         self.requeue(ank);
+        self.regraph(ank);
         self.clamp_all();
     }
 
@@ -942,6 +1091,314 @@ impl App {
         }
     }
 
+    /// Asks `graph` again, but only where the graph panel is on the frame
+    /// (TASK-643611645dea).
+    ///
+    /// The claims' condition and the queue's, for their reason: a panel nobody
+    /// is looking at is not stale, and a read nobody asked for is a price
+    /// every event a watcher sends would pay again. `graph` reads every task
+    /// of the corpus to answer, so it is charged where the panel is drawn --
+    /// which on a wide frame is the opening, in the same pass as the other
+    /// two, and under that width is the arrival at the screen.
+    fn regraph(&mut self, ank: &Ank) {
+        if self.focus != Focus::Graph && !self.wide() {
+            // Not read, and not kept either: the listing this pass follows
+            // has just been read again, and a graph laid out over the old
+            // one would be a screen showing rows the corpus no longer has.
+            // The next arrival reads, as the first one did.
+            self.dag = None;
+            self.drawn = Drawn::default();
+            self.graphing = Graphing::Unasked;
+            return;
+        }
+        match Dag::load(ank) {
+            Ok(dag) => self.graphed(dag),
+            Err(failed) => {
+                self.graphing = Graphing::Refused;
+                self.fail(failed);
+            }
+        }
+    }
+
+    /// Runs the read of the graph a resize asked for, and says whether it
+    /// ran one (TASK-afcd4f0f56ad).
+    ///
+    /// **A resize asks and the session reads.** [`App::resize`] is a fact
+    /// about the window and has no CLI to read with, so a frame widened onto
+    /// the dashboard with no graph held only records that one is owed -- the
+    /// frame drawn at the new size says it is reading, which is then true --
+    /// and the loop calls this before it waits for the next event, as it
+    /// runs the opening's second pass. Owed once: the read either answers or
+    /// is refused, and neither leaves anything owed, so a second resize asks
+    /// for nothing.
+    ///
+    /// Nothing is read over a corpus that was not: the graph is laid out in
+    /// the listing's order, and a `u` that reads the listing reads the graph
+    /// with it.
+    pub fn read_asked(&mut self, ank: &Ank) -> bool {
+        if !self.wide()
+            || self.dag.is_some()
+            || self.graphing != Graphing::Reading
+            || self.snapshot.is_none()
+        {
+            return false;
+        }
+        self.regraph(ank);
+        true
+    }
+
+    /// The graph `graph` answered with, laid out and put on the screen.
+    ///
+    /// Split from [`App::regraph`] so that the half which needs no CLI is a
+    /// function of its own: the suite hands it a graph rather than spawning
+    /// `ank graph` for one, as [`App::opened`] takes a document.
+    fn graphed(&mut self, dag: Dag) {
+        let on = self.selected_id(Focus::Graph);
+        self.dag = Some(dag);
+        self.relayout();
+        self.keep_graph_on(on);
+        self.clamp(Focus::Graph);
+    }
+
+    /// The graph already held, laid out again because the fold or the search
+    /// moved (TASK-67583993ef0d).
+    ///
+    /// **Nothing is read.** The rows are a function of the graph as `graph`
+    /// answered it, the fold and the needle, and the first of those has not
+    /// moved, so what changes is the layout and never the corpus behind it.
+    /// The cursor stays on the row it was on wherever that row survives the
+    /// change: a person who widened the graph to look around a task is still
+    /// standing on it.
+    fn refold(&mut self) {
+        let on = self.selected_id(Focus::Graph);
+        self.relayout();
+        self.keep_graph_on(on);
+        self.clamp(Focus::Graph);
+    }
+
+    /// The graph's cursor, put back on the row that was under it before the
+    /// rows moved, where that row is still drawn.
+    fn keep_graph_on(&mut self, id: Option<String>) {
+        if let Some(id) = id {
+            if let Some(at) = self.drawn.rows.iter().position(|r| r.id == id) {
+                self.cursors[Focus::Graph.slot()].at = at;
+            }
+        }
+    }
+
+    /// The lanes, computed again from the graph as read and the listing's
+    /// order, and from nothing that moves between two frames.
+    ///
+    /// **Shown by default: the work that is alive, and what it directly
+    /// waits on** (TASK-643611645dea, ADR-ac6be1ebe9aa). Every task whose
+    /// status is neither `done` nor `closed`, together with every task one of
+    /// those names in `blocked_by`, whatever that task's status is: a finished
+    /// blocker is what makes a task ready, and a person who reads `Ready`
+    /// should be able to see why. The rest of the corpus is history -- on
+    /// this project's own corpus, four hundred and ninety rows of it -- and a
+    /// screen that opened on it would be the list the decision refused.
+    ///
+    /// **The order handed to the layout is the listing's own.** `find` has
+    /// already put the work that is alive first and the most recently
+    /// created after it, and no identifier took part (`model::alive_first`);
+    /// the layout keeps that order wherever the edges leave two tasks free of
+    /// each other, and puts every task above what it is blocked by. A task
+    /// the listing withheld -- `find` is budgeted and `graph` is not -- is
+    /// placed after the listing's rows, in the order the document gave it.
+    ///
+    /// **The word says readiness and the cell says the status.** The shared
+    /// table knows `open` and `in_progress` and does not know `blocked`, and
+    /// a word it does not know would be a second table (ADR-1f70ce2c3eac).
+    /// So the status column holds a readiness word ([`readiness`],
+    /// TASK-9ea4dc65755b), and the cell on the lane is the mark's
+    /// ([`Mark::cell`]): settled for a done or closed task, the first phase
+    /// of the pulse for one under way, open for every other -- ready when
+    /// every task it is blocked by is done or closed and waiting otherwise,
+    /// which share the cell and differ in the word. A blocker the document
+    /// lists no task for -- a peer task, an identifier that names nothing --
+    /// is not known to be finished, so what names it waits.
+    ///
+    /// **The tasks shown are split into groups, and every group is a block**
+    /// (TASK-de02dbcf9965, [`graph::groups`]): the weakly connected
+    /// components over the edges the layout draws. A group of two or more is
+    /// laid out on its own, contiguous; one blank line stands between two
+    /// blocks; and the tasks linked to nothing are gathered in a last block
+    /// under a heading reading `unlinked`, in the listing's order. Drawn as
+    /// one walk, six tasks linked to nothing interleave with the groups and
+    /// a person reads edges between things that have none.
+    ///
+    /// **The blocks stand alive first, then bigger first, then newest
+    /// first**, which is ADR-ac6be1ebe9aa's order applied to groups: a block
+    /// holding a task neither done nor closed before one holding none; more
+    /// tasks before fewer, because the largest structure is the one a person
+    /// is orienting in; then the block whose most recently created task is
+    /// the newer, `created` read off the listing and a task the listing
+    /// withheld counted the oldest rather than guessed. The sort is stable,
+    /// so blocks the keys cannot tell apart stand in the order of their
+    /// first task in the listing.
+    fn relayout(&mut self) {
+        let Some(dag) = &self.dag else {
+            self.drawn = Drawn::default();
+            return;
+        };
+        let tasks: HashMap<&str, &DagTask> = dag.tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+        let mut blockers: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &dag.edges {
+            blockers
+                .entry(edge.task.as_str())
+                .or_default()
+                .push(edge.blocked_by.as_str());
+        }
+        let alive = |task: &DagTask| !finished(&task.status);
+        let mut shown: HashSet<&str> = HashSet::new();
+        match self.fold {
+            Fold::Open => {
+                for task in dag.tasks.iter().filter(|t| alive(t)) {
+                    shown.insert(task.id.as_str());
+                    for blocker in blockers.get(task.id.as_str()).into_iter().flatten() {
+                        if tasks.contains_key(blocker) {
+                            shown.insert(blocker);
+                        }
+                    }
+                }
+            }
+            Fold::All => shown.extend(dag.tasks.iter().map(|t| t.id.as_str())),
+        }
+        // The search, over what the fold shows (TASK-67583993ef0d): the rows
+        // whose identifier or title carries the needle, matched as the
+        // listing matches it. What it hides is hidden from the layout too, so
+        // the lanes are laid out over the survivors and an edge to a hidden
+        // task is the layout's `unknown`, counted on its row as outside.
+        if let Some(needle) = self.search.as_ref().map(|s| s.to_ascii_lowercase()) {
+            shown.retain(|id| {
+                id.to_ascii_lowercase().contains(&needle)
+                    || tasks[id].title.to_ascii_lowercase().contains(&needle)
+            });
+        }
+        let mut order: Vec<&str> = Vec::with_capacity(shown.len());
+        let mut placed: HashSet<&str> = HashSet::new();
+        let listed = self
+            .snapshot
+            .iter()
+            .flat_map(|s| s.entities.iter().map(|r| r.id.as_str()));
+        for id in listed.chain(dag.tasks.iter().map(|t| t.id.as_str())) {
+            if shown.contains(id) && placed.insert(id) {
+                order.push(id);
+            }
+        }
+        let nodes: Vec<Node> = order
+            .iter()
+            .map(|id| {
+                let named = blockers.get(id).cloned().unwrap_or_default();
+                let status = tasks[id].status.as_str();
+                let mark = match (finished(status), status) {
+                    (true, _) => Mark::Finished,
+                    (false, "in_progress") => Mark::InProgress,
+                    (false, _) => match named
+                        .iter()
+                        .all(|b| tasks.get(b).is_some_and(|t| finished(&t.status)))
+                    {
+                        true => Mark::Ready,
+                        false => Mark::Waiting,
+                    },
+                };
+                Node {
+                    id: id.to_string(),
+                    mark,
+                    blocked_by: named.into_iter().map(str::to_string).collect(),
+                }
+            })
+            .collect();
+
+        // The groups, and the blocks they stand in.
+        let created: HashMap<&str, &str> = self
+            .snapshot
+            .iter()
+            .flat_map(|s| {
+                s.entities
+                    .iter()
+                    .map(|r| (r.id.as_str(), r.created.as_str()))
+            })
+            .collect();
+        let (mut linked, lone): (Vec<Vec<usize>>, Vec<Vec<usize>>) =
+            graph::groups(&nodes).into_iter().partition(|g| g.len() > 1);
+        linked.sort_by_key(|g| {
+            let alive = g.iter().any(|&i| nodes[i].mark != Mark::Finished);
+            let newest = g
+                .iter()
+                .map(|&i| created.get(nodes[i].id.as_str()).copied().unwrap_or(""))
+                .max()
+                .unwrap_or("");
+            (
+                !alive,
+                std::cmp::Reverse(g.len()),
+                std::cmp::Reverse(newest),
+            )
+        });
+        let alphabet = self.glyphs.alphabet();
+        let lay = |members: &[usize]| {
+            let picked: Vec<Node> = members.iter().map(|&i| nodes[i].clone()).collect();
+            graph::junction_layout(&picked, alphabet, 0)
+        };
+        let mut blocks: Vec<graph::JunctionLayout> = linked.iter().map(|g| lay(g)).collect();
+        let unlinked: Vec<usize> = lone.into_iter().flatten().collect();
+        if !unlinked.is_empty() {
+            blocks.push(lay(&unlinked));
+        }
+        let width = blocks
+            .iter()
+            .map(graph::JunctionLayout::width)
+            .max()
+            .unwrap_or(0);
+
+        let mut drawn = Drawn {
+            width,
+            ..Drawn::default()
+        };
+        // The last block is the unlinked one where there is one, and it
+        // alone is headed; a blank stands between two blocks and never
+        // first or last.
+        let headed = (!unlinked.is_empty()).then(|| blocks.len() - 1);
+        for (n, block) in blocks.into_iter().enumerate() {
+            if n > 0 {
+                drawn.lines.push(Screen::Blank);
+            }
+            if headed == Some(n) {
+                drawn.lines.push(Screen::Heading);
+            }
+            for line in block.lines {
+                match line {
+                    graph::Line::Junction(prefix) => {
+                        drawn
+                            .lines
+                            .push(Screen::Junction(format!("{prefix:<width$}")));
+                    }
+                    graph::Line::Task(row) => {
+                        let task = tasks[row.id.as_str()];
+                        let waits = blockers
+                            .get(row.id.as_str())
+                            .into_iter()
+                            .flatten()
+                            .filter(|b| !tasks.get(*b).is_some_and(|t| finished(&t.status)))
+                            .count();
+                        let (word, role) = readiness(&task.status, waits);
+                        drawn.rows.push(Lane {
+                            pulse: (row.mark == Mark::InProgress).then_some(2 * row.lane),
+                            id: task.id.clone(),
+                            word,
+                            role,
+                            title: task.title.clone(),
+                            prefix: format!("{:<width$}", row.prefix),
+                            outside: row.unknown,
+                        });
+                        drawn.lines.push(Screen::Task(drawn.rows.len() - 1));
+                    }
+                }
+            }
+        }
+        self.drawn = drawn;
+    }
+
     /// Draw again because the watcher said the corpus moved, and for no other
     /// reason (TASK-2f7777a1fdff).
     ///
@@ -1008,10 +1465,14 @@ impl App {
         let rows = match focus {
             Focus::Entities => self.entity_rows(),
             Focus::Queue => self.queue_rows(),
-            Focus::Claims | Focus::Body => Vec::new(),
+            Focus::Claims | Focus::Graph | Focus::Body => Vec::new(),
         };
         let total = match focus {
             Focus::Claims => self.claimed().len(),
+            // The lines of the panel and not its task rows: what the window
+            // pages over and the bar measures (TASK-de02dbcf9965). The
+            // title counts task rows, and composes that count itself.
+            Focus::Graph => self.drawn.lines.len(),
             Focus::Body => self.pane_lines().len(),
             Focus::Entities | Focus::Queue => rows.len(),
         };
@@ -1092,6 +1553,7 @@ impl App {
             Focus::Claims => self.claimed().len(),
             Focus::Entities => self.entity_rows().len(),
             Focus::Queue => self.queue_rows().len(),
+            Focus::Graph => self.drawn.rows.len(),
             Focus::Body => 0,
         }
     }
@@ -1102,11 +1564,12 @@ impl App {
     /// block: a row of it that names a constraint names one, and every other
     /// row of the document names nothing (TASK-082301b40a27).
     fn selected_id(&self, focus: Focus) -> Option<String> {
-        let at = self.cursors[focus.number() - 1].at;
+        let at = self.cursors[focus.slot()].at;
         match focus {
             Focus::Claims => self.claimed().get(at).map(|c| c.id.clone()),
             Focus::Entities => self.entity_rows().get(at).map(|r| r.id.clone()),
             Focus::Queue => self.queue_rows().get(at).map(|r| r.id.clone()),
+            Focus::Graph => self.drawn.rows.get(at).map(|r| r.id.clone()),
             Focus::Body => self.pane_target(),
         }
     }
@@ -1117,22 +1580,34 @@ impl App {
         }
     }
 
+    /// The cursor kept on a row, and the window kept over the cursor.
+    ///
+    /// On the graph the cursor counts task rows and the window counts the
+    /// panel's lines (TASK-de02dbcf9965), so the row is translated to the
+    /// line it is drawn on before the window is moved over it: the selected
+    /// row is always inside the panel, whatever junctions, blanks and
+    /// headings stand between it and the top.
     fn clamp(&mut self, focus: Focus) {
         if !focus.holds_rows() {
             return;
         }
         let total = self.count(focus);
         let page = self.page(focus);
-        let c = &mut self.cursors[focus.number() - 1];
-        c.at = c.at.min(total.saturating_sub(1));
-        if c.at < c.top {
-            c.top = c.at;
+        let at = self.cursors[focus.slot()].at.min(total.saturating_sub(1));
+        let (line, lines) = match focus {
+            Focus::Graph => (self.drawn.line_of(at), self.drawn.lines.len()),
+            _ => (at, total),
+        };
+        let c = &mut self.cursors[focus.slot()];
+        c.at = at;
+        if line < c.top {
+            c.top = line;
         }
-        if page > 0 && c.at >= c.top + page {
-            c.top = c.at + 1 - page;
+        if page > 0 && line >= c.top + page {
+            c.top = line + 1 - page;
         }
-        if c.top >= total {
-            c.top = total.saturating_sub(1).min(c.top);
+        if c.top >= lines {
+            c.top = lines.saturating_sub(1).min(c.top);
         }
     }
 
@@ -1235,6 +1710,17 @@ impl App {
         }
         match keys::typed(key, self.focus) {
             Press::Run(command) => self.act(command, ank),
+            // On GRAPH the same key walks the fold rather than the kind
+            // (TASK-67583993ef0d): the graph is a listing of tasks only, so
+            // the next thing to narrow it by is time, and the cell that says
+            // which kind is in force says which fold is. Laid out again from
+            // the graph held, and nothing is read.
+            Press::Cycle if self.focus == Focus::Graph => {
+                self.note = None;
+                self.fold = self.fold.next();
+                self.refold();
+                false
+            }
             Press::Cycle => {
                 let next = next_row_kind(self.kind.as_deref());
                 self.act(Command::Kind(next), ank)
@@ -1358,11 +1844,17 @@ impl App {
                     }
                 }
                 // A panel's title is the digit it is drawn with, pressed
-                // (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa).
+                // (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa). The document's title
+                // is drawn with no digit (TASK-a9cd362ee5e2), so a touch there
+                // presses nothing -- and is not handed on to the rows below it
+                // either, where it would choose a row nobody aimed at.
                 if let Some(focus) = self.title_at(at) {
-                    if let Some(binding) = bindings::of_command(&Command::Panel(focus)) {
-                        return self.press(KeyEvent::new(binding.key, KeyModifiers::NONE), ank);
-                    }
+                    return match bindings::of_command(&Command::Panel(focus)) {
+                        Some(binding) => {
+                            self.press(KeyEvent::new(binding.key, KeyModifiers::NONE), ank)
+                        }
+                        None => false,
+                    };
                 }
                 self.tapped(first, at, ank)
             }
@@ -1444,7 +1936,7 @@ impl App {
         match self.focus {
             Focus::Body => self.offset = moved(self.offset),
             listing => {
-                let c = &mut self.cursors[listing.number() - 1];
+                let c = &mut self.cursors[listing.slot()];
                 c.top = moved(c.top);
             }
         }
@@ -1462,7 +1954,7 @@ impl App {
     fn paging(&self, focus: Focus, onto: &Listing) -> (usize, usize) {
         let first = match focus {
             Focus::Body => self.offset,
-            listing => self.cursors[listing.number() - 1].top,
+            listing => self.cursors[listing.slot()].top,
         };
         (onto.total, first)
     }
@@ -1591,11 +2083,11 @@ impl App {
     /// test instead of waited out by one, and so this stays a function of what
     /// it was given.
     fn tapped(&mut self, first: Option<Chosen>, at: Position, ank: &Ank) -> bool {
-        self.pressed(first, at, ank, Instant::now())
+        self.pressed(first, at, ank, Moment::now())
     }
 
     /// [`App::tapped`] with the clock handed to it.
-    fn pressed(&mut self, first: Option<Chosen>, at: Position, ank: &Ank, now: Instant) -> bool {
+    fn pressed(&mut self, first: Option<Chosen>, at: Position, ank: &Ank, now: Moment) -> bool {
         // On a wide frame a press lands in a panel, and that panel takes the
         // focus before the row is chosen (ADR-ac6be1ebe9aa).
         if let Some(panel) = self.panel_at(at) {
@@ -1614,8 +2106,8 @@ impl App {
         }
         let again = first.is_some_and(|first| {
             first.focus == focus && first.row == row && now.duration_since(first.at) <= SECOND_PRESS
-        }) && row == self.cursors[focus.number() - 1].at;
-        self.cursors[focus.number() - 1].at = row;
+        }) && row == self.cursors[focus.slot()].at;
+        self.cursors[focus.slot()].at = row;
         self.clamp(focus);
         // A pair that opened is spent: coming back out of the document to the
         // row that is still selected finds a screen where one press chooses
@@ -1645,7 +2137,17 @@ impl App {
         // Never past the window the panel is drawing: the rows below a short
         // listing are empty, and the regime line under the queue is a sentence
         // about the panel rather than a row of it.
-        (down < self.page(focus)).then_some(self.cursors[focus.number() - 1].top + down)
+        if down >= self.page(focus) {
+            return None;
+        }
+        let line = self.cursors[focus.slot()].top + down;
+        match focus {
+            // A line of the graph is a row only where a task is drawn on it
+            // (TASK-de02dbcf9965): a junction, a blank or the heading is
+            // nobody's, and a finger on one has chosen nothing.
+            Focus::Graph => self.drawn.task_on(line),
+            _ => Some(line),
+        }
     }
 
     /// Runs one command. `true` means the session is over.
@@ -1666,13 +2168,13 @@ impl App {
                 // rather than a cursor for the one and a scroll for the other.
                 Focus::Body => {
                     let rows = self.pane_lines().len();
-                    let at = self.cursors[Focus::Body.number() - 1].at;
-                    self.cursors[Focus::Body.number() - 1].at = step(at, by, rows);
+                    let at = self.cursors[Focus::Body.slot()].at;
+                    self.cursors[Focus::Body.slot()].at = step(at, by, rows);
                     self.clamp_body();
                 }
                 listing => {
                     let total = self.count(listing);
-                    let c = &mut self.cursors[listing.number() - 1];
+                    let c = &mut self.cursors[listing.slot()];
                     c.at = step(c.at, by, total);
                     self.clamp(listing);
                 }
@@ -1681,24 +2183,24 @@ impl App {
                 Focus::Body => {
                     let page = self.page(Focus::Body).max(1) as isize;
                     let rows = self.pane_lines().len();
-                    let at = self.cursors[Focus::Body.number() - 1].at;
-                    self.cursors[Focus::Body.number() - 1].at = step(at, by * page, rows);
+                    let at = self.cursors[Focus::Body.slot()].at;
+                    self.cursors[Focus::Body.slot()].at = step(at, by * page, rows);
                     self.clamp_body();
                 }
                 listing => {
                     let page = self.page(listing).max(1) as isize;
                     let total = self.count(listing);
-                    let c = &mut self.cursors[listing.number() - 1];
+                    let c = &mut self.cursors[listing.slot()];
                     c.at = step(c.at, by * page, total);
                     self.clamp(listing);
                 }
             },
             Command::Top => match self.focus {
                 Focus::Body => {
-                    self.cursors[Focus::Body.number() - 1] = Cursor::default();
+                    self.cursors[Focus::Body.slot()] = Cursor::default();
                     self.offset = 0;
                 }
-                listing => self.cursors[listing.number() - 1] = Cursor::default(),
+                listing => self.cursors[listing.slot()] = Cursor::default(),
             },
             Command::Open => self.open_selected(ank),
             Command::Queue => self.focus_on(Focus::Queue, ank),
@@ -1733,14 +2235,18 @@ impl App {
                     }
                 }
                 self.kind = kind;
-                self.cursors[Focus::Entities.number() - 1] = Cursor::default();
-                self.cursors[Focus::Queue.number() - 1] = Cursor::default();
+                self.cursors[Focus::Entities.slot()] = Cursor::default();
+                self.cursors[Focus::Queue.slot()] = Cursor::default();
             }
             Command::Search(text) => {
                 self.search = text;
-                self.cursors[Focus::Claims.number() - 1] = Cursor::default();
-                self.cursors[Focus::Entities.number() - 1] = Cursor::default();
-                self.cursors[Focus::Queue.number() - 1] = Cursor::default();
+                self.cursors[Focus::Claims.slot()] = Cursor::default();
+                self.cursors[Focus::Entities.slot()] = Cursor::default();
+                self.cursors[Focus::Queue.slot()] = Cursor::default();
+                // The graph narrows on the same needle (TASK-67583993ef0d),
+                // laid out again from the graph held: nothing is read, and the
+                // cursor stays on its row wherever the row survives.
+                self.refold();
             }
             Command::Constraints => self.pane_to(Pane::Constraints),
             // The pane, opened, and the keys read once because it was
@@ -1755,7 +2261,7 @@ impl App {
                 // `reconfig`, which runs again every time a person comes back
                 // to the pane and must not move the row they left it on.
                 if self.pane == Pane::Config {
-                    self.cursors[Focus::Body.number() - 1].at = self.first_key_row();
+                    self.cursors[Focus::Body.slot()].at = self.first_key_row();
                     self.clamp_body();
                 }
             }
@@ -1833,7 +2339,7 @@ impl App {
             false => pane,
         };
         self.offset = 0;
-        self.cursors[Focus::Body.number() - 1] = Cursor::default();
+        self.cursors[Focus::Body.slot()] = Cursor::default();
         // The pane that was asked for is the pane to be looking at.
         self.focus = Focus::Body;
     }
@@ -1873,6 +2379,11 @@ impl App {
     /// by a screen nobody is at -- which is sharper than it was, since a screen
     /// nobody is at is now a screen nobody can see.
     fn focus_on(&mut self, focus: Focus, ank: &Ank) {
+        // Right from a listing reaches the document as Enter does, so `Back`
+        // returns to that listing the same way (TASK-a9cd362ee5e2).
+        if focus == Focus::Body && self.focus.holds_rows() {
+            self.from = self.focus;
+        }
         self.focus = focus;
         if focus == Focus::Claims {
             self.rehold(ank);
@@ -1881,6 +2392,17 @@ impl App {
         if focus == Focus::Queue {
             self.requeue(ank);
             self.clamp(Focus::Queue);
+        }
+        // The first arrival reads the graph and later ones do not
+        // (TASK-643611645dea): the claims and the queue are asked again on
+        // every arrival because what they answer moves under a session, and
+        // the graph is `u`'s to read again -- a repaint reaches it where the
+        // panel is on the frame, and nothing else does.
+        if focus == Focus::Graph {
+            if self.dag.is_none() {
+                self.regraph(ank);
+            }
+            self.clamp(Focus::Graph);
         }
         if focus == Focus::Body {
             self.reconfig(ank);
@@ -2132,28 +2654,35 @@ impl App {
 
     fn show(&mut self, ank: &Ank, id: &str) {
         match Detail::load(ank, id) {
-            Ok(detail) => {
-                let same = self.detail.as_ref().is_some_and(|d| d.id == detail.id);
-                self.detail = Some(detail);
-                if !same {
-                    // A different document is a different set of rows: an
-                    // offset and a cursor kept across the change would be a
-                    // window into a document nobody is looking at any more.
-                    self.offset = 0;
-                    self.cursors[Focus::Body.number() - 1] = Cursor::default();
-                }
-                // The listing this was reached from, so that leaving it gives
-                // that listing back (TASK-252bf02de218). Never the document
-                // itself: `Enter` on a constraint of the field block opens a
-                // second document from inside the first, and the way out of
-                // both is the list the first was opened from.
-                if self.focus.holds_rows() {
-                    self.from = self.focus;
-                }
-                self.focus = Focus::Body;
-            }
+            Ok(detail) => self.opened(detail),
             Err(failed) => self.fail(failed),
         }
+    }
+
+    /// The document `show` answered with, put in front of the person.
+    ///
+    /// Split from [`App::show`] so that the half of opening which needs no CLI
+    /// is a function of its own: the suite hands it a document rather than
+    /// spawning `ank show` for one.
+    fn opened(&mut self, detail: Detail) {
+        let same = self.detail.as_ref().is_some_and(|d| d.id == detail.id);
+        self.detail = Some(detail);
+        if !same {
+            // A different document is a different set of rows: an offset and a
+            // cursor kept across the change would be a window into a document
+            // nobody is looking at any more.
+            self.offset = 0;
+            self.cursors[Focus::Body.slot()] = Cursor::default();
+        }
+        // The listing this was reached from, so that leaving it gives that
+        // listing back (TASK-252bf02de218). Never the document itself: `Enter`
+        // on a constraint of the field block opens a second document from
+        // inside the first, and the way out of both is the list the first was
+        // opened from.
+        if self.focus.holds_rows() {
+            self.from = self.focus;
+        }
+        self.focus = Focus::Body;
     }
 
     // -----------------------------------------------------------------------
@@ -2221,9 +2750,12 @@ impl App {
     /// The region, divided between the panels (TASK-cae5c8ec9a69,
     /// ADR-ac6be1ebe9aa).
     ///
-    /// Indexed by [`Focus::number`] less one. On a wide frame the listings are
-    /// a column on the left -- the claims, the entities, the queue, top to
-    /// bottom -- and the detail takes what is left of the width. The column is
+    /// Indexed by [`Focus::slot`]. On a wide frame the listings are a column
+    /// on the left -- the claims, the entities, the queue, top to bottom -- and
+    /// the right panel takes what is left of the width. The graph and the
+    /// document are handed that one rectangle between them, because they are
+    /// never drawn at once: the graph stands there at rest and the document
+    /// takes its place while one is open ([`App::beside`], TASK-a9cd362ee5e2). The column is
     /// two fifths of the window and never narrower than [`COLUMN`]; the claims
     /// and the queue take a quarter of its height each and never fewer than
     /// [`REGION`] rows, and the entities take the rest, because they are the
@@ -2231,9 +2763,9 @@ impl App {
     ///
     /// Under [`DASHBOARD`] every panel is the whole region, which is where
     /// whichever of them has been asked for is drawn.
-    fn divide(&self, whole: Rect) -> [Rect; 4] {
+    fn divide(&self, whole: Rect) -> [Rect; 5] {
         if !self.wide() {
-            return [whole; 4];
+            return [whole; 5];
         }
         let left = (whole.width * 2 / 5).max(COLUMN).min(whole.width);
         let right = Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
@@ -2244,11 +2776,12 @@ impl App {
         let claims_rect = Rect::new(whole.x, whole.y, left, claims);
         let entities_rect = Rect::new(whole.x, whole.y + claims, left, entities);
         let queue_rect = Rect::new(whole.x, whole.y + claims + entities, left, queue);
-        let mut rects = [Rect::default(); 4];
-        rects[Focus::Claims.number() - 1] = claims_rect;
-        rects[Focus::Entities.number() - 1] = entities_rect;
-        rects[Focus::Body.number() - 1] = right;
-        rects[Focus::Queue.number() - 1] = queue_rect;
+        let mut rects = [Rect::default(); 5];
+        rects[Focus::Claims.slot()] = claims_rect;
+        rects[Focus::Entities.slot()] = entities_rect;
+        rects[Focus::Graph.slot()] = right;
+        rects[Focus::Body.slot()] = right;
+        rects[Focus::Queue.slot()] = queue_rect;
         rects
     }
 
@@ -2257,7 +2790,7 @@ impl App {
     /// against it.
     #[cfg(test)]
     fn region(&self, area: Rect) -> Rect {
-        self.arrange(area).rects[self.focus.number() - 1]
+        self.arrange(area).rects[self.focus.slot()]
     }
 
     /// The rectangle `focus` is drawn in (TASK-cae5c8ec9a69).
@@ -2267,7 +2800,7 @@ impl App {
     /// asked for is drawn there: a page measured off an empty rectangle would
     /// be a page of one row the moment the panel was reached.
     fn rect_of(&self, focus: Focus) -> Rect {
-        self.arrange(self.area()).rects[focus.number() - 1]
+        self.arrange(self.area()).rects[focus.slot()]
     }
 
     /// The panel a position falls in, on a wide frame.
@@ -2276,9 +2809,30 @@ impl App {
             return None;
         }
         let panels = self.arrange(self.area());
-        Focus::ALL
+        self.drawn()
             .into_iter()
-            .find(|f| panels.rects[f.number() - 1].contains(at))
+            .find(|f| panels.rects[f.slot()].contains(at))
+    }
+
+    /// What the right panel of a wide frame is showing (TASK-a9cd362ee5e2).
+    ///
+    /// **The document while the person is in it, and the graph otherwise.** A
+    /// row opened puts its document there; `Back` -- or any other way off the
+    /// document, a digit, `Tab`, a press on the column of listings -- gives the
+    /// panel back to the graph. The document is kept either way, as it is
+    /// under the dashboard's width: nothing is re-read on the way out, and Right
+    /// brings the same document back.
+    fn beside(&self) -> Focus {
+        match self.focus {
+            Focus::Body => Focus::Body,
+            _ => Focus::Graph,
+        }
+    }
+
+    /// The four panels a wide frame draws: the column of listings, and
+    /// whichever of the graph and the document is beside it.
+    fn drawn(&self) -> [Focus; 4] {
+        [Focus::Claims, Focus::Entities, Focus::Queue, self.beside()]
     }
 
     /// The panel whose title a position is on: the top border between its two
@@ -2288,12 +2842,15 @@ impl App {
     /// whose title names the panel already focused.
     fn title_at(&self, at: Position) -> Option<Focus> {
         let rects = self.arrange(self.area()).rects;
+        // The panels drawn and not every panel: on a wide frame the graph and
+        // the document share the right rectangle, and the title there is
+        // whichever of them is beside the listings ([`App::beside`]).
         let drawn: Vec<Focus> = match self.wide() {
-            true => Focus::ALL.to_vec(),
+            true => self.drawn().to_vec(),
             false => vec![self.focus],
         };
         drawn.into_iter().find(|f| {
-            let r = rects[f.number() - 1];
+            let r = rects[f.slot()];
             r.width >= 2 && at.y == r.y && at.x > r.x && at.x < r.right() - 1
         })
     }
@@ -2413,17 +2970,13 @@ impl App {
         // asked for (TASK-252bf02de218). The other three are not drawn closed,
         // squeezed or greyed: they are not on this frame at all, and the digit
         // that names one is how a person gets to it.
-        // Every panel on a wide frame, each in its own rectangle
+        // The four panels of a wide frame, each in its own rectangle, the right
+        // one the graph or the open document ([`App::beside`])
         // (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa); under [`DASHBOARD`] the one
         // that has been asked for, in the whole region, as it always was.
         if self.wide() {
-            for focus in Focus::ALL {
-                self.panel(
-                    focus,
-                    &self.listing(focus),
-                    panels.rects[focus.number() - 1],
-                    buf,
-                );
+            for focus in self.drawn() {
+                self.panel(focus, &self.listing(focus), panels.rects[focus.slot()], buf);
             }
         } else {
             self.panel(self.focus, &self.listing(self.focus), panels.region, buf);
@@ -2450,7 +3003,9 @@ impl App {
     /// TASK-cae5c8ec9a69). On a wide frame the focused panel's title carries
     /// [`Glyphs::focus`] and the others carry blanks of the same width; under
     /// [`DASHBOARD`] the one panel on the frame says it to nobody, so its title
-    /// is the digit that reaches it and its name.
+    /// is the digit that reaches it and its name. The document carries its
+    /// name alone, because no digit reaches it: it is opened from a row
+    /// (TASK-a9cd362ee5e2).
     ///
     /// The cursor keeps its `> `, on the row of the listing where it always
     /// was: where a person is standing is a character, and never a colour
@@ -2471,7 +3026,10 @@ impl App {
             (false, _) => "",
         };
         let title = Composed::new()
-            .plain(&format!("{mark}{} ", focus.number()))
+            .plain(&match focus.number() {
+                Some(n) => format!("{mark}{n} "),
+                None => mark.to_string(),
+            })
             .then(self.title_of(focus, onto, width))
             .fitted(area.width as usize - 2);
         let block = Block::bordered()
@@ -2485,6 +3043,7 @@ impl App {
             Focus::Claims => self.claim_lines(width),
             Focus::Entities => self.entity_lines(onto, width, inside.height as usize),
             Focus::Queue => self.queue_lines(onto, width),
+            Focus::Graph => self.graph_lines(width),
             Focus::Body => self.body_lines(width, inside.height as usize),
         };
         painted(&lines, self.ink).render(inside, buf);
@@ -2582,7 +3141,7 @@ impl App {
             Focus::Entities => {
                 let total = self.snapshot.as_ref().map_or(0, |s| s.total);
                 let rows = onto.total;
-                let c = self.cursors[Focus::Entities.number() - 1];
+                let c = self.cursors[Focus::Entities.slot()];
                 let shown = self.page(Focus::Entities).min(rows.saturating_sub(c.top));
                 Composed::of(&format!(
                     "{name} {}{}   ({total} in the corpus)",
@@ -2594,12 +3153,57 @@ impl App {
                 None => Composed::of(&format!("{name}   ({})", self.unasked())),
                 Some(_) => {
                     let rows = onto.total;
-                    let c = self.cursors[Focus::Queue.number() - 1];
+                    let c = self.cursors[Focus::Queue.slot()];
                     let shown = self.page(Focus::Queue).min(rows.saturating_sub(c.top));
                     Composed::of(&format!(
                         "{name} {}{}   (waiting for a person)",
                         window(c.top, shown, rows),
                         self.filter_note()
+                    ))
+                }
+            },
+            // The entities' own shape (TASK-643611645dea): how many rows are
+            // shown and how many tasks the corpus holds, and no count over a
+            // graph nobody read.
+            Focus::Graph if self.snapshot.is_none() => Composed::of(&format!(
+                "{name}   ({})",
+                match self.unreadable {
+                    true => "could not be read",
+                    false => "not read",
+                }
+            )),
+            // What the read stands at, and never what the width suggests
+            // (TASK-afcd4f0f56ad): a wide frame with no graph may hold a
+            // refused read, and a refusal is worded the same on every width.
+            Focus::Graph => match &self.dag {
+                None => Composed::of(&format!(
+                    "{name}   ({})",
+                    match self.graphing {
+                        Graphing::Unasked => "not asked",
+                        Graphing::Reading => "reading",
+                        Graphing::Refused => "could not be read",
+                    }
+                )),
+                Some(dag) => {
+                    // Task rows and never lines (TASK-de02dbcf9965): the
+                    // ones drawn on the page, out of the ones drawn at all.
+                    // A junction, a blank or the heading is not counted.
+                    let c = self.cursors[Focus::Graph.slot()];
+                    let on_page: Vec<usize> = (c.top..c.top + self.page(Focus::Graph))
+                        .filter_map(|line| self.drawn.task_on(line))
+                        .collect();
+                    let first = on_page.first().copied().unwrap_or(0);
+                    // The needle and never the kind: the graph is narrowed by
+                    // the search and folded by its own cell, and a kind it
+                    // does not filter by would be a note that lies.
+                    let narrowed = match &self.search {
+                        Some(s) => format!("   [matching '{s}']"),
+                        None => String::new(),
+                    };
+                    Composed::of(&format!(
+                        "{name} {}{narrowed}   ({} tasks in the corpus)",
+                        window(first, on_page.len(), self.drawn.rows.len()),
+                        dag.tasks.len()
                     ))
                 }
             },
@@ -2699,7 +3303,7 @@ impl App {
         if claims.is_empty() {
             return vec![Composed::of("  no claim matches this search").fitted(width)];
         }
-        let c = self.cursors[Focus::Claims.number() - 1];
+        let c = self.cursors[Focus::Claims.slot()];
         let page = self.page(Focus::Claims);
         let now = model::now();
         claims
@@ -2750,7 +3354,7 @@ impl App {
         if rows.is_empty() {
             return vec![Composed::of("  no entity matches this filter").fitted(width)];
         }
-        let c = self.cursors[Focus::Entities.number() - 1];
+        let c = self.cursors[Focus::Entities.slot()];
         // The marker on a row somebody holds, and it is drawn only once the
         // claims have been asked for (TASK-fff0a98511b2): an unmarked row means
         // "not asked" here as much as it means "not held", and the panel one
@@ -2782,6 +3386,170 @@ impl App {
                 )
             })
             .collect()
+    }
+
+    /// The graph's lines the panel has room for: one row per task drawn, and
+    /// between them the junction rows, the blanks and the heading the
+    /// blocks put there (TASK-643611645dea, TASK-de02dbcf9965).
+    ///
+    /// **Through [`compose`] and no second composer**: the marker, the lane
+    /// prefix as a field, the identifier, the readiness word
+    /// painted by the shared table, and the title with `[held]` where the
+    /// claims say so. The lane field is a column the row may drop, and the
+    /// identifier is the one it may not, so a window that cannot afford both
+    /// gives up the lanes and keeps the name a verb can be typed against. A
+    /// junction row is composed the same way with nothing in its fields, so
+    /// it gives up its lanes exactly where a task row does and never leaves
+    /// a connector standing beside nothing.
+    ///
+    /// The lane field is painted in the status' own role, which repeats what
+    /// the word beside it already says and carries nothing alone
+    /// (ADR-ac6be1ebe9aa): the frame drawn with the paint and the frame drawn
+    /// without it are the same characters, and what the node *means* is its
+    /// character. The heading is a row of text and never a border around
+    /// nothing, and it is English, as everything the reader draws is
+    /// (ADR-d3a8dcf3a56f).
+    fn graph_lines(&self, width: usize) -> Vec<Composed> {
+        if self.snapshot.is_none() {
+            return vec![Composed::of(&format!("  {}", self.unread())).fitted(width)];
+        }
+        if self.dag.is_none() {
+            // The title above already says which; the body adds the way in.
+            // A refusal's reason is in the note, on every width.
+            let reload = bindings::spelling_of(&Command::Reload);
+            return vec![Composed::of(&match self.graphing {
+                Graphing::Unasked => format!("  not asked: {reload} reads it"),
+                Graphing::Reading => "  reading".to_string(),
+                Graphing::Refused => format!("  could not be read: {reload} reads it again"),
+            })
+            .fitted(width)];
+        }
+        if self.drawn.rows.is_empty() {
+            let said = match (&self.search, self.fold) {
+                (Some(_), _) => "  no task on the graph matches this search",
+                (None, Fold::Open) => "  nothing is open, so nothing waits on anything",
+                (None, Fold::All) => "  the corpus holds no task",
+            };
+            return vec![Composed::of(said).fitted(width)];
+        }
+        let c = self.cursors[Focus::Graph.slot()];
+        let page = self.page(Focus::Graph);
+        let held = |id: &str| self.held.as_ref().is_some_and(|h| h.claim_on(id).is_some());
+        self.drawn
+            .lines
+            .iter()
+            .skip(c.top)
+            .take(page)
+            .map(|line| match line {
+                Screen::Blank => Composed::of(""),
+                Screen::Heading => {
+                    Composed::of(&format!("{}{UNLINKED}", text::PLAIN)).fitted(width)
+                }
+                Screen::Junction(prefix) => compose(
+                    text::PLAIN,
+                    vec![
+                        Field::word(prefix, self.drawn.width, None),
+                        Field::id(""),
+                        Field::word("", STATUS, None),
+                        Field::rest(""),
+                    ],
+                    width,
+                ),
+                Screen::Task(at) => {
+                    let lane = &self.drawn.rows[*at];
+                    let here = if *at == c.at && self.focus == Focus::Graph {
+                        text::CURSOR
+                    } else {
+                        text::PLAIN
+                    };
+                    let role = lane.role;
+                    let prefix = self.pulsed(lane);
+                    compose(
+                        here,
+                        vec![
+                            Field::word(&prefix, self.drawn.width, role),
+                            Field::id(&lane.id),
+                            Field::word(&lane.word, STATUS, role),
+                            Field::rest(&format!(
+                                "{}{}{}",
+                                lane.title,
+                                outside(lane.outside),
+                                if held(&lane.id) { "  [held]" } else { "" }
+                            )),
+                        ],
+                        width,
+                    )
+                }
+            })
+            .collect()
+    }
+
+    /// A graph row's lane field as this frame draws it: the layout's, with
+    /// the cell of a task in progress at the pulse's phase
+    /// (TASK-54bb5cddc671).
+    ///
+    /// The layout is computed once per read, fold or search and holds every
+    /// cell at the first phase; the phase is the frame's to apply, so a tick
+    /// lays nothing out again and changes one character per row in progress.
+    fn pulsed(&self, lane: &Lane) -> String {
+        let Some(column) = lane.pulse else {
+            return lane.prefix.clone();
+        };
+        let glyph = self
+            .glyphs
+            .alphabet()
+            .glyph(Mark::InProgress.cell(self.phase));
+        lane.prefix
+            .chars()
+            .enumerate()
+            .map(|(at, c)| if at == column { glyph } else { c })
+            .collect()
+    }
+
+    /// Whether a pulse is due: whether a task row whose status is
+    /// `in_progress` stands inside the graph panel's page on this frame
+    /// (TASK-54bb5cddc671).
+    ///
+    /// The graph panel is on the frame where it is the region -- under
+    /// [`DASHBOARD`] with the focus on it -- or where it is the right panel,
+    /// which on a wide frame is whenever no document is open in it
+    /// ([`App::beside`]). The page is the one [`App::graph_lines`] draws, so
+    /// a row scrolled out of it pulses nobody's screen. This is what the
+    /// session tells the ticker after every frame, and what [`App::tick`]
+    /// asks again when a tick arrives.
+    pub fn pulse_due(&self) -> bool {
+        let shown = match self.wide() {
+            true => self.beside() == Focus::Graph,
+            false => self.focus == Focus::Graph,
+        };
+        if !shown || self.snapshot.is_none() || self.dag.is_none() {
+            return false;
+        }
+        let top = self.cursors[Focus::Graph.slot()].top;
+        self.drawn
+            .lines
+            .iter()
+            .skip(top)
+            .take(self.page(Focus::Graph))
+            .any(|line| match line {
+                Screen::Task(at) => self.drawn.rows[*at].pulse.is_some(),
+                _ => false,
+            })
+    }
+
+    /// One tick of the pulse (TASK-54bb5cddc671): where a pulse is due the
+    /// phase moves by one and the answer is that a frame is owed; where none
+    /// is, nothing moves and none is.
+    ///
+    /// Nothing is read, nothing is spawned and nothing but the phase
+    /// changes, so the frame drawn after it differs from the one before in
+    /// the cells of the tasks in progress and nowhere else.
+    pub fn tick(&mut self) -> bool {
+        if !self.pulse_due() {
+            return false;
+        }
+        self.phase = self.phase.wrapping_add(1);
+        true
     }
 
     /// The proposals, over the one line that says which regime the corpus is
@@ -2820,7 +3588,7 @@ impl App {
             };
             vec![Composed::of(said).fitted(width)]
         } else {
-            let c = self.cursors[Focus::Queue.number() - 1];
+            let c = self.cursors[Focus::Queue.slot()];
             let page = self.page(Focus::Queue);
             rows.iter()
                 .enumerate()
@@ -2923,7 +3691,7 @@ impl App {
             // The list whole, and the same rows: `s` is the block's constraints
             // with the document taken away, not a second rendering of them.
             Pane::Constraints => {
-                let at = self.cursors[Focus::Body.number() - 1].at;
+                let at = self.cursors[Focus::Body.slot()].at;
                 detail
                     .constraints
                     .iter()
@@ -2983,7 +3751,7 @@ impl App {
             ));
             return out;
         };
-        let at = self.cursors[Focus::Body.number() - 1].at;
+        let at = self.cursors[Focus::Body.slot()].at;
         for setting in &settings.keys {
             let here = self.marker(out.len() == at);
             out.push((
@@ -3126,7 +3894,7 @@ impl App {
                 None,
             ));
         }
-        let at = self.cursors[Focus::Body.number() - 1].at;
+        let at = self.cursors[Focus::Body.slot()].at;
         for c in &detail.constraints {
             let here = self.marker(out.len() == at);
             out.push((constraint_row(c, here, width), Some(c.id.clone())));
@@ -3157,7 +3925,7 @@ impl App {
     /// What the row under the body panel's cursor opens, where it opens
     /// anything.
     fn pane_target(&self) -> Option<String> {
-        let at = self.cursors[Focus::Body.number() - 1].at;
+        let at = self.cursors[Focus::Body.slot()].at;
         self.pane_content(self.body_width())
             .into_iter()
             .nth(at)
@@ -3194,10 +3962,10 @@ impl App {
     fn clamp_body(&mut self) {
         let total = self.pane_lines().len();
         let page = self.page(Focus::Body).max(1);
-        let at = self.cursors[Focus::Body.number() - 1]
+        let at = self.cursors[Focus::Body.slot()]
             .at
             .min(total.saturating_sub(1));
-        self.cursors[Focus::Body.number() - 1].at = at;
+        self.cursors[Focus::Body.slot()].at = at;
         if at < self.offset {
             self.offset = at;
         }
@@ -3255,6 +4023,14 @@ impl App {
     /// window and never about the corpus, so what it costs is one frame drawn
     /// again at the new size (ADR-0bb7ea8991bc -- a screen being dragged about
     /// renews nothing).
+    ///
+    /// **Except that it may owe the graph one read** (TASK-afcd4f0f56ad). A
+    /// frame widened onto the dashboard draws the GRAPH panel, and with no
+    /// graph held and none asked it would be a panel with nothing in it and
+    /// nothing coming; so the graph is owed, as the wide opening owes it, and
+    /// [`App::read_asked`] runs that read. Owed only where nobody asked: a
+    /// refused read stays refused until `u`, so dragging a window about
+    /// spawns at most the one.
     pub fn resize(&mut self, columns: u16, rows: u16) {
         let size = (columns as usize, rows as usize);
         // The loop reads the window before every paint, so this is asked far
@@ -3264,6 +4040,15 @@ impl App {
             return;
         }
         self.size = size;
+        if self.dag.is_none() {
+            self.graphing = match (self.wide(), self.graphing) {
+                (true, Graphing::Unasked) => Graphing::Reading,
+                // Narrowed again before the read ran: nothing under the
+                // width reads a graph off the frame, so nothing is owed.
+                (false, Graphing::Reading) => Graphing::Unasked,
+                (_, kept) => kept,
+            };
+        }
         // A shorter window is a smaller page, so a cursor can fall off the
         // bottom of a listing that was fine a moment ago, and a narrower one
         // rewraps a body under an offset that was inside it.
@@ -3552,7 +4337,7 @@ impl App {
     /// for itself, applied to the two targets that are not in that band.
     fn header_tail(&self, width: usize) -> String {
         let help = help_target();
-        let both = format!("{}{help}", kind_target(self.kind.as_deref()));
+        let both = format!("{}{help}", self.filter_cell());
         for tail in [both, help] {
             if width > tail.chars().count() {
                 return tail;
@@ -3580,6 +4365,20 @@ impl App {
         format!("{}{tail}", pad(said, width - tail.chars().count()))
     }
 
+    /// The cell beside the key list's target: the kind in force, or on GRAPH
+    /// the fold in force (TASK-67583993ef0d).
+    ///
+    /// One cell and one key, and what the cell says is what the key moves on
+    /// the screen a person is on, so a finger reaches the fold exactly where
+    /// it already reaches the kind. The two are padded to one width, so the
+    /// cell does not move when the screen changes under it.
+    fn filter_cell(&self) -> String {
+        match self.focus {
+            Focus::Graph => fold_target(self.fold),
+            _ => kind_target(self.kind.as_deref()),
+        }
+    }
+
     /// Where the key list's target is, which is [`App::help_line`] read
     /// backwards.
     ///
@@ -3604,7 +4403,7 @@ impl App {
     /// filter nobody was shown.
     fn kind_rect(&self, area: Rect) -> Rect {
         let header = self.arrange(area).header;
-        let wide = kind_target(self.kind.as_deref()).chars().count() as u16;
+        let wide = self.filter_cell().chars().count() as u16;
         let drawn = self.header_tail(header.width as usize).chars().count() as u16;
         let help = help_target().chars().count() as u16;
         if header.height == 0 || wide == 0 || drawn < wide + help {
@@ -4070,6 +4869,17 @@ impl Glyphs {
             false => "#",
         }
     }
+
+    /// The alphabet the graph's lanes and nodes are drawn in
+    /// (TASK-643611645dea), off the same probe as the border set: box-drawing
+    /// where the terminal draws glyphs, and the ASCII the layout module
+    /// declares where it has said it cannot.
+    pub const fn alphabet(self) -> Alphabet {
+        match self.rich {
+            true => Alphabet::Boxes,
+            false => Alphabet::Ascii,
+        }
+    }
 }
 
 /// The lighter ASCII border, on a terminal that declared itself dumb.
@@ -4145,9 +4955,9 @@ struct Panels {
     /// The area under the header the panels share, whatever is being shown in
     /// it.
     region: Rect,
-    /// Where each panel is drawn, indexed by [`Focus::number`] less one
+    /// Where each panel is drawn, indexed by [`Focus::slot`]
     /// (TASK-cae5c8ec9a69). See [`App::divide`].
-    rects: [Rect; 4],
+    rects: [Rect; 5],
     note: Rect,
     /// The key line: the last row of the frame, on every frame
     /// (TASK-933fdb42c7d9, ADR-ac6be1ebe9aa).
@@ -4163,8 +4973,10 @@ struct Panels {
 /// The corpus line, the identity line, and the rule under them.
 const HEADER: u16 = 3;
 
-/// The anchor the detail panel shows while nothing is open in it
-/// (ADR-ac6be1ebe9aa): ank's logo, the final frame `install.sh` and
+/// The anchor the document's screen shows while nothing is open in it
+/// (ADR-ac6be1ebe9aa) -- which is where Right lands before any row has been
+/// opened, since the right panel at rest is the graph's (TASK-a9cd362ee5e2):
+/// ank's logo, the final frame `install.sh` and
 /// `install.ps1` draw from `assets/ank.svg`, row for row. `#` is a cell of the
 /// logo and is drawn in the set's block (`Glyphs::thumb`), so the terminal that
 /// declares it can render no box glyph draws the installer's own fallback.
@@ -4182,6 +4994,143 @@ const ANCHOR: &[&str] = &[
     "                     ",
     "          ank        ",
 ];
+
+/// Where the read of the graph stands while no graph is held
+/// (TASK-afcd4f0f56ad), which is what the GRAPH panel says in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Graphing {
+    /// Nobody has asked for it: a narrow frame that never went to GRAPH, or
+    /// one that dropped the graph on a reload with the panel off the frame.
+    Unasked,
+    /// A read is owed and is the next thing the session runs: the wide
+    /// frame's opening, or a resize onto the wide frame.
+    Reading,
+    /// The CLI refused the last read, and the note says why. `u` reads it
+    /// again.
+    Refused,
+}
+
+/// The graph, laid out: one row per task drawn, the lines of the panel they
+/// stand among, and the columns every prefix takes (TASK-643611645dea,
+/// TASK-de02dbcf9965).
+///
+/// What [`App::relayout`] computes and the frame reads. Empty until the graph
+/// has been read, and empty again when nothing in the corpus is open.
+///
+/// **Two numberings, and where each is read.** The cursor counts `rows`:
+/// `j`, `k`, a page, the title's count and the identifier a verb is typed
+/// against are all about task rows. The window counts `lines`: what the
+/// panel draws from its top, what the wheel moves and what the bar
+/// measures. [`Drawn::line_of`] and [`Drawn::task_on`] translate, and they
+/// are the only place the two meet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Drawn {
+    /// The task rows, in the order the cursor walks them.
+    rows: Vec<Lane>,
+    /// Every line of the panel, top first.
+    lines: Vec<Screen>,
+    /// `graph::JunctionLayout::width`, the widest of the blocks: the column
+    /// the lane field is drawn in.
+    width: usize,
+}
+
+impl Drawn {
+    /// The line the task row `at` is drawn on.
+    fn line_of(&self, at: usize) -> usize {
+        self.lines
+            .iter()
+            .position(|l| *l == Screen::Task(at))
+            .unwrap_or(0)
+    }
+
+    /// The task row drawn on `line`, and `None` where the line is nobody's.
+    fn task_on(&self, line: usize) -> Option<usize> {
+        match self.lines.get(line) {
+            Some(Screen::Task(at)) => Some(*at),
+            _ => None,
+        }
+    }
+}
+
+/// One line of the graph panel (TASK-de02dbcf9965).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Screen {
+    /// A task row, by its index in [`Drawn::rows`].
+    Task(usize),
+    /// The lanes waiting for the task on the next line merging into one: a
+    /// prefix, and nobody's row.
+    Junction(String),
+    /// The one blank line between two blocks.
+    Blank,
+    /// The heading over the last block, the tasks linked to nothing.
+    Heading,
+}
+
+/// What the heading over the tasks linked to nothing reads.
+const UNLINKED: &str = "unlinked";
+
+/// One task row of the graph: the task, and what the layout drew left of it.
+///
+/// The three fields of the task are the document's own, as [`DagTask`]
+/// carries them, and the prefix is the layout's, padded to the width of the
+/// widest block so the identifiers stand in one column. The mark is inside
+/// the prefix -- it is the node's own cell -- so there is nothing here the
+/// frame has to put together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Lane {
+    id: String,
+    /// What the row says in the status' column (TASK-9ea4dc65755b): the
+    /// readiness word, and the role the shared table gives it.
+    word: String,
+    role: Option<Role>,
+    title: String,
+    prefix: String,
+    /// The column of [`Lane::prefix`] holding the cell of a task in
+    /// progress, which is drawn at the pulse's phase rather than as laid
+    /// out (TASK-54bb5cddc671); `None` on every other row.
+    pulse: Option<usize>,
+    /// How many tasks it is blocked by are not rows of this layout -- folded,
+    /// hidden by the search, or named and never listed -- so the edges to
+    /// them are counted here rather than drawn (TASK-67583993ef0d).
+    outside: usize,
+}
+
+/// What a graph row says after its title about the blockers it names that
+/// are not rows (TASK-67583993ef0d), and nothing where there are none.
+///
+/// `ank graph`'s own words for a blocker outside its perimeter, so the CLI
+/// and the reader say one thing about one fact: a task drawn without the
+/// tasks it waits on still says that it waits on something.
+fn outside(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        n => format!("  (+{n} blocker(s) outside)"),
+    }
+}
+
+/// The readiness word of a graph row and the role it is painted in
+/// (TASK-9ea4dc65755b): the status' own word and role for a task under way,
+/// done or closed; `ready` in the role of `open`; `waits N` as Attention,
+/// `N` being how many of the task's blockers are not finished.
+fn readiness(status: &str, waits: usize) -> (String, Option<Role>) {
+    match status {
+        "in_progress" => ("in progress".to_string(), role_of_status(status)),
+        "done" | "closed" => (status.to_string(), role_of_status(status)),
+        _ if waits == 0 => ("ready".to_string(), role_of_status("open")),
+        _ => (format!("waits {waits}"), Some(Role::Attention)),
+    }
+}
+
+/// Whether a status is one the graph counts as finished: `done` or `closed`,
+/// which are the two the criterion names (TASK-643611645dea).
+///
+/// Spelled here rather than read off the shared table's roles, because the
+/// question is not what the word means but which two words the graph's own
+/// rule names -- and a role shared with a third status would widen the rule
+/// the day that status arrived.
+fn finished(status: &str) -> bool {
+    matches!(status, "done" | "closed")
+}
 
 /// What the anchor says under it: the one key that puts something in the
 /// panel it is standing in for.
@@ -4290,12 +5239,33 @@ pub fn kind_target(kind: Option<&str>) -> String {
     }
 }
 
+/// The same cell on GRAPH, where the key behind it walks the fold
+/// (TASK-67583993ef0d): the fold in force, in the word [`Fold::word`] gives
+/// it, which is the word the key list uses for it too.
+///
+/// Padded to the width [`kind_target`] is padded to, so the cell is one
+/// rectangle on every screen and a second press lands where the first did.
+/// Public for [`kind_target`]'s reason: the suite driving the binary finds
+/// this cell on the grid rather than spelling it.
+pub fn fold_target(fold: Fold) -> String {
+    match cycle_binding() {
+        Some(binding) => format!(
+            "[{} {}]",
+            named(binding.key),
+            pad(fold.word(), widest_kind())
+        ),
+        None => String::new(),
+    }
+}
+
 /// The columns the kind's word is drawn in: the longest of every word that can
-/// stand there, which is the kinds a row may have and [`EVERY_KIND`].
+/// stand there, which is the kinds a row may have, [`EVERY_KIND`], and the
+/// folds the same cell names on GRAPH.
 fn widest_kind() -> usize {
     row_kinds()
         .into_iter()
         .chain(std::iter::once(EVERY_KIND))
+        .chain(Fold::EVERY.iter().map(|fold| fold.word()))
         .map(|kind| kind.chars().count())
         .max()
         .unwrap_or(0)
@@ -5087,7 +6057,7 @@ fn walked(rows: usize) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::model::Claim;
     use crate::paint;
@@ -5144,6 +6114,7 @@ mod tests {
             kind: kind.to_string(),
             status: status.to_string(),
             title: title.to_string(),
+            created: String::new(),
         }
     }
 
@@ -5374,11 +6345,11 @@ mod tests {
         for focus in Focus::ALL {
             a.focus = focus;
             let f = a.frame();
-            let named = format!("{} {}", focus.number(), focus.name());
+            let named = heading(focus);
             assert!(f.contains(&named), "the region does not name itself:\n{f}");
             for other in Focus::ALL.into_iter().filter(|o| *o != focus) {
                 assert!(
-                    !f.contains(&format!("{} {}", other.number(), other.name())),
+                    !f.contains(&heading(other)),
                     "{other:?} is on the frame as well as {focus:?}:\n{f}"
                 );
             }
@@ -6169,15 +7140,15 @@ mod tests {
         let mut a = app();
         let ank = nowhere();
         assert_eq!(a.focus(), Focus::Entities, "a session opens on the list");
-        for expected in [Focus::Body, Focus::Queue, Focus::Claims, Focus::Entities] {
+        for expected in [Focus::Graph, Focus::Queue, Focus::Claims, Focus::Entities] {
             tap(&mut a, &ank, KeyCode::Tab);
             assert_eq!(a.focus(), expected);
         }
         // And a digit reaches one directly, which is what the number on the
         // region's title is for -- the key each screen already had
         // (TASK-252bf02de218).
-        for focus in Focus::ALL {
-            let digit = char::from_digit(focus.number() as u32, 10).expect("a digit");
+        for focus in Focus::RING {
+            let digit = digit_of(focus);
             tap(&mut a, &ank, KeyCode::Char(digit));
             assert_eq!(a.focus(), focus, "'{digit}' did not reach {focus:?}");
         }
@@ -6185,6 +7156,361 @@ mod tests {
         a.focus = Focus::Claims;
         tap(&mut a, &ank, KeyCode::BackTab);
         assert_eq!(a.focus(), Focus::Queue, "the ring turns both ways");
+    }
+
+    /// What a screen's title says: its digit and its name, or its name alone
+    /// on the document, which carries no digit (TASK-a9cd362ee5e2).
+    fn heading(focus: Focus) -> String {
+        match focus.number() {
+            Some(n) => format!("{n} {}", focus.name()),
+            None => focus.name().to_string(),
+        }
+    }
+
+    /// The key that reaches a screen of the ring, read off the screen.
+    fn digit_of(focus: Focus) -> char {
+        let n = focus
+            .number()
+            .expect("a screen of the ring carries a digit");
+        char::from_digit(n as u32, 10).expect("a digit")
+    }
+
+    // -----------------------------------------------------------------------
+    // Screen 3 is GRAPH (TASK-a9cd362ee5e2)
+    // -----------------------------------------------------------------------
+
+    /// **`3` is the graph, and no digit reaches the document**
+    /// (TASK-a9cd362ee5e2).
+    ///
+    /// Asked of the lookup and of the keyboard both: a lookup that had moved
+    /// and a key table that had not would be the two renderings of one fact
+    /// this crate's table exists to prevent.
+    #[test]
+    fn three_is_the_graph_and_no_digit_reaches_the_document() {
+        assert_eq!(Focus::of_digit('3'), Some(Focus::Graph));
+        assert_eq!(Focus::Graph.number(), Some(3));
+        assert_eq!(Focus::Graph.name(), "GRAPH");
+        assert_eq!(Focus::Body.number(), None, "the document carries a digit");
+        let ank = nowhere();
+        for c in '0'..='9' {
+            assert_ne!(
+                Focus::of_digit(c),
+                Some(Focus::Body),
+                "'{c}' names the document"
+            );
+            // From every screen a digit could be pressed on to arrive
+            // somewhere else: a digit pressed on the document that leaves it
+            // there has reached nothing.
+            for from in Focus::RING {
+                let mut a = app();
+                a.focus = from;
+                tap(&mut a, &ank, KeyCode::Char(c));
+                assert_ne!(
+                    a.focus(),
+                    Focus::Body,
+                    "'{c}' pressed on {from:?} reached the document"
+                );
+            }
+        }
+        let mut a = app();
+        tap(&mut a, &ank, KeyCode::Char('3'));
+        assert_eq!(a.focus(), Focus::Graph, "'3' did not reach the graph");
+    }
+
+    /// **The ring is the claims, the entities, the graph and the queue, both
+    /// ways round, and it never lands on the document** (TASK-a9cd362ee5e2).
+    ///
+    /// From the document too: it stands where the graph stands, so a step off
+    /// it is a step off the graph, and nothing on the ring leads back in.
+    #[test]
+    fn the_ring_walks_claims_entities_graph_queue_and_never_lands_on_the_document() {
+        let ank = nowhere();
+        let mut a = app();
+        a.focus = Focus::Claims;
+        for expected in [Focus::Entities, Focus::Graph, Focus::Queue, Focus::Claims] {
+            tap(&mut a, &ank, KeyCode::Tab);
+            assert_eq!(a.focus(), expected, "Tab");
+        }
+        for expected in [Focus::Queue, Focus::Graph, Focus::Entities, Focus::Claims] {
+            tap(&mut a, &ank, KeyCode::BackTab);
+            assert_eq!(a.focus(), expected, "BackTab");
+        }
+        for (key, lands) in [
+            (KeyCode::Tab, Focus::Queue),
+            (KeyCode::BackTab, Focus::Entities),
+        ] {
+            let mut a = app();
+            a.detail = Some(detail("TASK-49746735127f", "body\n"));
+            a.focus = Focus::Body;
+            tap(&mut a, &ank, key);
+            assert_eq!(a.focus(), lands, "{key:?} off the document");
+        }
+        for from in Focus::ALL {
+            for by in -9..=9 {
+                assert_ne!(
+                    from.stepped(by),
+                    Focus::Body,
+                    "{by} steps from {from:?} landed on the document"
+                );
+            }
+        }
+    }
+
+    /// **Under the dashboard's width `3` puts the graph in the region, and a
+    /// graph the CLI refused to answer says so rather than drawing a border
+    /// around nothing** (TASK-a9cd362ee5e2, TASK-643611645dea).
+    ///
+    /// At the phone's width and at the widest one region is drawn at, because
+    /// a sentence that fitted one and was cut at the other would be a sentence
+    /// a person reads half of. The CLI is addressed where there is none, so
+    /// the arrival's read is refused, and what the panel holds is that.
+    #[test]
+    fn three_puts_the_graph_in_the_region_and_a_refused_read_says_so() {
+        let ank = nowhere();
+        for width in [PHONE.0 as u16, DASHBOARD - 1] {
+            let mut a = phone();
+            a.resize(width, 30);
+            tap(&mut a, &ank, KeyCode::Char('3'));
+            let f = a.frame();
+            assert!(
+                f.contains("3 GRAPH   (could not be read)"),
+                "'3' drew no graph, or one that counts a graph nobody read, at {width}:\n{f}"
+            );
+            for gone in ["1 CLAIMS", "2 ENTITIES", "4 QUEUE", "BODY"] {
+                assert!(!f.contains(gone), "{gone} is drawn beside it:\n{f}");
+            }
+            // Not a border around nothing: the row under the title says the
+            // read was refused and which key asks again.
+            let rows: Vec<&str> = f.split('\n').collect();
+            let inside = inside(a.region(a.area()));
+            assert!(
+                rows[inside.y as usize].contains("could not be read: u reads it again"),
+                "the region's first row is not the sentence at {width}:\n{f}"
+            );
+        }
+    }
+
+    /// **The document's title is `BODY` with no digit in front of it, and the
+    /// two panes keep the headings they had** (TASK-a9cd362ee5e2).
+    ///
+    /// Asked of the character the title starts on: on one region it is drawn
+    /// straight after the corner, so what follows the corner is the heading
+    /// and nothing before it can be a digit.
+    #[test]
+    fn the_document_is_titled_without_a_digit() {
+        let corner = SCREEN.border(true).top_left;
+        for (pane, heading) in [
+            (Pane::Body, "BODY   "),
+            (Pane::Constraints, "CONSTRAINTS   "),
+            (Pane::Config, "CONFIG   "),
+        ] {
+            let mut a = app();
+            a.detail = Some(detail("TASK-49746735127f", "body\n"));
+            a.focus = Focus::Body;
+            a.pane = pane;
+            let f = a.frame();
+            assert!(
+                f.contains(&format!("{corner}{heading}")),
+                "the {pane:?} pane is not titled {heading:?} at the corner:\n{f}"
+            );
+            for n in 0..=9 {
+                assert!(
+                    !f.contains(&format!("{n} {}", heading.trim_end())),
+                    "a digit stands in front of {heading:?}:\n{f}"
+                );
+            }
+        }
+    }
+
+    /// **Enter or Right on a row of any listing reaches the document, and
+    /// `Back` returns to the listing it came from with the same row selected**
+    /// (TASK-a9cd362ee5e2, TASK-252bf02de218).
+    ///
+    /// Enter is [`App::opened`] here, which is the half of opening that does
+    /// not need a CLI to answer: `show` is a spawn, and `nowhere()` refuses
+    /// it. The road from the key through `ank show` is `tests/graph.rs`, on a
+    /// pseudo-terminal.
+    #[test]
+    fn the_document_is_reached_from_a_row_and_back_returns_to_that_listing() {
+        let ank = nowhere();
+        for listing in [Focus::Claims, Focus::Entities, Focus::Queue] {
+            let mut a = app();
+            a.queue = Some(queued());
+            a.focus = listing;
+            tap(&mut a, &ank, KeyCode::Char('j'));
+            let row = a.cursors[listing.slot()].at;
+            let id = a.selected_id(listing).expect("a row under the cursor");
+            a.opened(detail(&id, "body\n"));
+            assert_eq!(a.focus(), Focus::Body, "Enter on {listing:?}");
+            tap(&mut a, &ank, KeyCode::Char('b'));
+            assert_eq!(a.focus(), listing, "Back off a row of {listing:?}");
+            assert_eq!(
+                a.cursors[listing.slot()].at,
+                row,
+                "{listing:?} lost its row"
+            );
+
+            // And Right reaches the document screen from the same row, and
+            // Back gives the listing back the same way -- on a session that
+            // has opened nothing yet, so that what Back returns to is what
+            // Right left and not what an earlier Enter remembered.
+            let mut a = app();
+            a.queue = Some(queued());
+            a.focus = listing;
+            tap(&mut a, &ank, KeyCode::Char('j'));
+            tap(&mut a, &ank, KeyCode::Right);
+            assert_eq!(a.focus(), Focus::Body, "Right on {listing:?}");
+            tap(&mut a, &ank, KeyCode::Char('b'));
+            assert_eq!(a.focus(), listing, "Back after Right on {listing:?}");
+            assert_eq!(
+                a.cursors[listing.slot()].at,
+                row,
+                "{listing:?} lost its row"
+            );
+        }
+    }
+
+    /// The dashboard's window, the one the criterion names.
+    fn dashboard() -> App {
+        let mut a = App::new((160, 45), None)
+            .inked(paint::PLAIN)
+            .drawn_with(SCREEN);
+        has_read(&mut a);
+        a.queue = Some(queued());
+        a
+    }
+
+    /// How many rows of a frame carry the cursor against a panel's left
+    /// border, and the columns they carry it at.
+    fn cursors_on(f: &str) -> Vec<usize> {
+        let borders = [SCREEN.border(true), SCREEN.border(false)].map(|b| b.vertical_left);
+        f.lines()
+            .flat_map(|l| {
+                let chars: Vec<char> = l.chars().collect();
+                (1..chars.len())
+                    .filter(|&i| {
+                        chars[i] == '>' && borders.iter().any(|b| b.starts_with(chars[i - 1]))
+                    })
+                    .collect::<Vec<usize>>()
+            })
+            .collect()
+    }
+
+    /// The column a title starts at on a frame, on whichever row carries it.
+    fn column_of(f: &str, title: &str) -> Option<usize> {
+        f.lines()
+            .find_map(|l| l.find(title).map(|at| l[..at].chars().count()))
+    }
+
+    /// **At the dashboard's width the right panel is `3 GRAPH` at rest, `BODY`
+    /// once a row has been opened, and `GRAPH` again after `Back`; the three
+    /// listings stay in the left column throughout, and the cursor is never
+    /// in two panels** (TASK-a9cd362ee5e2).
+    #[test]
+    fn the_right_panel_is_the_graph_at_rest_and_the_document_once_a_row_is_opened() {
+        let ank = nowhere();
+        let mut a = dashboard();
+        let left = a.arrange(a.area()).rects[Focus::Claims.slot()].width as usize;
+        let in_left_column = |f: &str| {
+            for title in ["1 CLAIMS", "2 ENTITIES", "4 QUEUE"] {
+                let at = column_of(f, title).unwrap_or_else(|| panic!("no {title}:\n{f}"));
+                assert!(at < left, "{title} left the left column:\n{f}");
+            }
+        };
+
+        let rest = a.frame();
+        let graph = column_of(&rest, "3 GRAPH").unwrap_or_else(|| panic!("no graph:\n{rest}"));
+        assert!(graph >= left, "the graph is not the right panel:\n{rest}");
+        // No graph has been handed to this screen, and a wide frame reads it
+        // on the opening: the panel says it is being read.
+        assert!(
+            rest.contains("3 GRAPH   (reading)"),
+            "the graph panel says nothing:\n{rest}"
+        );
+        assert!(
+            !rest.contains("BODY"),
+            "a document is drawn at rest:\n{rest}"
+        );
+        in_left_column(&rest);
+        assert_eq!(cursors_on(&rest).len(), 1, "one cursor at rest:\n{rest}");
+
+        tap(&mut a, &ank, KeyCode::Char('j'));
+        let row = a.cursors[Focus::Entities.slot()].at;
+        let id = a.selected_id(Focus::Entities).expect("a row");
+        a.opened(detail(&id, "body\n"));
+        let open = a.frame();
+        let body = column_of(&open, "BODY   ").unwrap_or_else(|| panic!("no body:\n{open}"));
+        assert!(
+            body >= left,
+            "the document is not in the right panel:\n{open}"
+        );
+        assert!(
+            !open.contains("3 GRAPH"),
+            "the graph survived the opening:\n{open}"
+        );
+        assert!(
+            !open.contains("3 BODY"),
+            "the document carries a digit:\n{open}"
+        );
+        in_left_column(&open);
+        let marked = cursors_on(&open);
+        assert!(marked.len() <= 1, "the cursor is in two panels:\n{open}");
+        assert!(
+            marked.iter().all(|at| *at >= left),
+            "a listing kept its cursor beside the open document:\n{open}"
+        );
+
+        tap(&mut a, &ank, KeyCode::Char('b'));
+        let back = a.frame();
+        assert_eq!(a.focus(), Focus::Entities);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, row, "the row moved");
+        let graph = column_of(&back, "3 GRAPH").unwrap_or_else(|| panic!("no graph:\n{back}"));
+        assert!(graph >= left, "Back did not give the graph back:\n{back}");
+        assert!(
+            !back.contains("BODY   "),
+            "the document is still drawn:\n{back}"
+        );
+        in_left_column(&back);
+        assert_eq!(cursors_on(&back).len(), 1, "one cursor after Back:\n{back}");
+
+        // And on every screen there is, never two panels with a cursor.
+        for focus in Focus::ALL {
+            let mut a = dashboard();
+            a.detail = Some(detail("TASK-49746735127f", "body\n"));
+            a.focus = focus;
+            let f = a.frame();
+            in_left_column(&f);
+            assert!(cursors_on(&f).len() <= 1, "two cursors on {focus:?}:\n{f}");
+            let right = match focus {
+                Focus::Body => "BODY   ",
+                _ => "3 GRAPH",
+            };
+            assert!(
+                column_of(&f, right).is_some_and(|at| at >= left),
+                "the right panel is not {right:?} on {focus:?}:\n{f}"
+            );
+        }
+    }
+
+    /// **`3` is worded `graph`, and the key list `?` opens prints it**
+    /// (TASK-a9cd362ee5e2).
+    #[test]
+    fn the_key_list_names_three_the_graph() {
+        let binding = bindings::of_key(KeyCode::Char('3')).expect("'3' is bound");
+        assert_eq!(binding.word, "graph");
+        let ank = nowhere();
+        let mut a = app();
+        a.resize(DASHBOARD - 1, 80);
+        tap(&mut a, &ank, KeyCode::Char('?'));
+        let f = a.frame();
+        assert!(
+            f.contains("3 graph"),
+            "the key list does not print '3 graph':\n{f}"
+        );
+        assert!(
+            !f.contains("3 body"),
+            "the key list still prints '3 body':\n{f}"
+        );
     }
 
     /// Every screen gets the whole window, and which one is in the region
@@ -6220,17 +7546,17 @@ mod tests {
         let ank = nowhere();
         tap(&mut a, &ank, KeyCode::Char('j'));
         tap(&mut a, &ank, KeyCode::Char('j'));
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 2);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 2);
         tap(&mut a, &ank, KeyCode::Char('1'));
         tap(&mut a, &ank, KeyCode::Char('j'));
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             2,
             "moving in the claims moved the entities cursor"
         );
         tap(&mut a, &ank, KeyCode::Char('2'));
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             2,
             "coming back lost the row that was under the cursor"
         );
@@ -6376,7 +7702,10 @@ mod tests {
             Some(1),
             "leaving the panel charged the pane"
         );
-        tap(&mut a, &ank, KeyCode::Char('3'));
+        // Right and not `3`, which is the graph's now: the document's screen
+        // carries no digit (TASK-a9cd362ee5e2).
+        tap(&mut a, &ank, KeyCode::Right);
+        assert_eq!(a.focus(), Focus::Body);
         assert_eq!(
             a.config.as_ref().map(|s| s.keys.len()),
             Some(ank_contract::verbs::CONFIG_KEYS.len()),
@@ -6959,7 +8288,7 @@ mod tests {
 
         a.act(Command::Top, &ank);
         assert_eq!(a.offset, 0);
-        assert_eq!(a.cursors[Focus::Body.number() - 1].at, 0);
+        assert_eq!(a.cursors[Focus::Body.slot()].at, 0);
     }
 
     /// A body line wider than the panel keeps its end, at both stated widths.
@@ -7087,7 +8416,15 @@ mod tests {
         a.act(Command::Constraints, &nowhere());
         assert_eq!(a.pane_lines().len(), 30);
         assert_eq!(a.focus(), Focus::Body, "the pane asked for is the pane in");
-        assert!(a.frame().contains("3 CONSTRAINTS"), "{}", a.frame());
+        // Titled with no digit in front, as the document is
+        // (TASK-a9cd362ee5e2): the pane is drawn on the document's screen and
+        // no digit reaches that screen.
+        let corner = SCREEN.border(true).top_left;
+        assert!(
+            a.frame().contains(&format!("{corner}CONSTRAINTS   ")),
+            "{}",
+            a.frame()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -7241,7 +8578,7 @@ mod tests {
         for _ in 0..at {
             tap(&mut a, &ank, KeyCode::Char('j'));
         }
-        assert_eq!(a.cursors[Focus::Body.number() - 1].at, at);
+        assert_eq!(a.cursors[Focus::Body.slot()].at, at);
         assert_eq!(
             a.pane_target().as_deref(),
             Some("ADR-8bd76e8d7c4e"),
@@ -7337,7 +8674,7 @@ mod tests {
         a.detail = Some(detail("TASK-49746735127f", "body\n"));
         a.focus = Focus::Body;
         // The cursor in the entities is somewhere else entirely.
-        a.cursors[Focus::Entities.number() - 1].at = 0;
+        a.cursors[Focus::Entities.slot()].at = 0;
         let ank = nowhere();
         a.act(
             Command::Act(Act {
@@ -7639,9 +8976,9 @@ mod tests {
         let mut a = app();
         let ank = nowhere();
         tap(&mut a, &ank, KeyCode::Char('j'));
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 1);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 1);
         tap(&mut a, &ank, KeyCode::Char('k'));
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 0);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 0);
         tap(&mut a, &ank, KeyCode::Char('f'));
         assert_eq!(a.kind.as_deref(), Some("adr"));
         assert!(tap(&mut a, &ank, KeyCode::Char('q')), "q ends the session");
@@ -7695,7 +9032,7 @@ mod tests {
         a.focus = Focus::Entities;
         a.kind = None;
         a.search = None;
-        a.cursors = [Cursor::default(); 4];
+        a.cursors = [Cursor::default(); 5];
         a.note = None;
         spell(&mut a, &ank, "claim");
         assert_eq!(a.note, None, "the letter alone spawned a verb");
@@ -7943,7 +9280,7 @@ mod tests {
         for _ in 0..40 {
             tap(&mut a, &ank, KeyCode::Char('j'));
         }
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 40);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 40);
         assert!(
             a.frame().contains("> "),
             "the cursor is on the page it was moved to"
@@ -7955,7 +9292,7 @@ mod tests {
         for line in narrow.lines() {
             assert!(line.chars().count() <= 50, "{line}");
         }
-        let c = a.cursors[Focus::Entities.number() - 1];
+        let c = a.cursors[Focus::Entities.slot()];
         assert!(
             c.at >= c.top && c.at < c.top + a.page(Focus::Entities),
             "the cursor fell off the page a resize made shorter:\n{narrow}"
@@ -8044,16 +9381,16 @@ mod tests {
     fn a_wide_window_draws_every_panel_and_the_digit_moves_the_focus() {
         let ank = nowhere();
         for width in [DASHBOARD, 160, 200] {
-            for arrived in Focus::ALL {
+            for arrived in Focus::RING {
                 let mut a = app();
                 a.resize(width, 40);
-                let digit = char::from_digit(arrived.number() as u32, 10).expect("a digit");
+                let digit = digit_of(arrived);
                 tap(&mut a, &ank, KeyCode::Char(digit));
                 assert_eq!(a.focus(), arrived, "'{digit}' did not reach {arrived:?}");
                 let frame = a.frame();
-                for focus in Focus::ALL {
+                for focus in Focus::RING {
                     assert!(
-                        frame.contains(&format!("{} {}", focus.number(), focus.name())),
+                        frame.contains(&heading(focus)),
                         "{focus:?} is not on a {width} column frame:\n{frame}"
                     );
                 }
@@ -8067,7 +9404,12 @@ mod tests {
                     3,
                     "the three others are drawn at rest at {width}:\n{frame}"
                 );
-                let rects = a.arrange(a.area()).rects;
+                // The four panels drawn: the document shares the graph's
+                // rectangle and is drawn in it only while it is open
+                // (TASK-a9cd362ee5e2).
+                let all = a.arrange(a.area()).rects;
+                let rects = Focus::RING.map(|f| all[f.slot()]);
+                assert_eq!(all[Focus::Body.slot()], all[Focus::Graph.slot()]);
                 for (i, r) in rects.iter().enumerate() {
                     assert!(
                         inside(*r).height >= 1,
@@ -8099,10 +9441,10 @@ mod tests {
     fn a_phone_gets_one_region_and_every_screen_stays_one_digit_away() {
         let ank = nowhere();
         for width in [PHONE.0 as u16, DASHBOARD - 1] {
-            for arrived in Focus::ALL {
+            for arrived in Focus::RING {
                 let mut a = phone();
                 a.resize(width, 30);
-                let digit = char::from_digit(arrived.number() as u32, 10).expect("a digit");
+                let digit = digit_of(arrived);
                 tap(&mut a, &ank, KeyCode::Char(digit));
                 assert_eq!(a.focus(), arrived, "'{digit}' did not reach {arrived:?}");
                 let frame = a.frame();
@@ -8112,7 +9454,7 @@ mod tests {
                     "the frame at {width} columns is not one region:\n{frame}"
                 );
                 assert!(
-                    frame.contains(&format!("{} {}", arrived.number(), arrived.name())),
+                    frame.contains(&heading(arrived)),
                     "the region does not name the screen the digit reached:\n{frame}"
                 );
                 let region = a.region(a.area());
@@ -8140,11 +9482,11 @@ mod tests {
         for size in [PHONE, (120, 40)] {
             let mut a = App::new(size, None).inked(paint::PLAIN);
             has_read(&mut a);
-            assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 0);
+            assert_eq!(a.cursors[Focus::Entities.slot()].at, 0);
             let at = row_of(&a, 2);
             touch(&mut a, &ank, at);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 2,
                 "a press at {size:?} did not select the row under it:\n{}",
                 a.frame()
@@ -8172,7 +9514,7 @@ mod tests {
     /// is the road a terminal drives and not a shortcut past it. The instant is
     /// stated rather than slept through -- a suite that waited out
     /// [`SECOND_PRESS`] would be asserting on the machine it ran on.
-    fn press_at(a: &mut App, ank: &Ank, at: Position, now: Instant) -> bool {
+    fn press_at(a: &mut App, ank: &Ank, at: Position, now: Moment) -> bool {
         let first = a.chosen.take();
         a.pressed(first, at, ank, now)
     }
@@ -8199,12 +9541,12 @@ mod tests {
         for size in [PHONE, (120, 40)] {
             let mut a = App::new(size, None).inked(paint::PLAIN).drawn_with(SCREEN);
             has_read(&mut a);
-            let start = Instant::now();
+            let start = Moment::now();
             let at = row_of(&a, 2);
 
             press_at(&mut a, &ank, at, start);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 2,
                 "the press at {size:?} did not choose the row under it"
             );
@@ -8234,14 +9576,14 @@ mod tests {
     fn two_presses_on_different_rows_open_nothing() {
         let ank = nowhere();
         let mut a = phone();
-        let start = Instant::now();
+        let start = Moment::now();
 
         let first = row_of(&a, 2);
         let elsewhere = row_of(&a, 1);
         press_at(&mut a, &ank, first, start);
         press_at(&mut a, &ank, elsewhere, start);
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             1,
             "the second press did not choose the row under it"
         );
@@ -8271,7 +9613,7 @@ mod tests {
     fn a_press_past_the_interval_opens_nothing_and_is_counted_as_a_first() {
         let ank = nowhere();
         let mut a = phone();
-        let start = Instant::now();
+        let start = Moment::now();
         let at = row_of(&a, 2);
         let past = start + SECOND_PRESS + Duration::from_millis(1);
 
@@ -8307,12 +9649,12 @@ mod tests {
         let ank = nowhere();
         let mut a = phone();
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             0,
             "a session opens with no row selected, and this test is about the \
              row it opens on"
         );
-        let start = Instant::now();
+        let start = Moment::now();
         let at = row_of(&a, 0);
 
         press_at(&mut a, &ank, at, start);
@@ -8342,14 +9684,14 @@ mod tests {
     fn a_key_between_two_presses_ends_the_pair() {
         let ank = nowhere();
         let mut a = phone();
-        let start = Instant::now();
+        let start = Moment::now();
         let at = row_of(&a, 1);
 
         press_at(&mut a, &ank, at, start);
         tap(&mut a, &ank, KeyCode::Char('j'));
         tap(&mut a, &ank, KeyCode::Char('k'));
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             1,
             "the cursor is not back on the row the press chose"
         );
@@ -8376,7 +9718,7 @@ mod tests {
         let ank = nowhere();
         let mut a = phone();
         a.focus = Focus::Entities;
-        a.cursors[Focus::Entities.number() - 1].at = 1;
+        a.cursors[Focus::Entities.slot()].at = 1;
         let region = a.region(a.area());
         for at in [
             Position::new(region.x, region.y),
@@ -8385,7 +9727,7 @@ mod tests {
         ] {
             touch(&mut a, &ank, at);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 1,
                 "a press at {at:?} moved the cursor"
             );
@@ -8707,7 +10049,7 @@ mod tests {
     fn nothing_moves_under_a_waiting_command_when_the_screen_is_touched() {
         let ank = nowhere();
         let mut a = phone();
-        a.cursors[Focus::Entities.number() - 1].at = 1;
+        a.cursors[Focus::Entities.slot()].at = 1;
         spell(&mut a, &ank, "log");
         let waiting = a.pending.clone().expect("a command is waiting");
         // A touch on a row underneath it: the command is dropped, and nothing
@@ -8716,7 +10058,7 @@ mod tests {
         touch(&mut a, &ank, at);
         assert_eq!(a.pending, None, "the command survived a touch");
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].at,
+            a.cursors[Focus::Entities.slot()].at,
             1,
             "a cursor moved under a command"
         );
@@ -8736,7 +10078,7 @@ mod tests {
             },
             &ank,
         );
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 1);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 1);
         assert!(a.pending.is_some(), "a swipe answered a command");
     }
 
@@ -8854,14 +10196,14 @@ mod tests {
         for window in [(80, 24), (40, 30), (120, 40), (150, 24)] {
             let mut a = crowded();
             a.resize(window.0, window.1);
-            a.cursors[Focus::Entities.number() - 1].at = 2;
+            a.cursors[Focus::Entities.slot()].at = 2;
             let before = a.frame();
             let selected = a.selected_id(Focus::Entities);
             let first = region_rows(&a)[0].clone();
 
             wheel(&mut a, &ank, 3);
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].at,
+                a.cursors[Focus::Entities.slot()].at,
                 2,
                 "the wheel moved the cursor at {window:?}"
             );
@@ -8877,7 +10219,7 @@ mod tests {
                 a.frame()
             );
             assert_eq!(
-                a.cursors[Focus::Entities.number() - 1].top,
+                a.cursors[Focus::Entities.slot()].top,
                 3,
                 "three notches are not three rows at {window:?}"
             );
@@ -8915,7 +10257,7 @@ mod tests {
             "a row scrolled off the top is still marked:\n{}",
             a.frame()
         );
-        assert_eq!(a.cursors[Focus::Entities.number() - 1].at, 0);
+        assert_eq!(a.cursors[Focus::Entities.slot()].at, 0);
         wheel(&mut a, &ank, -5);
         assert!(
             region_rows(&a).iter().any(|l| l.starts_with(text::CURSOR)),
@@ -8936,7 +10278,7 @@ mod tests {
         let mut a = crowded();
         wheel(&mut a, &ank, -4);
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].top,
+            a.cursors[Focus::Entities.slot()].top,
             0,
             "the view scrolled above the first row"
         );
@@ -8944,7 +10286,7 @@ mod tests {
         let total = a.count(Focus::Entities);
         wheel(&mut a, &ank, total as isize + 10);
         assert_eq!(
-            a.cursors[Focus::Entities.number() - 1].top,
+            a.cursors[Focus::Entities.slot()].top,
             total - page,
             "the view scrolled past the last screenful"
         );
@@ -9113,7 +10455,7 @@ mod tests {
             .collect();
         a.detail = Some(detail("TASK-49746735127f", &body));
         a.focus = Focus::Body;
-        let at = a.cursors[Focus::Body.number() - 1].at;
+        let at = a.cursors[Focus::Body.slot()].at;
         let first = region_rows(&a)[0].clone();
         assert!(
             bar_column(&a).iter().any(|c| c == SCREEN.thumb()),
@@ -9123,7 +10465,7 @@ mod tests {
         wheel(&mut a, &ank, 5);
         assert_eq!(a.offset, 5, "the wheel did not move the document");
         assert_eq!(
-            a.cursors[Focus::Body.number() - 1].at,
+            a.cursors[Focus::Body.slot()].at,
             at,
             "the wheel moved the document's cursor"
         );
@@ -9532,5 +10874,1580 @@ mod tests {
             "the narrowed frame touched {touched} rows where the crowded one \
              touched {seen}, and both filter the same corpus"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The GRAPH screen draws the blocked_by DAG (TASK-643611645dea)
+    // -----------------------------------------------------------------------
+
+    fn dag_task(id: &str, status: &str, title: &str) -> model::DagTask {
+        model::DagTask {
+            id: id.to_string(),
+            short: id[..11].to_string(),
+            status: status.to_string(),
+            title: title.to_string(),
+        }
+    }
+
+    fn edge(task: &str, blocked_by: &str) -> model::Edge {
+        model::Edge {
+            task: task.to_string(),
+            blocked_by: blocked_by.to_string(),
+        }
+    }
+
+    // The corpus `Repo::graphed` seeds in `tests/terminal/mod.rs`, as `graph
+    // --json` lists it, plus two finished tasks no open task names.
+    const CHAIN_1: &str = "TASK-c0a100000001";
+    const CHAIN_2: &str = "TASK-c0a200000002";
+    const CHAIN_3: &str = "TASK-c0a300000003";
+    const DIAMOND_TOP: &str = "TASK-d1a100000001";
+    const DIAMOND_LEFT: &str = "TASK-d1a200000002";
+    const DIAMOND_RIGHT: &str = "TASK-d1a300000003";
+    const DIAMOND_BOTTOM: &str = "TASK-d1a400000004";
+    const CLOSED_BLOCKER: &str = "TASK-c1b100000001";
+    const ITS_DEPENDENT: &str = "TASK-c1b200000002";
+    const LONE: &str = "TASK-a10e00000001";
+    pub(crate) const UNDER_WAY: &str = "TASK-b0a100000001";
+    /// An identifier the graph document lists no task for.
+    const UNLISTED: &str = "TASK-0000000000ab@peer";
+    const HISTORY: &str = "TASK-d0e100000001";
+    const HISTORY_ON_HISTORY: &str = "TASK-d0e200000002";
+
+    /// Every task of the fixture that the default fold shows: the open ones,
+    /// and the closed blocker an open one names.
+    const SHOWN: [&str; 11] = [
+        CHAIN_1,
+        CHAIN_2,
+        CHAIN_3,
+        DIAMOND_TOP,
+        DIAMOND_LEFT,
+        DIAMOND_RIGHT,
+        DIAMOND_BOTTOM,
+        CLOSED_BLOCKER,
+        ITS_DEPENDENT,
+        LONE,
+        UNDER_WAY,
+    ];
+
+    fn dag() -> model::Dag {
+        model::Dag {
+            tasks: vec![
+                dag_task(CHAIN_1, "open", "The first of a chain"),
+                dag_task(CHAIN_2, "open", "The second of a chain"),
+                dag_task(CHAIN_3, "open", "The third of a chain"),
+                dag_task(DIAMOND_TOP, "open", "The top of a diamond"),
+                dag_task(DIAMOND_LEFT, "open", "The left of a diamond"),
+                dag_task(DIAMOND_RIGHT, "open", "The right of a diamond"),
+                dag_task(DIAMOND_BOTTOM, "open", "The bottom of a diamond"),
+                dag_task(CLOSED_BLOCKER, "closed", "A blocker that was closed"),
+                dag_task(ITS_DEPENDENT, "open", "A dependent of the closed one"),
+                dag_task(LONE, "open", "A task with no edge"),
+                dag_task(UNDER_WAY, "in_progress", "A task under way"),
+                dag_task(HISTORY, "done", "History nothing open names"),
+                dag_task(HISTORY_ON_HISTORY, "done", "History on history"),
+            ],
+            edges: vec![
+                edge(CHAIN_2, CHAIN_1),
+                edge(CHAIN_3, CHAIN_2),
+                edge(DIAMOND_LEFT, DIAMOND_TOP),
+                edge(DIAMOND_RIGHT, DIAMOND_TOP),
+                edge(DIAMOND_BOTTOM, DIAMOND_LEFT),
+                edge(DIAMOND_BOTTOM, DIAMOND_RIGHT),
+                edge(ITS_DEPENDENT, CLOSED_BLOCKER),
+                edge(HISTORY_ON_HISTORY, HISTORY),
+                edge(UNDER_WAY, CHAIN_1),
+                edge(UNDER_WAY, UNLISTED),
+            ],
+        }
+    }
+
+    /// The same corpus as `find` lists it: the work that is alive first and
+    /// then the most recently created, which is the order the listing holds
+    /// and the one the graph is handed, with `created` on every row one
+    /// second apart. The task under way is the newest, then the lone task,
+    /// the chain is older than the diamond, and no identifier sorts the way
+    /// the rows stand.
+    fn graphed_snapshot() -> Snapshot {
+        let mut entities = Vec::new();
+        for (id, status, title, second) in [
+            (UNDER_WAY, "in_progress", "A task under way", 11),
+            (LONE, "open", "A task with no edge", 10),
+            (DIAMOND_BOTTOM, "open", "The bottom of a diamond", 9),
+            (DIAMOND_RIGHT, "open", "The right of a diamond", 8),
+            (DIAMOND_LEFT, "open", "The left of a diamond", 7),
+            (DIAMOND_TOP, "open", "The top of a diamond", 6),
+            (ITS_DEPENDENT, "open", "A dependent of the closed one", 5),
+            (CHAIN_3, "open", "The third of a chain", 4),
+            (CHAIN_2, "open", "The second of a chain", 3),
+            (CHAIN_1, "open", "The first of a chain", 2),
+            (HISTORY_ON_HISTORY, "done", "History on history", 1),
+            (HISTORY, "done", "History nothing open names", 0),
+            (CLOSED_BLOCKER, "closed", "A blocker that was closed", 0),
+        ] {
+            entities.push(Row {
+                created: format!("2026-10-14T10:00:{second:02}Z"),
+                ..row(id, "task", status, title)
+            });
+        }
+        let total = entities.len() as u64;
+        Snapshot {
+            corpus: "5a02985accabde1a7365a01db237a245097ab4ca".to_string(),
+            entities,
+            total,
+        }
+    }
+
+    /// A screen on the graph with the fixture read, under the dashboard's
+    /// width and tall enough that every row of it is on the frame.
+    pub(crate) fn graphed() -> App {
+        let mut a = App::new((DASHBOARD as usize - 1, 40), None)
+            .inked(paint::PLAIN)
+            .drawn_with(SCREEN);
+        a.snapshot = Some(graphed_snapshot());
+        a.graphed(dag());
+        a.focus = Focus::Graph;
+        a
+    }
+
+    /// The short identifiers the graph's rows carry, in the order drawn.
+    fn graph_ids(a: &App) -> Vec<String> {
+        region_rows(a)
+            .iter()
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|w| w.starts_with("TASK-"))
+                    .map(|w| w.to_string())
+            })
+            .collect()
+    }
+
+    /// **Shown by default: every task whose status is neither done nor
+    /// closed, together with every task one of those directly names in
+    /// blocked_by, each exactly one row** (TASK-643611645dea).
+    ///
+    /// Twelve tasks in the corpus and ten rows: the two finished tasks no open
+    /// task names are folded, the closed blocker an open task names is drawn,
+    /// and no task is drawn twice.
+    #[test]
+    fn the_graph_shows_the_open_work_and_its_direct_blockers_once_each() {
+        let a = graphed();
+        let ids = graph_ids(&a);
+        assert_eq!(ids.len(), SHOWN.len(), "{} rows:\n{}", ids.len(), a.frame());
+        for id in SHOWN {
+            assert_eq!(
+                ids.iter().filter(|i| **i == short_of(id)).count(),
+                1,
+                "{id} is not on exactly one row:\n{}",
+                a.frame()
+            );
+        }
+        for folded in [HISTORY, HISTORY_ON_HISTORY] {
+            assert!(
+                !ids.contains(&short_of(folded)),
+                "{folded} is finished and nothing open names it:\n{}",
+                a.frame()
+            );
+        }
+    }
+
+    /// The row of the graph carrying one task, as drawn.
+    fn graph_row(a: &App, id: &str) -> String {
+        let short = short_of(id);
+        region_rows(a)
+            .into_iter()
+            .find(|l| l.contains(&short))
+            .unwrap_or_else(|| panic!("{id} is not on the frame:\n{}", a.frame()))
+    }
+
+    /// The cell the task under way is drawn with on this frame.
+    fn under_way_cell(a: &App) -> char {
+        let row = graph_row(a, UNDER_WAY);
+        let pulse = ['\u{00B7}', '\u{2022}', '\u{25CF}', '.', 'o', 'O'];
+        row.chars()
+            .find(|c| pulse.contains(c))
+            .unwrap_or_else(|| panic!("no pulse on the row under way: {row}"))
+    }
+
+    /// **The cell of the task under way reads the pulse's phase modulo four,
+    /// `· • ● •` and `. o O o` on a dumb terminal, a tick changes that cell
+    /// and nothing else, and the painted frame and the plain one are the
+    /// same characters at every phase** (TASK-54bb5cddc671,
+    /// ADR-ac6be1ebe9aa).
+    #[test]
+    fn a_tick_moves_the_cell_under_way_through_the_pulse_and_nothing_else() {
+        for (glyphs, pulse) in [
+            (SCREEN, ['\u{00B7}', '\u{2022}', '\u{25CF}', '\u{2022}']),
+            (ASCII, ['.', 'o', 'O', 'o']),
+        ] {
+            let mut plain = graphed().drawn_with(glyphs);
+            let mut painted = graphed().drawn_with(glyphs).inked(paint::COLOUR);
+            for phase in 0..9 {
+                let before = plain.frame();
+                assert_eq!(
+                    under_way_cell(&plain),
+                    pulse[phase % 4],
+                    "phase {phase}:\n{before}"
+                );
+                assert_eq!(
+                    painted.frame(),
+                    before,
+                    "the painted frame says something the plain one does not at phase {phase}"
+                );
+                assert!(plain.tick() && painted.tick(), "a pulse was due");
+                let after = plain.frame();
+                let moved: Vec<(&str, &str)> = before
+                    .lines()
+                    .zip(after.lines())
+                    .filter(|(b, a)| b != a)
+                    .collect();
+                assert_eq!(
+                    moved.len(),
+                    1,
+                    "a tick moved more than the row under way: {moved:?}"
+                );
+                let (b, a) = moved[0];
+                let changed: Vec<(char, char)> =
+                    b.chars().zip(a.chars()).filter(|(x, y)| x != y).collect();
+                assert_eq!(
+                    changed,
+                    [(pulse[phase % 4], pulse[(phase + 1) % 4])],
+                    "a tick changed something besides the cell: {b}\n{a}"
+                );
+            }
+        }
+    }
+
+    /// **A pulse is due only while a task in progress stands inside the
+    /// graph panel's page on the frame** (TASK-54bb5cddc671): with the focus
+    /// on the graph under the dashboard's width and not elsewhere, with the
+    /// row in the page and not scrolled out of it, and on the dashboard
+    /// while the right panel is the graph and not the document. A tick where
+    /// none is due moves nothing.
+    #[test]
+    fn a_pulse_is_due_only_while_a_task_in_progress_stands_in_the_graphs_page() {
+        let ank = nowhere();
+        let mut a = graphed();
+        assert!(
+            a.pulse_due(),
+            "the graph holds a task under way:\n{}",
+            a.frame()
+        );
+
+        // The focus on the entities: the graph is not on the frame.
+        let mut away = graphed();
+        tap(&mut away, &ank, KeyCode::Char('2'));
+        assert_eq!(away.focus, Focus::Entities);
+        let frame = away.frame();
+        assert!(!away.pulse_due(), "{frame}");
+        assert!(!away.tick(), "a tick moved a screen with no pulse on it");
+        assert_eq!(away.frame(), frame);
+
+        // Scrolled out: a window too short for the graph, the cursor paged
+        // to the last row.
+        a.resize(DASHBOARD - 1, 12);
+        for _ in 0..6 {
+            tap(&mut a, &ank, KeyCode::Char(' '));
+        }
+        let frame = a.frame();
+        assert!(
+            !frame.contains(&short_of(UNDER_WAY)),
+            "the row under way is still in the page:\n{frame}"
+        );
+        assert!(!a.pulse_due(), "{frame}");
+        assert!(!a.tick());
+        assert_eq!(a.frame(), frame, "a tick that was not due moved the frame");
+        // And paged back to it, due again.
+        tap(&mut a, &ank, KeyCode::Char('g'));
+        assert!(a.pulse_due(), "{}", a.frame());
+
+        // On the dashboard the right panel is the graph at rest, whichever
+        // listing has the focus, and the document once a row is opened.
+        let mut wide = graphed();
+        wide.resize(DASHBOARD + 20, 40);
+        tap(&mut wide, &ank, KeyCode::Char('2'));
+        assert!(wide.pulse_due(), "{}", wide.frame());
+        wide.opened(detail(UNDER_WAY, "body\n"));
+        let frame = wide.frame();
+        assert!(frame.contains("BODY"), "{frame}");
+        assert!(
+            !wide.pulse_due(),
+            "a pulse is due under a document:\n{frame}"
+        );
+        assert!(!wide.tick());
+    }
+
+    /// **Inside a block the rows are the layout's: a task stands above every
+    /// task it is blocked by, and among tasks the edges do not order the
+    /// listing's order is kept; an identifier orders nothing**
+    /// (TASK-643611645dea, TASK-de02dbcf9965).
+    ///
+    /// The listing is `find`'s order -- alive first, then newest -- and in
+    /// the diamond it puts the right above the left, where the identifiers
+    /// would put the left first. Then the listing is turned around: the left
+    /// stands above the right, and the blocks stand where they stood, because
+    /// `created` orders the blocks and the listing orders only the rows the
+    /// edges leave free.
+    #[test]
+    fn graph_rows_stand_above_their_blockers_in_the_listings_own_order() {
+        let a = graphed();
+        let ids = graph_ids(&a);
+        let at = |id: &str| {
+            ids.iter()
+                .position(|i| *i == short_of(id))
+                .unwrap_or_else(|| panic!("{id} is not drawn:\n{}", a.frame()))
+        };
+        for (task, blocker) in [
+            (CHAIN_2, CHAIN_1),
+            (CHAIN_3, CHAIN_2),
+            (UNDER_WAY, CHAIN_1),
+            (DIAMOND_LEFT, DIAMOND_TOP),
+            (DIAMOND_RIGHT, DIAMOND_TOP),
+            (DIAMOND_BOTTOM, DIAMOND_LEFT),
+            (DIAMOND_BOTTOM, DIAMOND_RIGHT),
+            (ITS_DEPENDENT, CLOSED_BLOCKER),
+        ] {
+            assert!(
+                at(task) < at(blocker),
+                "{task} is not above {blocker}:\n{}",
+                a.frame()
+            );
+        }
+        assert!(
+            at(DIAMOND_RIGHT) < at(DIAMOND_LEFT),
+            "the listing's order is not kept where the edges leave two tasks free:\n{}",
+            a.frame()
+        );
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_ne!(
+            ids,
+            sorted,
+            "the rows are in identifier order:\n{}",
+            a.frame()
+        );
+
+        // The listing turned around, and the graph follows without being
+        // read again: the left of the diamond is now above the right, and
+        // the blocks have not moved.
+        let mut turned = graphed();
+        let snapshot = turned.snapshot.as_mut().expect("a snapshot");
+        snapshot.entities.reverse();
+        turned.relayout();
+        let turned_ids = graph_ids(&turned);
+        let turned_at = |id: &str| {
+            turned_ids
+                .iter()
+                .position(|i| *i == short_of(id))
+                .unwrap_or_else(|| panic!("{id} is not drawn:\n{}", turned.frame()))
+        };
+        assert!(
+            turned_at(DIAMOND_LEFT) < turned_at(DIAMOND_RIGHT),
+            "the graph did not follow the listing's order:\n{}",
+            turned.frame()
+        );
+        assert!(
+            turned_at(CHAIN_1) < turned_at(DIAMOND_BOTTOM)
+                && turned_at(DIAMOND_TOP) < turned_at(ITS_DEPENDENT)
+                && turned_at(LONE) == turned_ids.len() - 1,
+            "the listing's order moved the blocks:\n{}",
+            turned.frame()
+        );
+    }
+
+    /// The literal graph document, drawn in blocks: one per group of linked
+    /// tasks, a blank between two, and the tasks linked to nothing last under
+    /// one heading row (TASK-de02dbcf9965).
+    const AT_REST: [&str; 17] = [
+        "> ·    TASK-b0a1   in progress   A task under way  (+1 blocker(s) outside)",
+        "  │ ○  TASK-c0a3   waits 1       The third of a chain",
+        "  │ ○  TASK-c0a2   waits 1       The second of a chain",
+        "  ├─┘",
+        "  ○    TASK-c0a1   ready         The first of a chain",
+        "",
+        "  ○─┐  TASK-d1a4   waits 2       The bottom of a diamond",
+        "  │ ○  TASK-d1a3   waits 1       The right of a diamond",
+        "  ○ │  TASK-d1a2   waits 1       The left of a diamond",
+        "  ├─┘",
+        "  ○    TASK-d1a1   ready         The top of a diamond",
+        "",
+        "  ○    TASK-c1b2   ready         A dependent of the closed one",
+        "  ●    TASK-c1b1   closed        A blocker that was closed",
+        "",
+        "  unlinked",
+        "  ○    TASK-a10e   ready         A task with no edge",
+    ];
+
+    /// The region's rows with their ends trimmed, as the literal frames are
+    /// written.
+    fn trimmed(a: &App) -> Vec<String> {
+        region_rows(a)
+            .into_iter()
+            .map(|l| l.trim_end().to_string())
+            .collect()
+    }
+
+    /// **Every group of two or more tasks is one contiguous block, a row of
+    /// exactly one blank separates two blocks, the tasks in a group of one
+    /// are gathered last under a row reading unlinked, and no blank stands
+    /// first or last** (TASK-de02dbcf9965).
+    ///
+    /// The blocks stand alive first, then bigger first, then the block whose
+    /// newest task is the newer first: the chain with the task under way --
+    /// four tasks, the newest among them -- over the diamond's four, over the
+    /// closed blocker with its dependent, then the lone task under its
+    /// heading. Inside each the rows are the layout's.
+    #[test]
+    fn the_graph_is_drawn_in_blocks_one_per_group_of_linked_tasks_with_the_unlinked_last() {
+        let a = graphed();
+        let rows = trimmed(&a);
+        assert_eq!(&rows[..AT_REST.len()], &AT_REST[..], "\n{}", a.frame());
+        assert!(
+            rows[AT_REST.len()..].iter().all(String::is_empty),
+            "something is drawn under the last block:\n{}",
+            a.frame()
+        );
+        // The same blocks, in the same order, whatever the dashboard's width.
+        let mut b = graphed();
+        b.resize(160, 45);
+        let wide: Vec<String> = b
+            .frame()
+            .lines()
+            .filter_map(|l| {
+                let at = l.find("┃")? + "┃".len();
+                let rest = &l[at..];
+                rest.rfind('┃')
+                    .map(|end| rest[..end].trim_end().to_string())
+            })
+            .collect();
+        for (n, row) in AT_REST.iter().enumerate() {
+            assert!(
+                wide.iter().any(|w| w == row),
+                "row {n} {row:?} is not on the wide frame:\n{}",
+                b.frame()
+            );
+        }
+    }
+
+    /// **The fold all puts the finished-only groups after the alive ones**
+    /// (TASK-de02dbcf9965): the two finished tasks that name each other are
+    /// one block, and it stands after every block holding a task that is
+    /// neither done nor closed -- the pair of two, which it ties on size, is
+    /// above it because the pair's dependent is open.
+    #[test]
+    fn the_fold_all_puts_the_finished_only_groups_after_the_alive_ones() {
+        let mut a = graphed();
+        a.fold = Fold::All;
+        a.relayout();
+        let rows = trimmed(&a);
+        let mut want: Vec<&str> = AT_REST[..14].to_vec();
+        want.extend([
+            "",
+            "  ●    TASK-d0e2   done          History on history",
+            "  ●    TASK-d0e1   done          History nothing open names",
+            "",
+            "  unlinked",
+            "  ○    TASK-a10e   ready         A task with no edge",
+        ]);
+        assert_eq!(&rows[..want.len()], &want[..], "\n{}", a.frame());
+        assert!(
+            a.frame()
+                .contains("3 GRAPH all 13   (13 tasks in the corpus)"),
+            "\n{}",
+            a.frame()
+        );
+        // Among blocks alike in life and size the newest first: the history
+        // made alive is a pair like the closed blocker's, and it stands under
+        // that pair because the dependent was created later than anything
+        // in it.
+        let mut alive = graphed();
+        alive.fold = Fold::All;
+        let dag = alive.dag.as_mut().expect("a graph");
+        dag.tasks
+            .iter_mut()
+            .find(|t| t.id == HISTORY_ON_HISTORY)
+            .expect("the history")
+            .status = "open".to_string();
+        alive.relayout();
+        let ids = graph_ids(&alive);
+        let at = |id: &str| ids.iter().position(|i| *i == short_of(id)).unwrap();
+        assert!(
+            at(DIAMOND_TOP) < at(ITS_DEPENDENT) && at(ITS_DEPENDENT) < at(HISTORY_ON_HISTORY),
+            "the pair created later does not stand above the older pair:\n{}",
+            alive.frame()
+        );
+        // A task the snapshot withholds is counted the oldest: with the
+        // dependent withheld the pair's newest is the closed blocker, older
+        // than the history, and the history stands above it.
+        alive
+            .snapshot
+            .as_mut()
+            .expect("a snapshot")
+            .entities
+            .retain(|r| r.id != ITS_DEPENDENT);
+        alive.relayout();
+        let ids = graph_ids(&alive);
+        let at = |id: &str| ids.iter().position(|i| *i == short_of(id)).unwrap();
+        assert!(
+            at(HISTORY_ON_HISTORY) < at(ITS_DEPENDENT),
+            "a task the snapshot withholds is not counted the oldest:\n{}",
+            alive.frame()
+        );
+    }
+
+    /// **A junction row carrying ├─┘ stands immediately above the first of
+    /// the chain, which two lanes wait for, and one above the top of the
+    /// diamond** (TASK-de02dbcf9965), and nowhere else.
+    #[test]
+    fn a_junction_row_stands_immediately_above_a_task_two_lanes_wait_for() {
+        let a = graphed();
+        let rows = trimmed(&a);
+        let line = |id: &str| {
+            rows.iter()
+                .position(|l| l.contains(&short_of(id)))
+                .unwrap_or_else(|| panic!("{id} is not drawn:\n{}", a.frame()))
+        };
+        for id in [CHAIN_1, DIAMOND_TOP] {
+            assert_eq!(
+                rows[line(id) - 1],
+                "  ├─┘",
+                "no junction row stands above {id}:\n{}",
+                a.frame()
+            );
+        }
+        assert_eq!(
+            rows.iter().filter(|l| l.contains('┘')).count(),
+            2,
+            "a junction row stands where no lanes merge:\n{}",
+            a.frame()
+        );
+    }
+
+    /// **Each shown task is exactly one row, assembled by compose: the
+    /// marker, the lane prefix as a field, the identifier, the readiness
+    /// word, and the title** (TASK-643611645dea).
+    ///
+    /// One task and no edge, so the lane field is one column and the row can
+    /// be written down whole under the heading of the unlinked block: the
+    /// cursor, the node, the identifier padded to its column, the word padded
+    /// to its own, the title.
+    #[test]
+    fn a_graph_row_is_the_marker_the_lane_the_identifier_the_status_and_the_title() {
+        let mut a = graphed();
+        a.graphed(model::Dag {
+            tasks: vec![dag_task(LONE, "open", "A task with no edge")],
+            edges: Vec::new(),
+        });
+        let rows = region_rows(&a);
+        assert_eq!(rows[0].trim_end(), "  unlinked", "\n{}", a.frame());
+        assert_eq!(
+            rows[1].trim_end(),
+            "> ○  TASK-a10e   ready         A task with no edge",
+            "\n{}",
+            a.frame()
+        );
+        assert!(
+            rows[2].trim().is_empty(),
+            "one task drew more than one row:\n{}",
+            a.frame()
+        );
+        // And a row the cursor is not on carries the plain margin.
+        let b = graphed();
+        assert!(
+            graph_row(&b, DIAMOND_TOP).starts_with("  "),
+            "a row off the cursor carries a marker:\n{}",
+            b.frame()
+        );
+        assert!(
+            graph_row(&b, UNDER_WAY).starts_with("> "),
+            "the row under the cursor carries no marker:\n{}",
+            b.frame()
+        );
+    }
+
+    /// **The title with `[held]` appended where the claims say so**
+    /// (TASK-643611645dea).
+    #[test]
+    fn a_graph_row_says_held_where_the_claims_say_so() {
+        let mut a = graphed();
+        assert!(
+            !a.frame().contains("[held]"),
+            "a row is held before the claims were asked:\n{}",
+            a.frame()
+        );
+        a.held = Some(Held {
+            claims: vec![Claim {
+                id: DIAMOND_TOP.to_string(),
+                holder: "somebody@elsewhere".to_string(),
+                claimed: String::new(),
+                expires: "2026-10-15T00:00:00Z".to_string(),
+                lapsed: false,
+                mine: false,
+            }],
+            ..held()
+        });
+        assert!(
+            graph_row(&a, DIAMOND_TOP)
+                .trim_end()
+                .ends_with("The top of a diamond  [held]"),
+            "the held row does not say so:\n{}",
+            a.frame()
+        );
+        assert_eq!(
+            a.frame().matches("[held]").count(),
+            1,
+            "a row nobody holds says held:\n{}",
+            a.frame()
+        );
+    }
+
+    /// **The marker and the identifier are never dropped, and the lane field
+    /// gives way before the identifier does** (TASK-643611645dea).
+    ///
+    /// Sixteen columns is a region of fourteen inside its borders: the marker,
+    /// the three columns of lanes, the gap and the identifier's ten would be
+    /// seventeen, so the lanes go and the identifier stays whole.
+    #[test]
+    fn a_narrow_graph_row_gives_up_its_lanes_before_its_identifier() {
+        let mut a = graphed();
+        a.resize(40, 40);
+        let wide = graph_row(&a, LONE);
+        assert!(wide.contains('○') && wide.contains("TASK-a10e"), "{wide}");
+        a.resize(16, 40);
+        let narrow = graph_row(&a, UNDER_WAY);
+        assert_eq!(narrow.trim_end(), "> TASK-b0a1", "\n{}", a.frame());
+        let rows = region_rows(&a);
+        for row in &rows {
+            assert!(
+                !row.contains('~'),
+                "a row was cut at sixteen columns: {row:?}\n{}",
+                a.frame()
+            );
+        }
+        assert_eq!(
+            rows.iter().filter(|r| r.contains("TASK-")).count(),
+            SHOWN.len(),
+            "an identifier was dropped at sixteen columns:\n{}",
+            a.frame()
+        );
+        // A junction row gives up its lanes where a task row does, so no
+        // connector is left standing beside nothing.
+        assert!(
+            !a.frame().contains('┘'),
+            "a junction row kept its lanes where the rows gave theirs up:\n{}",
+            a.frame()
+        );
+    }
+
+    /// **A task row carries the cell of its mark: ● for done or closed, ○
+    /// for every other status but in_progress, and the first phase of the
+    /// pulse, ·, for in_progress** (TASK-de02dbcf9965). Readiness is the
+    /// word beside it and no longer a cell.
+    #[test]
+    fn the_cell_says_finished_open_or_under_way() {
+        let a = graphed();
+        let cell = |id: &str, glyph: graph::Glyph, word: &str| {
+            let row = graph_row(&a, id);
+            let lanes: String = row.chars().skip(2).take(3).collect();
+            let c = Alphabet::Boxes.glyph(glyph);
+            assert!(
+                lanes.contains(c),
+                "{id} does not carry {c:?} ({glyph:?}): {row:?}\n{}",
+                a.frame()
+            );
+            assert!(
+                row.contains(&format!("  {word}  ")),
+                "{id} lost its readiness word {word:?}: {row:?}"
+            );
+        };
+        cell(UNDER_WAY, graph::Glyph::InProgress0, "in progress");
+        cell(CLOSED_BLOCKER, graph::Glyph::Settled, "closed");
+        cell(LONE, graph::Glyph::Open, "ready");
+        cell(CHAIN_1, graph::Glyph::Open, "ready");
+        cell(ITS_DEPENDENT, graph::Glyph::Open, "ready");
+        cell(DIAMOND_BOTTOM, graph::Glyph::Open, "waits 2");
+        cell(CHAIN_2, graph::Glyph::Open, "waits 1");
+        // Under the fold all a done task is settled too.
+        let mut all = graphed();
+        all.fold = Fold::All;
+        all.relayout();
+        let lanes: String = graph_row(&all, HISTORY).chars().skip(2).take(3).collect();
+        assert_eq!(lanes.trim_end(), "●", "\n{}", all.frame());
+    }
+
+    /// **The column between the identifier and the title holds a readiness
+    /// word: in progress, done, closed, ready, or waits N** (TASK-9ea4dc65755b).
+    ///
+    /// Rows written down whole after the lane field: the identifier padded to
+    /// its column, the word padded to its own, the title.
+    #[test]
+    fn a_graph_row_says_ready_waits_n_in_progress_done_or_closed() {
+        let a = graphed();
+        let said = |a: &App, id: &str, word: &str, title: &str| {
+            let row = graph_row(a, id);
+            let want = format!("{}   {word:<14}{title}", short_of(id));
+            assert!(
+                row.trim_end().ends_with(&want),
+                "{id} does not read {want:?}: {row:?}
+{}",
+                a.frame()
+            );
+        };
+        said(
+            &a,
+            UNDER_WAY,
+            "in progress",
+            "A task under way  (+1 blocker(s) outside)",
+        );
+        said(&a, CHAIN_1, "ready", "The first of a chain");
+        said(&a, LONE, "ready", "A task with no edge");
+        said(&a, ITS_DEPENDENT, "ready", "A dependent of the closed one");
+        said(&a, CHAIN_2, "waits 1", "The second of a chain");
+        said(&a, DIAMOND_BOTTOM, "waits 2", "The bottom of a diamond");
+        said(&a, CLOSED_BLOCKER, "closed", "A blocker that was closed");
+        for row in region_rows(&a) {
+            assert!(
+                !row.contains(" open "),
+                "a row carries the raw word: {row:?}
+{}",
+                a.frame()
+            );
+        }
+        // Under the fold all, a finished task nothing open names is a row.
+        let mut all = graphed();
+        all.fold = Fold::All;
+        all.relayout();
+        said(&all, HISTORY, "done", "History nothing open names");
+        // `waits N` counts a blocker that is not a row: the search leaves
+        // the bottom alone on the graph, and its two blockers are outside.
+        let mut hidden = graphed();
+        hidden.search = Some("bottom".to_string());
+        hidden.relayout();
+        said(
+            &hidden,
+            DIAMOND_BOTTOM,
+            "waits 2",
+            "The bottom of a diamond  (+2 blocker(s) outside)",
+        );
+        // And one the document lists no task for is counted among them, with
+        // a finished one that is not.
+        let mut peer = graphed();
+        peer.graphed(model::Dag {
+            tasks: vec![
+                dag_task(LONE, "open", "Waits on a peer"),
+                dag_task(HISTORY, "done", "Finished"),
+            ],
+            edges: vec![edge(LONE, HISTORY), edge(LONE, UNLISTED)],
+        });
+        said(
+            &peer,
+            LONE,
+            "waits 1",
+            "Waits on a peer  (+1 blocker(s) outside)",
+        );
+    }
+
+    /// **The word is painted in the role the shared table gives it: the
+    /// status' own for in progress, done and closed, open's for ready, and
+    /// Attention for waits N** (TASK-9ea4dc65755b).
+    #[test]
+    fn the_readiness_word_is_painted_through_the_shared_table() {
+        let mut a = graphed().inked(paint::COLOUR);
+        a.fold = Fold::All;
+        a.relayout();
+        let painted = styles(&a);
+        for (word, role) in [
+            ("in progress", role_of_status("in_progress")),
+            ("done", role_of_status("done")),
+            ("closed", role_of_status("closed")),
+            ("ready", role_of_status("open")),
+            ("waits 2", Some(Role::Attention)),
+        ] {
+            let style = blank().patch(paint::COLOUR.of(role));
+            assert!(
+                painted
+                    .iter()
+                    .any(|(s, seen)| *s == style && seen.contains(word)),
+                "{word:?} is not painted in {role:?}: {painted:?}"
+            );
+        }
+    }
+
+    /// **Colour repeats the status role and carries nothing alone: the frame
+    /// painted and the frame drawn with `NO_COLOR` are identical character
+    /// for character** (TASK-643611645dea, ADR-1f70ce2c3eac).
+    #[test]
+    fn the_painted_graph_and_the_plain_one_are_the_same_characters() {
+        let (mut painted, mut plain) = (graphed(), graphed());
+        painted = painted.inked(paint::COLOUR);
+        plain = plain.inked(paint::PLAIN);
+        for width in 40..=150u16 {
+            painted.resize(width, 24);
+            plain.resize(width, 24);
+            assert_eq!(
+                painted.frame(),
+                plain.frame(),
+                "the painted graph says something the plain one does not at {width}"
+            );
+        }
+        // And the painted one did paint, so this compared two frames and not
+        // two blanks.
+        assert!(
+            styles(&painted).len() > 1,
+            "the painted graph carries no style, so nothing was compared"
+        );
+    }
+
+    /// **On a terminal declaring `TERM=dumb` the lanes and nodes are the
+    /// ASCII alphabet the layout module declares** (TASK-643611645dea,
+    /// ADR-ac6be1ebe9aa).
+    #[test]
+    fn a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet() {
+        let mut a = graphed().drawn_with(ASCII);
+        a.relayout();
+        let rows = trimmed(&a);
+        let want = [
+            "> .    TASK-b0a1   in progress   A task under way  (+1 blocker(s) outside)",
+            "  | o  TASK-c0a3   waits 1       The third of a chain",
+            "  | o  TASK-c0a2   waits 1       The second of a chain",
+            "  |-'",
+            "  o    TASK-c0a1   ready         The first of a chain",
+            "",
+            "  o-+  TASK-d1a4   waits 2       The bottom of a diamond",
+        ];
+        assert_eq!(&rows[..want.len()], &want[..], "\n{}", a.frame());
+        let lanes = |id: &str| -> String { graph_row(&a, id).chars().skip(2).take(3).collect() };
+        assert_eq!(lanes(CLOSED_BLOCKER), "@  ", "\n{}", a.frame());
+        for (glyph, boxes, _) in graph::TABLE {
+            assert!(
+                !a.frame().contains(boxes),
+                "{glyph:?} is drawn as {boxes:?} on a dumb terminal:\n{}",
+                a.frame()
+            );
+        }
+    }
+
+    /// **The title counts task rows: how many are on the page and how many
+    /// are drawn, never a junction, a blank or the heading, and how many
+    /// tasks the corpus holds** (TASK-643611645dea, TASK-de02dbcf9965).
+    #[test]
+    fn the_graphs_title_counts_the_rows_shown_and_the_tasks_in_the_corpus() {
+        let mut a = graphed();
+        assert!(
+            a.frame()
+                .contains("3 GRAPH all 11   (13 tasks in the corpus)"),
+            "\n{}",
+            a.frame()
+        );
+        // Twelve rows: three of header, one of note band, two of border,
+        // six inside -- the chain's five lines and the blank under them,
+        // four of which are task rows.
+        a.resize(DASHBOARD - 1, 12);
+        assert!(
+            a.frame()
+                .contains("3 GRAPH 1-4 of 11   (13 tasks in the corpus)"),
+            "\n{}",
+            a.frame()
+        );
+        // Before the corpus is read there is nothing to count.
+        let mut b = App::new((DASHBOARD as usize - 1, 40), None)
+            .inked(paint::PLAIN)
+            .drawn_with(SCREEN);
+        b.focus = Focus::Graph;
+        assert!(
+            b.frame().contains("3 GRAPH   (not read)"),
+            "\n{}",
+            b.frame()
+        );
+    }
+
+    /// Where the cursor's marker is drawn: the one line of the region that
+    /// starts with it.
+    fn marked(a: &App) -> String {
+        let rows = trimmed(a);
+        let mut marked = rows.iter().filter(|l| l.starts_with(text::CURSOR));
+        let line = marked
+            .next()
+            .unwrap_or_else(|| panic!("no row carries the cursor:\n{}", a.frame()))
+            .clone();
+        assert!(
+            marked.next().is_none(),
+            "two rows carry the cursor:\n{}",
+            a.frame()
+        );
+        line
+    }
+
+    /// **j, k, Space, g, G and the arrows select a task row and never a
+    /// junction, blank or heading row; Down from the task row above a
+    /// junction row lands on the task row under it; the selected row is
+    /// always inside the panel** (TASK-643611645dea, TASK-de02dbcf9965), and
+    /// none of it reaches the CLI.
+    #[test]
+    fn the_cursor_walks_the_graphs_task_rows_only() {
+        let ank = nowhere();
+        let mut a = graphed();
+        // Thirteen rows and not twelve: the last row of every frame is the
+        // key line (TASK-933fdb42c7d9), and the page this walks is the six
+        // lines the region held before it.
+        a.resize(DASHBOARD - 1, 13);
+        let on = |a: &App| {
+            let id = a.selected_id(Focus::Graph).expect("a row under the cursor");
+            // The marker stands on the row of that task and on nothing else.
+            let line = marked(a);
+            assert!(
+                line.contains(&short_of(&id)),
+                "the cursor is drawn on {line:?} and not on {id}:\n{}",
+                a.frame()
+            );
+            id
+        };
+        assert_eq!(on(&a), UNDER_WAY);
+        tap(&mut a, &ank, KeyCode::Char('j'));
+        assert_eq!(on(&a), CHAIN_3);
+        tap(&mut a, &ank, KeyCode::Down);
+        assert_eq!(on(&a), CHAIN_2);
+        // Down from the row above the junction lands on the row under it.
+        tap(&mut a, &ank, KeyCode::Char('j'));
+        assert_eq!(on(&a), CHAIN_1);
+        tap(&mut a, &ank, KeyCode::Char('k'));
+        assert_eq!(on(&a), CHAIN_2);
+        tap(&mut a, &ank, KeyCode::Up);
+        assert_eq!(on(&a), CHAIN_3);
+        // Over the blank between two blocks.
+        for _ in 0..3 {
+            tap(&mut a, &ank, KeyCode::Char('j'));
+        }
+        assert_eq!(on(&a), DIAMOND_BOTTOM);
+        assert!(
+            a.frame().contains("3 GRAPH 2-5 of 11"),
+            "the window did not follow the cursor:\n{}",
+            a.frame()
+        );
+        tap(&mut a, &ank, KeyCode::Char('g'));
+        assert_eq!(on(&a), UNDER_WAY);
+        assert_eq!(a.cursors[Focus::Graph.slot()].top, 0);
+        // A page is six lines of the region, and Space steps the cursor by
+        // as many task rows: from the first to the seventh, which is the
+        // diamond's left, drawn on the page's last line.
+        tap(&mut a, &ank, KeyCode::Char(' '));
+        assert_eq!(on(&a), DIAMOND_LEFT);
+        assert!(
+            a.frame().contains("3 GRAPH 4-7 of 11"),
+            "the window did not follow the cursor:\n{}",
+            a.frame()
+        );
+        // No key of the table reaches the end in one press, so a second page
+        // does, clamped to the last row: the lone task, under its heading.
+        tap(&mut a, &ank, KeyCode::PageDown);
+        assert_eq!(on(&a), LONE);
+        assert!(
+            a.frame().contains("3 GRAPH 9-11 of 11") && a.frame().contains("unlinked"),
+            "the window did not follow the cursor to the end:\n{}",
+            a.frame()
+        );
+        tap(&mut a, &ank, KeyCode::Char('j'));
+        assert_eq!(on(&a), LONE, "the cursor walked past the last row");
+        tap(&mut a, &ank, KeyCode::Char('g'));
+        assert_eq!(on(&a), UNDER_WAY);
+        assert!(
+            a.note.is_none(),
+            "moving the cursor reached the CLI: {:?}",
+            a.note
+        );
+    }
+
+    /// **Enter on the task row under a junction opens that task's document
+    /// and Back returns to GRAPH with the same row selected**
+    /// (TASK-643611645dea, TASK-de02dbcf9965).
+    ///
+    /// The CLI is addressed where there is none, so what Enter asked for is
+    /// read off the refusal: `show` and the identifier of the row. The
+    /// document itself is then handed over as `show` would have answered it,
+    /// and the way back is measured.
+    #[test]
+    fn enter_on_a_graph_row_opens_its_task_and_back_returns_to_the_same_row() {
+        let ank = nowhere();
+        let mut a = graphed();
+        for _ in 0..3 {
+            tap(&mut a, &ank, KeyCode::Char('j'));
+        }
+        assert_eq!(a.selected_id(Focus::Graph).as_deref(), Some(CHAIN_1));
+        tap(&mut a, &ank, KeyCode::Enter);
+        let asked = a.note.clone().unwrap_or_default();
+        assert!(
+            asked.contains("show") && asked.contains(CHAIN_1),
+            "Enter did not ask for the row's document: {asked:?}"
+        );
+        a.opened(detail(CHAIN_1, "the first of a chain\n"));
+        assert_eq!(a.focus(), Focus::Body);
+        assert!(
+            a.frame().contains("BODY   TASK-c0a1"),
+            "the document is not the row's:\n{}",
+            a.frame()
+        );
+        tap(&mut a, &ank, KeyCode::Char('b'));
+        assert_eq!(a.focus(), Focus::Graph, "Back did not return to the graph");
+        assert_eq!(
+            a.selected_id(Focus::Graph).as_deref(),
+            Some(CHAIN_1),
+            "Back moved the cursor"
+        );
+        assert!(
+            graph_row(&a, CHAIN_1).starts_with("> "),
+            "the row is not under the cursor:\n{}",
+            a.frame()
+        );
+    }
+
+    /// **A tap selects the row under it and a second tap on it opens it**
+    /// (TASK-643611645dea, ADR-ac6be1ebe9aa).
+    #[test]
+    fn a_tap_selects_a_graph_row_and_a_second_tap_opens_it() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let third = row_of(&a, 2);
+        touch(&mut a, &ank, third);
+        assert_eq!(a.selected_id(Focus::Graph).as_deref(), Some(CHAIN_2));
+        assert!(a.note.is_none(), "one tap opened something: {:?}", a.note);
+        touch(&mut a, &ank, third);
+        let asked = a.note.clone().unwrap_or_default();
+        assert!(
+            asked.contains("show") && asked.contains(CHAIN_2),
+            "the second tap did not open the row: {asked:?}"
+        );
+    }
+
+    /// **A tap on a junction, blank or heading row selects and opens
+    /// nothing** (TASK-de02dbcf9965): the cursor stays where it was, and a
+    /// second tap there opens nothing either. A tap on the task row under
+    /// the junction selects it.
+    #[test]
+    fn a_tap_on_a_junction_a_blank_or_the_heading_selects_and_opens_nothing() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let rows = trimmed(&a);
+        let junction = rows.iter().position(|l| l == "  ├─┘").expect("a junction");
+        let blank = rows.iter().position(String::is_empty).expect("a blank");
+        let heading = rows
+            .iter()
+            .position(|l| l == "  unlinked")
+            .expect("the heading");
+        for (what, line) in [
+            ("junction", junction),
+            ("blank", blank),
+            ("heading", heading),
+        ] {
+            let before = a.frame();
+            for _ in 0..2 {
+                let at = row_of(&a, line as u16);
+                touch(&mut a, &ank, at);
+                assert_eq!(
+                    a.selected_id(Focus::Graph).as_deref(),
+                    Some(UNDER_WAY),
+                    "a tap on the {what} row moved the cursor:\n{}",
+                    a.frame()
+                );
+                assert!(
+                    a.note.is_none() && a.focus == Focus::Graph,
+                    "a tap on the {what} row opened something: {:?}",
+                    a.note
+                );
+            }
+            assert_eq!(a.frame(), before, "a tap on the {what} row drew something");
+        }
+        let under = row_of(&a, junction as u16 + 1);
+        touch(&mut a, &ank, under);
+        assert_eq!(a.selected_id(Focus::Graph).as_deref(), Some(CHAIN_1));
+        assert!(
+            graph_row(&a, CHAIN_1).starts_with("> "),
+            "the row under the junction is not under the cursor:\n{}",
+            a.frame()
+        );
+    }
+
+    /// **On a wide frame the graph is read in the same pass as the claims
+    /// and the queue; under that width it is read on the first arrival at
+    /// GRAPH and not on later ones; and a reload reads it again**
+    /// (TASK-643611645dea).
+    ///
+    /// The CLI is addressed where there is none, so every read it attempts
+    /// leaves the refusal in the note naming the verb, and a read it does not
+    /// attempt leaves nothing. `u` itself is measured through the binary, in
+    /// `tests/graph.rs`: here the pass it runs is called directly.
+    #[test]
+    fn the_graph_is_read_where_its_panel_is_on_the_frame_and_once_on_arrival() {
+        let ank = nowhere();
+        let graph_asked = |a: &App| {
+            a.note
+                .as_deref()
+                .is_some_and(|n| n.contains("cannot run") && n.contains("graph"))
+        };
+        // Under the width, the pass after `find` asks for nothing the frame
+        // does not draw.
+        let mut a = app();
+        a.reload_rest(&ank);
+        assert!(a.note.is_none(), "a narrow frame read {:?}", a.note);
+        // Arriving asks, once.
+        tap(&mut a, &ank, KeyCode::Char('3'));
+        assert!(graph_asked(&a), "the arrival did not read: {:?}", a.note);
+        a.graphed(dag());
+        tap(&mut a, &ank, KeyCode::Char('2'));
+        tap(&mut a, &ank, KeyCode::Char('3'));
+        assert!(
+            a.note.is_none(),
+            "a second arrival read the graph again: {:?}",
+            a.note
+        );
+        // The pass a reload runs reads it again, held or not.
+        a.reload_rest(&ank);
+        assert!(graph_asked(&a), "the reload did not read: {:?}", a.note);
+        // On a wide frame the opening's second pass reads it, from any focus.
+        let mut w = dashboard();
+        w.reload_rest(&ank);
+        assert!(graph_asked(&w), "the wide pass did not read: {:?}", w.note);
+    }
+
+    /// **The GRAPH panel words a graph never asked, a graph being read and a
+    /// graph whose read was refused three ways, and the refusal the same way
+    /// on every width** (TASK-afcd4f0f56ad).
+    ///
+    /// The refused read is the case that was wrong: on a wide frame a graph
+    /// not held was always "reading", so a read the CLI had refused said it
+    /// was still under way, with nothing running and nothing coming.
+    #[test]
+    fn the_graph_panel_tells_never_asked_reading_and_refused_apart() {
+        let ank = nowhere();
+        // Never asked: the panel on the frame, and no read wanted or tried.
+        let mut never = app();
+        never.focus = Focus::Graph;
+        let f = never.frame();
+        assert!(
+            f.contains("3 GRAPH   (not asked)"),
+            "a graph nobody asked is not worded so:\n{f}"
+        );
+        assert!(
+            f.contains("not asked: u reads it"),
+            "the body does not say how to ask:\n{f}"
+        );
+        assert!(!f.contains("reading"), "nobody is reading it:\n{f}");
+        // Being read: the wide frame's opening asks it in the pass after the
+        // rows, so between the two it is under way.
+        let reading = dashboard().frame();
+        assert!(
+            reading.contains("3 GRAPH   (reading)"),
+            "the opening's graph is not worded as being read:\n{reading}"
+        );
+        // Refused, on the wide frame: the narrow frame's sentence, never
+        // "reading".
+        let mut refused = dashboard();
+        refused.reload_rest(&ank);
+        let f = refused.frame();
+        assert!(
+            f.contains("3 GRAPH   (could not be read)"),
+            "a refused read on the wide frame is not worded as refused:\n{f}"
+        );
+        assert!(
+            f.contains("could not be read: u reads it again"),
+            "the wide frame's body does not say the read was refused:\n{f}"
+        );
+        assert!(
+            !f.contains("(reading)") && !f.contains("  reading"),
+            "a refused read is still said to be under way:\n{f}"
+        );
+    }
+
+    /// **A frame resized onto the dashboard's width with no graph held asks
+    /// for one read of it, as the opening does, and a second resize asks for
+    /// none** (TASK-afcd4f0f56ad).
+    ///
+    /// Two ways of arriving wide with no graph: a narrow session that never
+    /// went to GRAPH, and one that went and dropped the graph on a reload with
+    /// the panel off the frame. The CLI is addressed where there is none, so
+    /// the read the resize asked for is attempted and refused, and the panel
+    /// then says so rather than that it is reading.
+    #[test]
+    fn a_resize_onto_the_wide_frame_with_no_graph_held_reads_it_once() {
+        let ank = nowhere();
+        let graph_asked = |a: &App| {
+            a.note
+                .as_deref()
+                .is_some_and(|n| n.contains("cannot run") && n.contains("graph"))
+        };
+        let never = app();
+        let mut dropped = graphed();
+        tap(&mut dropped, &ank, KeyCode::Char('2'));
+        dropped.reload_rest(&ank);
+        assert!(dropped.dag.is_none(), "the narrow reload kept the graph");
+        for (how, mut a) in [("never went", never), ("dropped it", dropped)] {
+            a.note = None;
+            // Nothing is asked while the frame is narrow.
+            assert!(!a.read_asked(&ank), "{how}: a narrow frame asked a read");
+            a.resize(DASHBOARD, 40);
+            let f = a.frame();
+            assert!(
+                f.contains("3 GRAPH   (reading)"),
+                "{how}: the resize did not ask for the graph:\n{f}"
+            );
+            assert!(a.read_asked(&ank), "{how}: the resize's read was not run");
+            assert!(graph_asked(&a), "{how}: no graph was read: {:?}", a.note);
+            let f = a.frame();
+            assert!(
+                f.contains("3 GRAPH   (could not be read)"),
+                "{how}: the refused read is worded otherwise:\n{f}"
+            );
+            // One read: asked again, nothing is owed.
+            a.note = None;
+            assert!(!a.read_asked(&ank), "{how}: one resize read twice");
+            // A second resize, wider or narrow and back, asks for none.
+            for (columns, rows) in [(DASHBOARD + 40, 40), (DASHBOARD - 1, 40), (DASHBOARD, 40)] {
+                a.resize(columns, rows);
+                assert!(
+                    !a.read_asked(&ank),
+                    "{how}: the resize to {columns} asked a second read"
+                );
+            }
+            assert!(a.note.is_none(), "{how}: a second resize read {:?}", a.note);
+        }
+    }
+
+    /// **A reload under the width, with the graph off the frame, drops the
+    /// graph it held, so the next arrival reads it again rather than drawing
+    /// a corpus the listing no longer shows** (TASK-643611645dea).
+    ///
+    /// The other half of "u reads it again": the pass does not spawn `graph`
+    /// for a panel nobody is looking at, and it does not keep a graph the
+    /// reload has just made stale either.
+    #[test]
+    fn a_reload_with_the_graph_off_the_frame_drops_it_and_the_next_arrival_reads() {
+        let ank = nowhere();
+        let mut a = graphed();
+        tap(&mut a, &ank, KeyCode::Char('2'));
+        a.reload_rest(&ank);
+        assert!(
+            a.note.is_none(),
+            "a narrow pass read something: {:?}",
+            a.note
+        );
+        tap(&mut a, &ank, KeyCode::Char('3'));
+        let asked = a.note.clone().unwrap_or_default();
+        assert!(
+            asked.contains("cannot run") && asked.contains("graph"),
+            "the arrival after a reload did not read the graph again: {asked:?}"
+        );
+        assert!(
+            a.frame().contains("3 GRAPH   (could not be read)"),
+            "a graph the reload made stale is still drawn:\n{}",
+            a.frame()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The fold, and the search, on GRAPH (TASK-67583993ef0d)
+    // -----------------------------------------------------------------------
+
+    /// The key the kind is cycled by elsewhere, read out of the table.
+    fn cycle_key() -> KeyCode {
+        cycle_binding()
+            .expect("a row of the table cycles the kind filter")
+            .key
+    }
+
+    /// The header's first row, which is where the cell is drawn.
+    fn head(a: &App) -> String {
+        a.frame().lines().next().unwrap_or_default().to_string()
+    }
+
+    /// **On GRAPH the key that cycles the kind elsewhere cycles the fold
+    /// between open and all, and the header cell shows the fold in force**
+    /// (TASK-67583993ef0d).
+    ///
+    /// Open is the default: ten rows of twelve, the two finished tasks
+    /// nothing open names folded. All is every task of the corpus, each on
+    /// one row, every dependent above what it is blocked by -- the history
+    /// included. And the second press gives back the frame at rest, character
+    /// for character.
+    #[test]
+    fn the_cycle_key_on_the_graph_walks_the_fold_and_the_header_cell_says_which() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let rest = a.frame();
+        assert!(
+            head(&a).contains("[f open]"),
+            "the cell does not say the graph is folded to the open work:\n{rest}"
+        );
+        assert_eq!(graph_ids(&a).len(), 11, "\n{rest}");
+
+        tap(&mut a, &ank, cycle_key());
+        let all = a.frame();
+        assert!(
+            head(&a).contains("[f all ]"),
+            "the cell does not say every task is shown:\n{all}"
+        );
+        assert!(
+            all.contains("3 GRAPH all 13   (13 tasks in the corpus)"),
+            "\n{all}"
+        );
+        let ids = graph_ids(&a);
+        assert_eq!(ids.len(), 13, "\n{all}");
+        for id in SHOWN.iter().chain([HISTORY, HISTORY_ON_HISTORY].iter()) {
+            assert_eq!(
+                ids.iter().filter(|i| **i == short_of(id)).count(),
+                1,
+                "{id} is not on exactly one row:\n{all}"
+            );
+        }
+        let at = |id: &str| ids.iter().position(|i| *i == short_of(id)).unwrap();
+        for (task, blocker) in [
+            (CHAIN_2, CHAIN_1),
+            (CHAIN_3, CHAIN_2),
+            (DIAMOND_LEFT, DIAMOND_TOP),
+            (DIAMOND_RIGHT, DIAMOND_TOP),
+            (DIAMOND_BOTTOM, DIAMOND_LEFT),
+            (DIAMOND_BOTTOM, DIAMOND_RIGHT),
+            (ITS_DEPENDENT, CLOSED_BLOCKER),
+            (HISTORY_ON_HISTORY, HISTORY),
+        ] {
+            assert!(
+                at(task) < at(blocker),
+                "{task} is not above {blocker}:\n{all}"
+            );
+        }
+        // The kind is the entities' and the fold did not touch it.
+        assert_eq!(a.kind, None, "the key on the graph moved the kind");
+
+        tap(&mut a, &ank, cycle_key());
+        assert_eq!(a.frame(), rest, "the second press is not the graph at rest");
+        assert!(a.note.is_none(), "the fold reached the CLI: {:?}", a.note);
+
+        // Off the graph the same key is the kind's again, and the cell says so.
+        tap(&mut a, &ank, KeyCode::Char('2'));
+        tap(&mut a, &ank, cycle_key());
+        assert_eq!(a.kind.as_deref(), Some("adr"));
+        assert!(head(&a).contains("[f adr ]"), "\n{}", a.frame());
+    }
+
+    /// **A finger reaches the fold where it already reaches the kind**
+    /// (TASK-67583993ef0d, ADR-ac6be1ebe9aa): a touch on the header's cell
+    /// on GRAPH is the key pressed, at every window the cell is drawn on.
+    #[test]
+    fn touching_the_cell_on_the_graph_walks_the_fold() {
+        let ank = nowhere();
+        for window in [PHONE, (80, 24), (120, 40), (160, 45)] {
+            let made = || {
+                let mut a = graphed();
+                a.resize(window.0 as u16, window.1 as u16);
+                a
+            };
+            let (mut touched, mut pressed) = (made(), made());
+            for step in ["[f all ]", "[f open]"] {
+                let cell = touched.kind_rect(touched.area());
+                assert!(cell.width > 0, "no cell to press at {window:?}");
+                touch(&mut touched, &ank, Position::new(cell.x, cell.y));
+                tap(&mut pressed, &ank, cycle_key());
+                assert!(
+                    head(&touched).contains(step),
+                    "the touch did not reach {step} at {window:?}:\n{}",
+                    touched.frame()
+                );
+                assert_eq!(
+                    touched.frame(),
+                    pressed.frame(),
+                    "touching the cell is not pressing the key at {window:?}"
+                );
+            }
+        }
+    }
+
+    /// **The fold changes and the cursor stays on the row it was on**, and
+    /// nothing reaches the CLI (TASK-67583993ef0d).
+    #[test]
+    fn the_fold_keeps_the_cursor_on_its_row_and_reads_nothing() {
+        let ank = nowhere();
+        let mut a = graphed();
+        while a.selected_id(Focus::Graph).as_deref() != Some(CLOSED_BLOCKER) {
+            tap(&mut a, &ank, KeyCode::Char('j'));
+        }
+        for _ in 0..3 {
+            tap(&mut a, &ank, cycle_key());
+            assert_eq!(
+                a.selected_id(Focus::Graph).as_deref(),
+                Some(CLOSED_BLOCKER),
+                "the fold moved the cursor off its row:\n{}",
+                a.frame()
+            );
+            assert!(
+                graph_row(&a, CLOSED_BLOCKER).starts_with("> "),
+                "the row is not drawn under the cursor:\n{}",
+                a.frame()
+            );
+        }
+        assert!(a.note.is_none(), "the fold reached the CLI: {:?}", a.note);
+    }
+
+    /// **The key list names what the key does on GRAPH in the words the
+    /// header cell uses there** (TASK-67583993ef0d).
+    ///
+    /// The words are read off the cell as drawn, under each fold, and found
+    /// on the row `?` draws for the key: a list saying one thing and a cell
+    /// another would be two vocabularies for one key.
+    #[test]
+    fn the_key_list_names_the_fold_in_the_words_of_the_cell() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let row = format!("  {}", cycle_binding().expect("the cycle").entry());
+        assert_eq!(row, "  f kind; open or all on GRAPH");
+        for _ in 0..2 {
+            let head = head(&a);
+            let at = head.find("[f ").expect("the cell is drawn") + 3;
+            let word = head[at..].split(']').next().unwrap().trim().to_string();
+            assert!(
+                row.contains(&format!(" {word} ")),
+                "the cell says {word:?} and the key list does not: {row:?}"
+            );
+            tap(&mut a, &ank, cycle_key());
+        }
+        tap(&mut a, &ank, KeyCode::Char('?'));
+        assert!(
+            a.list_lines().iter().any(|(line, _)| *line == row),
+            "`?` does not draw the row:\n{}",
+            a.frame()
+        );
+    }
+
+    /// The search opened and a needle typed into it, one key at a time.
+    fn searched(a: &mut App, ank: &Ank, needle: &str) {
+        tap(a, ank, KeyCode::Char(keys::FIND));
+        for c in needle.chars() {
+            tap(a, ank, KeyCode::Char(c));
+        }
+    }
+
+    /// **The search narrows the graph as it is typed to the rows whose
+    /// identifier or title carries the needle, the lanes are laid out again
+    /// over the survivors, and an edge to a task the search hid is counted on
+    /// its row as outside rather than drawn** (TASK-67583993ef0d).
+    ///
+    /// `left of` leaves the diamond's left alone: its blocker, the top, is
+    /// hidden, so the row has one lane and says one blocker is outside, which
+    /// is the count and the words `ank graph` uses for a blocker outside its
+    /// perimeter. Escape gives the fold back, row for row.
+    #[test]
+    fn the_search_narrows_the_graph_and_counts_what_it_hid_as_outside() {
+        let ank = nowhere();
+        let mut a = graphed();
+        let rest = graph_ids(&a);
+        searched(&mut a, &ank, "left of");
+        assert_eq!(
+            graph_ids(&a),
+            [short_of(DIAMOND_LEFT)],
+            "the needle did not narrow the graph to its one task:\n{}",
+            a.frame()
+        );
+        // A search leaving one task draws it alone under unlinked, with no
+        // blank first or last (TASK-de02dbcf9965).
+        assert_eq!(
+            &trimmed(&a)[..3],
+            [
+                "  unlinked",
+                "> ○  TASK-d1a2   waits 1       The left of a diamond  (+1 blocker(s) outside)",
+                "",
+            ],
+            "\n{}",
+            a.frame()
+        );
+        assert!(
+            a.frame().contains("3 GRAPH all 1   [matching 'left of']"),
+            "the title does not say the graph is narrowed:\n{}",
+            a.frame()
+        );
+        // And whole at the desk, which `tests/graph.rs` asserts of the binary.
+        a.resize(80, 24);
+        assert!(
+            region_rows(&a)[1]
+                .trim_end()
+                .ends_with("The left of a diamond  (+1 blocker(s) outside)"),
+            "the count is cut at eighty columns:\n{}",
+            a.frame()
+        );
+        a.resize(DASHBOARD - 1, 40);
+        // An identifier narrows it too, as on the listing.
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(graph_ids(&a), rest, "Escape did not give the fold back");
+        searched(&mut a, &ank, "c0a2");
+        assert_eq!(graph_ids(&a), [short_of(CHAIN_2)], "\n{}", a.frame());
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(graph_ids(&a), rest, "Escape did not give the fold back");
+        assert!(
+            // The one outside count left is the task under way, which names
+            // an identifier the document lists no task for.
+            a.frame().matches("outside").count() == 1 && !a.frame().contains("matching"),
+            "the whole fold still says it is narrowed:\n{}",
+            a.frame()
+        );
+
+        // Under the other fold the search narrows every task: two survivors
+        // that name each other keep their edge, and one alone counts it.
+        tap(&mut a, &ank, cycle_key());
+        searched(&mut a, &ank, "history");
+        assert_eq!(
+            graph_ids(&a),
+            [short_of(HISTORY_ON_HISTORY), short_of(HISTORY)],
+            "\n{}",
+            a.frame()
+        );
+        assert!(!a.frame().contains("outside"), "\n{}", a.frame());
+        tap(&mut a, &ank, KeyCode::Esc);
+        searched(&mut a, &ank, "on history");
+        assert_eq!(graph_ids(&a), [short_of(HISTORY_ON_HISTORY)]);
+        assert!(
+            graph_row(&a, HISTORY_ON_HISTORY)
+                .trim_end()
+                .ends_with("History on history  (+1 blocker(s) outside)"),
+            "\n{}",
+            a.frame()
+        );
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(
+            graph_ids(&a).len(),
+            13,
+            "Escape did not give every task back"
+        );
+        assert!(a.note.is_none(), "the search reached the CLI: {:?}", a.note);
+    }
+
+    /// **The search keeps the cursor on the row it was on wherever that row
+    /// survives**, and reads nothing (TASK-67583993ef0d).
+    #[test]
+    fn the_search_keeps_the_cursor_on_its_row_where_it_survives() {
+        let ank = nowhere();
+        let mut a = graphed();
+        while a.selected_id(Focus::Graph).as_deref() != Some(DIAMOND_TOP) {
+            tap(&mut a, &ank, KeyCode::Char('j'));
+        }
+        tap(&mut a, &ank, KeyCode::Char(keys::FIND));
+        for c in "of a diamond".chars() {
+            tap(&mut a, &ank, KeyCode::Char(c));
+            assert_eq!(
+                a.selected_id(Focus::Graph).as_deref(),
+                Some(DIAMOND_TOP),
+                "the needle moved the cursor off a row it kept:\n{}",
+                a.frame()
+            );
+        }
+        assert_eq!(graph_ids(&a).len(), 4, "\n{}", a.frame());
+        tap(&mut a, &ank, KeyCode::Esc);
+        assert_eq!(
+            a.selected_id(Focus::Graph).as_deref(),
+            Some(DIAMOND_TOP),
+            "Escape moved the cursor off its row:\n{}",
+            a.frame()
+        );
+        assert!(
+            graph_row(&a, DIAMOND_TOP).starts_with("> "),
+            "\n{}",
+            a.frame()
+        );
+        assert!(a.note.is_none(), "the search reached the CLI: {:?}", a.note);
     }
 }

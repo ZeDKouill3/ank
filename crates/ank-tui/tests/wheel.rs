@@ -280,7 +280,7 @@ fn the_wheel_moves_the_view_and_leaves_the_selected_row_where_it_was() {
 
     // And the row a person left is the row every verb still names.
     live.send("\r");
-    live.until("the document to open", |t| t.contains("3 BODY"));
+    live.until("the document to open", |t| t.contains(terminal::BODY));
     let document = live.frame();
     assert!(
         document.contains(&selected),

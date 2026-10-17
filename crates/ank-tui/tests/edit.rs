@@ -609,10 +609,34 @@ fn a_form_that_names_an_entity_refuses_in_front_of_itself_and_new_still_opens() 
     let mut live = Live::with(&repo, WINDOW.0, WINDOW.1, &editor.env());
     live.until("the session to open", |t| t.contains("2 ENTITIES"));
 
-    // The document's own screen, which names nothing until something is opened
-    // into it.
+    // The graph names an entity: its rows are tasks (TASK-643611645dea), and
+    // on a wide frame it is read on the opening, so the corpus's one open task
+    // is under its cursor by the time `3` reaches it, and an edit there is an
+    // edit of that task. `3` reached the document's screen with nothing opened
+    // into it until TASK-a9cd362ee5e2 gave the digit to the graph.
+    let task = repo.task();
     live.send("3");
-    live.until("the document's screen", |t| t.contains("3 BODY"));
+    live.until("the graph's screen, with its row", |t| {
+        // The one task's row is open (`○`, TASK-de02dbcf9965), under the
+        // heading of the unlinked block: found by its text wherever the
+        // block puts it.
+        t.contains(&terminal::focused("3 GRAPH")) && t.contains(&format!("> \u{25cb}  {task}"))
+    });
+    live.send(&letter("edit"));
+    live.until("the form for the graph's row to open", |t| {
+        t.contains(&banner("edit"))
+    });
+    live.send("\u{1b}");
+    live.until("the form to close", |t| !t.contains(&banner("edit")));
+
+    // The document's screen with nothing opened into it, which is where the
+    // question still stands: a screen with no row under the cursor. Right
+    // reaches it before any row has been opened. Waited for with the focus
+    // marker, because the window is wide and its title replaces the graph's.
+    live.send("\u{1b}[C");
+    live.until("the document's screen, empty", |t| {
+        t.contains(&terminal::focused(terminal::BODY.trim_end()))
+    });
 
     live.send(&letter("edit"));
     live.until("the reader to refuse an edit of nothing", |t| {

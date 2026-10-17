@@ -105,7 +105,7 @@ fn open(live: &mut Live, id: &str) {
     select(live, id);
     live.send("\r");
     live.until("the document to open over the listing", |t| {
-        t.contains("3 BODY") && t.contains(&short_of(id))
+        t.contains(&terminal::body_naming(&short_of(id)))
     });
 }
 

@@ -86,8 +86,10 @@ pub enum Command {
     Open,
     /// Back to the listing a session opens on.
     Back,
-    /// Focus one named panel (TASK-bb43cfe2192b). A digit names one, and a
-    /// digit is what the panel's own title carries.
+    /// Focus one named panel (TASK-bb43cfe2192b). A digit names one of the
+    /// ring, and a digit is what the panel's own title carries; the document
+    /// carries none and is reached by Right, as well as by opening a row
+    /// (TASK-a9cd362ee5e2).
     Panel(Focus),
     /// Show one kind only, or every kind again.
     ///

@@ -181,8 +181,8 @@ fn sets(params: &[usize]) -> Vec<Vec<usize>> {
 /// A session driven across the screens that carry painted fields.
 ///
 /// The listing a session opens on, a document opened over it, the constraints
-/// in its place, the listing again and the ratification queue: every screen,
-/// and every place this reader puts an identifier or a status.
+/// in its place, the listing again, the graph and the ratification queue:
+/// every screen, and every place this reader puts an identifier or a status.
 ///
 /// **Every frame it drew and not the last one** (TASK-252bf02de218). The
 /// screens are reached in their turn now, so the frame a session ends on
@@ -206,15 +206,21 @@ fn driven(mut live: Live) -> (String, Vec<u8>) {
     // and comparing a document with the listing it replaced.
     //
     // **And the screen is the focused title, not a title** (TASK-1cd651fb434b).
-    // The dashboard draws every panel at once (ADR-ac6be1ebe9aa), so `3 BODY`,
-    // `2 ENTITIES` and `4 QUEUE` are on the frame before the key that reaches
-    // them is read, and a wait on the name alone returned at once: one painted
-    // session in fifteen under load ended on the listing with the queue beside
-    // it, a keypress early. See [`settled`].
+    // The dashboard draws every panel at once (ADR-ac6be1ebe9aa), so
+    // `2 ENTITIES`, `3 GRAPH` and `4 QUEUE` are on the frame before the key
+    // that reaches them is read, and a wait on the name alone returned at
+    // once: one painted session in fifteen under load ended on the listing
+    // with the queue beside it, a keypress early. See [`settled`].
+    //
+    // The document and its constraints pane carry no digit
+    // (TASK-a9cd362ee5e2), so they are waited for by the heading and the
+    // identifier `show` puts after it. And the graph is a screen of the ring,
+    // so it is driven too.
     for (key, reached) in [
-        ("\r", "3 BODY   TASK-"),
-        ("s", "3 CONSTRAINTS   TASK-"),
+        ("\r", "BODY   TASK-"),
+        ("s", "CONSTRAINTS   TASK-"),
         ("b", "2 ENTITIES all"),
+        ("3", "3 GRAPH "),
         ("4", "4 QUEUE all"),
     ] {
         live.send(key);

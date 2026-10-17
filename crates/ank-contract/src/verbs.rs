@@ -1761,7 +1761,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         // Requiring it here would refuse a reader over a corpus that four
         // read-only verbs answer about perfectly well.
         coordinates: false,
-        summary: "a full-screen reader over this corpus: every entity with its status, a body whole, what binds it, and who holds what",
+        summary: "a full-screen reader over this corpus: every entity with its status, a body whole, what binds it, who holds what, and the blocked_by graph",
         subcommands: &[],
         kinds: &[],
         max_positionals: 0,

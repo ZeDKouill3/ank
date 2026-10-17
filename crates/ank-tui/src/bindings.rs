@@ -405,7 +405,7 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Run(Command::Open)),
         word: "open",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Queue]),
+        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Graph, Focus::Queue]),
         verb: None,
     },
     // `s` and no longer `c`, which is `claim`'s now. The letter is not a
@@ -437,7 +437,9 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Cycle),
         word: "kind",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Entities]),
+        // The graph too (TASK-67583993ef0d): there the key walks the fold,
+        // and `entry` says so in the cell's own words.
+        offered: Offered::Panels(&[Focus::Entities, Focus::Graph]),
         verb: None,
     },
     Binding {
@@ -446,7 +448,9 @@ pub static BINDINGS: &[Binding] = &[
         runs: Runs::Press(Press::Find),
         word: "find",
         group: Group::Screen,
-        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Queue]),
+        // The graph narrows on the needle as the listing does
+        // (TASK-67583993ef0d).
+        offered: Offered::Panels(&[Focus::Claims, Focus::Entities, Focus::Queue, Focus::Graph]),
         verb: None,
     },
     // `u` and no longer `r`, which is `release`'s now: the corpus is a working
@@ -536,9 +540,13 @@ pub static BINDINGS: &[Binding] = &[
         verb: None,
     },
     // A digit reaches its panel directly, which is what the number in a panel's
-    // title is for: a reader who can see `3` on the body never has to remember
+    // title is for: a reader who can see `3` on the graph never has to remember
     // which key opens it. Four rows and not one rule, so the key list can name
     // each of them by the panel it reaches.
+    //
+    // The document has no row here and no digit (TASK-a9cd362ee5e2). It is what
+    // a row opens into -- Enter on the row, or Right -- and there was nothing to
+    // show on it until one had been opened, so `3` went to the graph.
     Binding {
         key: KeyCode::Char('1'),
         aliases: &[],
@@ -560,8 +568,8 @@ pub static BINDINGS: &[Binding] = &[
     Binding {
         key: KeyCode::Char('3'),
         aliases: &[],
-        runs: Runs::Press(Press::Run(Command::Panel(Focus::Body))),
-        word: "body",
+        runs: Runs::Press(Press::Run(Command::Panel(Focus::Graph))),
+        word: "graph",
         group: Group::Panel,
         offered: Offered::Never,
         verb: None,
@@ -914,8 +922,61 @@ impl Binding {
     /// on the row and is not drawn, because no line reaches a verb any more:
     /// a list reading `d done <proof>` would be teaching a grammar this reader
     /// does not have.
+    ///
+    /// One row says a second thing, and it is the row whose key does a second
+    /// thing (TASK-67583993ef0d): the key that walks the kind walks the fold
+    /// on GRAPH, and the list says so in the words the header's cell draws
+    /// there, read out of [`Fold::word`] rather than spelled again.
     pub fn entry(&self) -> String {
-        format!("{} {}", self.spelling(), self.word)
+        let said = format!("{} {}", self.spelling(), self.word);
+        if self.runs != Runs::Press(Press::Cycle) {
+            return said;
+        }
+        let folds: Vec<&str> = Fold::EVERY.iter().map(|fold| fold.word()).collect();
+        format!("{said}; {} on {}", folds.join(" or "), Focus::Graph.name())
+    }
+}
+
+/// How much of the corpus the graph lays out: what the key that cycles the
+/// kind elsewhere cycles on GRAPH (TASK-67583993ef0d).
+///
+/// **The key is the kind's and not a letter of its own**, because
+/// ADR-ac6be1ebe9aa gives a verb's initial to the verb and the letters left
+/// over are few. On a listing of tasks only, the next thing to narrow by is
+/// time rather than kind, and the cell that says which kind is in force says
+/// which fold is, on the one screen where that is the question.
+///
+/// **The words are declared here, once**, because two surfaces draw them: the
+/// cell in the header and the row of the key list. A word written beside each
+/// would be two vocabularies for one fact the day one of them moved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Fold {
+    /// The work that is alive -- every task neither done nor closed -- and
+    /// every task one of those directly names in `blocked_by`.
+    #[default]
+    Open,
+    /// Every task the corpus holds.
+    All,
+}
+
+impl Fold {
+    /// Every fold, in the order the key walks them.
+    pub const EVERY: [Fold; 2] = [Fold::Open, Fold::All];
+
+    /// The word the header cell and the key list call it by.
+    pub fn word(self) -> &'static str {
+        match self {
+            Fold::Open => "open",
+            Fold::All => "all",
+        }
+    }
+
+    /// The fold one press of the key reaches, and back again after the last.
+    pub fn next(self) -> Fold {
+        match self {
+            Fold::Open => Fold::All,
+            Fold::All => Fold::Open,
+        }
     }
 }
 
@@ -1767,8 +1828,11 @@ mod tests {
     /// [`Focus::of_digit`] are the same fact.
     #[test]
     fn the_digits_of_the_table_are_the_digits_the_panels_carry() {
-        for panel in Focus::ALL {
-            let digit = char::from_digit(panel.number() as u32, 10).expect("a digit");
+        for panel in Focus::RING {
+            let n = panel
+                .number()
+                .expect("a screen of the ring carries a digit");
+            let digit = char::from_digit(n as u32, 10).expect("a digit");
             let binding = of_key(KeyCode::Char(digit)).expect("a digit reaches a panel");
             assert_eq!(
                 binding.press(Focus::Entities),
@@ -1840,5 +1904,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **Enter, which opens a row, is offered on GRAPH as it is on the other
+    /// listings** (TASK-647b1e906ae1).
+    ///
+    /// GRAPH draws rows and Enter already opens the one under the cursor, so a
+    /// key list on GRAPH that omits it reads as the key refusing. The open
+    /// binding is offered on exactly the panels it was offered on before, with
+    /// GRAPH added; no other binding's offer moves.
+    #[test]
+    fn open_is_offered_on_graph_beside_the_other_listings() {
+        let open = BINDINGS
+            .iter()
+            .find(|b| b.word == "open")
+            .expect("the table binds open");
+        let offered_on: Vec<Focus> = Focus::ALL
+            .into_iter()
+            .filter(|&f| open.is_offered(Holding::Panel(f)))
+            .collect();
+        assert_eq!(
+            offered_on,
+            vec![Focus::Claims, Focus::Entities, Focus::Graph, Focus::Queue],
+            "open is offered on {offered_on:?}"
+        );
     }
 }

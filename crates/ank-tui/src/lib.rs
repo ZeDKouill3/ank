@@ -3,8 +3,9 @@
 //!
 //! **It reaches the corpus by running the CLI, and by nothing else.** Every row
 //! of corpus data on the screen arrives as a `--json` document written by
-//! `ank find`, `ank status`, `ank show`, `ank scope`, `ank review` or
-//! `ank config <key>`, spawned as a shell would spawn them. Nothing here links `ank-core`, opens `.ank/`, or touches
+//! `ank find`, `ank status`, `ank show`, `ank scope`, `ank review`, `ank graph`
+//! or `ank config <key>`, spawned as a shell would spawn them. Nothing here
+//! links `ank-core`, opens `.ank/`, or touches
 //! `refs/ank/*`. That is slower than linking the core and the trade is taken
 //! deliberately: every refusal in this project is a refusal on state, a reader
 //! that reproduced them would get one subtly wrong, and the first symptom would
@@ -23,8 +24,19 @@
 //! writing shape of `config` -- run once each, when the key that spells one has
 //! been pressed *and* the command that composed has been shown and answered
 //! with one key (TASK-d4a882345837).
-//! Nothing here is on a timer, and there is no timer to put anything on. The
-//! assertion is in the suite, not in this sentence.
+//!
+//! **One clock, and it paints** (TASK-54bb5cddc671). A task in progress on
+//! the graph breathes, `· • ● •`, a phase every quarter of a second, and
+//! [`term::ticker`] is the clock that moves it. It spawns no verb, so it reads
+//! nothing and renews nothing (ADR-0bb7ea8991bc); it sends [`Wake::Tick`] on
+//! the channel every other wake arrives on, and a tick moves
+//! [`view::App`]'s phase counter by one and draws -- the frame reads that
+//! counter and never the time. It stops when no `in_progress` row stands on
+//! the screen: the session tells it after every frame, so a reader with
+//! nothing in progress on its frame is still a process asleep on a channel.
+//! The assertions are in the suite, not in these sentences: `ANK_TRACE_READS`
+//! measured across seconds of pulsing through the binary, and a test that
+//! reads this file and `view.rs` for a clock.
 //!
 //! **A change reaches the screen as an event, never as a poll**
 //! (TASK-2f7777a1fdff). `ank-daemon` appends a line when a corpus it watches
@@ -52,9 +64,9 @@
 //!
 //! # The engine
 //!
-//! Raw mode, on the alternate buffer, drawn by ratatui and woken by four
-//! things: a key, a tap, a resize, and the change stream. That is [`term`], and
-//! the
+//! Raw mode, on the alternate buffer, drawn by ratatui and woken by five
+//! things: a key, a tap, a resize, the change stream, and the pulse's tick
+//! while a task in progress is on the screen. That is [`term`], and the
 //! reason it may exist is stated there -- raw mode and the window are two
 //! implementations of one behaviour on the platforms this project ships to,
 //! crossterm is that implementation, and taking it puts no `extern` block in
@@ -117,36 +129,53 @@
 //!
 //! **The listings beside the detail on a wide frame** (TASK-cae5c8ec9a69,
 //! ADR-ac6be1ebe9aa). At [`view::DASHBOARD`] columns and over, the claims, the
-//! entities and the queue are stacked in a column on the left and the detail
-//! takes what is left of the width. Under it the same four panels are reached
+//! entities and the queue are stacked in a column on the left and the graph,
+//! or the detail once a row is opened, takes what is left of the width. Under it the same four panels are reached
 //! one at a time, drawn in the one region the header sits above
 //! (TASK-252bf02de218), and nothing on the frame collapses to a rule with
 //! nothing inside it.
 //!
-//! * [`view::Focus::Claims`] -- who holds what, the caller's own marked.
-//! * [`view::Focus::Entities`] -- every entity of every kind with its status,
-//!   windowed and filterable. Where a session opens.
-//! * [`view::Focus::Body`] -- one entity: what holds it, the constraints
-//!   binding its declared scope, and its body, paged rather than cut. This is
-//!   the only panel `accept` can be reached from. It is also where the config
-//!   pane is drawn (TASK-b08d090f699c): the one thing it shows that is not
-//!   about an entity at all, opened with `o`, read when a person arrives at it
-//!   and on no repaint.
-//! * [`view::Focus::Queue`] -- what is proposed and waiting for a signature,
-//!   and which regime the corpus is in: `ank review`, run when its person
-//!   arrives at the panel and never on the reader's own initiative.
+//! * [`view::Focus::Claims`], `1 CLAIMS` -- who holds what, the caller's own
+//!   marked.
+//! * [`view::Focus::Entities`], `2 ENTITIES` -- every entity of every kind with
+//!   its status, windowed and filterable. Where a session opens.
+//! * [`view::Focus::Graph`], `3 GRAPH` -- the `blocked_by` DAG
+//!   (TASK-a9cd362ee5e2, TASK-643611645dea): `ank graph --json`, laid out in
+//!   lanes by [`graph`] with every task above what it is blocked by, one row
+//!   per task through the one row composer, and a row of it opens that task.
+//!   Shown by default is the work that is alive and what it directly waits
+//!   on; the node's character on the lane says ready, waiting or finished,
+//!   which the status word cannot. Read once where the panel is first on
+//!   the frame -- the opening's second pass on a wide window, the first
+//!   arrival under it -- and again on `u`; a cursor over it spawns nothing.
+//! * [`view::Focus::Queue`], `4 QUEUE` -- what is proposed and waiting for a
+//!   signature, and which regime the corpus is in: `ank review`, run when its
+//!   person arrives at the panel and never on the reader's own initiative.
 //!
-//! **Each is reached by the same keys at every width.** `Tab` walks the ring,
-//! `1` to `4` name one, and the number is on the panel's title beside the name.
-//! Exactly one panel has the focus, and on a wide frame a character on its
-//! title says which, the weight of its border repeating it.
+//! **Each is reached by the same keys at every width.** `Tab` and `BackTab`
+//! walk claims, entities, graph and queue, `1` to `4` name one, and the number
+//! is on the panel's title beside the name. Exactly one panel has the focus,
+//! and on a wide frame a character on its title says which, the weight of its
+//! border repeating it. `3` is the graph's; it was the document's until
+//! TASK-a9cd362ee5e2.
 //!
 //! **Opening a row moves the focus into the detail, and leaving it gives the
-//! listing back.** Enter on a row of any of the three listings shows the entity
-//! in the detail panel; the reader remembers which listing it was reached from,
-//! and `Back` returns there with the same row still under the cursor. Every
-//! listing keeps its own cursor and nothing moves one by being left, which is
-//! what makes a panel a place rather than a mode.
+//! listing back.** [`view::Focus::Body`] is not on the ring and no digit
+//! reaches it: Enter on a row of any of the three listings, or Right, shows the
+//! entity in the detail -- what holds it, the constraints binding its declared
+//! scope, and its body, paged rather than cut -- under the title `BODY`, with
+//! no digit in front. This is the only panel `accept` can be reached from. It
+//! is also where the config pane is drawn (TASK-b08d090f699c), titled `CONFIG`:
+//! the one thing it shows that is not about an entity at all, opened with `o`,
+//! read when a person arrives at it and on no repaint. The reader remembers
+//! which listing the document was reached from, and `Back` returns there with
+//! the same row still under the cursor. Every listing keeps its own cursor and
+//! nothing moves one by being left, which is what makes a panel a place rather
+//! than a mode.
+//!
+//! On a wide frame the right panel beside the column of listings is `3 GRAPH`
+//! at rest and `BODY` once a row has been opened; `Back` gives it back to the
+//! graph (TASK-cae5c8ec9a69, ADR-ac6be1ebe9aa).
 //! [`view::App::arrange`] decides the whole frame from the window alone.
 //!
 //! # A person holding a phone
@@ -227,6 +256,7 @@ use std::path::PathBuf;
 pub mod ank;
 pub mod bindings;
 pub mod form;
+pub mod graph;
 pub mod input;
 pub mod keys;
 pub mod model;
@@ -336,13 +366,15 @@ pub fn run(
     let mut screen = term::Screen::open().map_err(no_screen)?;
     term::typing(wake.clone());
     // Blocking, and there is nothing else in it: with nobody typing, nothing
-    // changing and the window still, this reader is a process asleep on a
-    // channel. No verb runs, no clock ticks and no claim moves.
+    // changing, the window still and no task in progress on the screen, this
+    // reader is a process asleep on a channel. No verb runs, no clock ticks
+    // and no claim moves; where a task in progress is on the screen the one
+    // clock ticks, and what it moves is a cell.
     let mut wakes = std::iter::from_fn(move || waking.recv().ok());
     session(&ank, &mut wakes, &mut screen, Some(wake))
 }
 
-/// What can wake a drawn screen. There are exactly four things, and a fifth
+/// What can wake a drawn screen. There are exactly five things, and a sixth
 /// that ends the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Wake {
@@ -363,6 +395,12 @@ pub enum Wake {
     /// happened and not what to do about it, which is why there is nothing in
     /// this variant: the answer is to read the corpus again.
     Changed,
+    /// A quarter of a second passed while a task in progress stood on the
+    /// screen (TASK-54bb5cddc671). [`term::ticker`] sends it, and only while
+    /// the frame last drawn said a pulse was due; what the screen does about
+    /// it is [`view::App::tick`]: the phase moves by one and the frame is
+    /// drawn again. Nothing is read and no verb runs.
+    Tick,
     /// The terminal could not be read from. An environment to repair, and the
     /// one way out of a session that is not a zero.
     Broken(String),
@@ -416,7 +454,9 @@ fn refused_by_the_cli(failed: ank::Failed) -> Refused {
 ///
 /// `wakes` is an iterator and not a reader, because a screen has three things
 /// that can move it and a `read` can only ever be one. It blocks in `next`,
-/// which is where an idle session sits: no verb, no clock, nothing.
+/// which is where an idle session sits: no verb, and no clock but the
+/// pulse's, which ticks only while a task in progress is on the frame
+/// (TASK-54bb5cddc671).
 ///
 /// `screen` is a [`Painter`] and not the terminal, so the loop's own edges can
 /// be stated without owning one. What a session does on a real terminal is the
@@ -453,17 +493,53 @@ pub fn session(
 ) -> Result<ExitCode, Refused> {
     let opened = screen.size().unwrap_or((80, 24));
     let mut app = view::App::new((opened.0 as usize, opened.1 as usize), None);
-    let mut opening = Some(news);
+    // The pulse's clock, on the channel every other wake arrives on
+    // (TASK-54bb5cddc671). Started where there is a channel to send on, which
+    // a driven session does not hand in.
+    let ticker = news.as_ref().map(|news| term::ticker(news.clone()));
+    drive(&mut app, ank, wakes, screen, Some(news), ticker.as_ref())
+}
+
+/// The loop of [`session`], over an app it is handed.
+///
+/// `opening` is the opening's reads still owed, with the channel a follower
+/// would send on, and `None` where they are not owed: the suite drives an app
+/// that was handed what it draws, and a read it could not make would only be
+/// a refusal drawn over it.
+///
+/// **It blocks on its one iterator and on nothing else** (TASK-54bb5cddc671).
+/// A key and a tick arrive on one channel in the order they happened, so a
+/// key pressed between two ticks is answered when it arrives and never
+/// queued behind a sleep: there is none here. After every frame the ticker is
+/// told whether that frame holds a task in progress, and a tick that finds
+/// none -- the row scrolled away or a document opened between the frame and
+/// the tick -- draws nothing.
+fn drive(
+    app: &mut view::App,
+    ank: &Ank,
+    wakes: &mut dyn Iterator<Item = Wake>,
+    screen: &mut dyn Painter,
+    mut opening: Option<Option<std::sync::mpsc::Sender<Wake>>>,
+    ticker: Option<&term::Ticker>,
+) -> Result<ExitCode, Refused> {
     let mut rest = false;
+    // A tick that found nothing to pulse: the frame on the screen is still
+    // the frame to keep.
+    let mut quiet = false;
     let code = loop {
-        if let Ok((columns, rows)) = screen.size() {
-            app.resize(columns, rows);
-        }
-        if let Err(e) = screen.draw(&app) {
-            // Nothing to draw the reason on, so it leaves by the exit code and
-            // by stderr once the terminal has been given back.
-            app.note(format!("cannot draw to the terminal: {e}"));
-            break ExitCode::Environment;
+        if !std::mem::take(&mut quiet) {
+            if let Ok((columns, rows)) = screen.size() {
+                app.resize(columns, rows);
+            }
+            if let Err(e) = screen.draw(app) {
+                // Nothing to draw the reason on, so it leaves by the exit code
+                // and by stderr once the terminal has been given back.
+                app.note(format!("cannot draw to the terminal: {e}"));
+                break ExitCode::Environment;
+            }
+            if let Some(ticker) = ticker {
+                ticker.due(app.pulse_due());
+            }
         }
         // The opening reads, taken once and after the frame above rather than
         // in front of it.
@@ -488,6 +564,12 @@ pub fn session(
             app.reload_rest(ank);
             continue;
         }
+        // A resize onto the wide frame with no graph held owes it one read,
+        // as the opening does (TASK-afcd4f0f56ad): the frame above said it is
+        // reading, and this is what makes that true.
+        if app.read_asked(ank) {
+            continue;
+        }
         // Exhausted means every sender is gone, which is the same end of input
         // by another road.
         let Some(wake) = wakes.next() else {
@@ -499,6 +581,9 @@ pub fn session(
                 break ExitCode::Environment;
             }
             Wake::Resize(columns, rows) => app.resize(columns, rows),
+            // The pulse, and only where the frame still holds one: the phase
+            // moves and the loop draws; otherwise nothing is drawn at all.
+            Wake::Tick => quiet = !app.tick(),
             // News, and never an instruction: what the screen does about it is
             // read the corpus again, and `repaint` is where the one read it may
             // not run is refused.
@@ -790,6 +875,197 @@ mod tests {
             session(&nowhere(), &mut wakes, &mut paper, None).expect("a session"),
             ExitCode::Environment
         );
+    }
+
+    /// The pulse's characters in both alphabets: the cells a tick may change.
+    const PULSE: [char; 6] = ['\u{00B7}', '\u{2022}', '\u{25CF}', '.', 'o', 'O'];
+
+    /// Where two frames differ, as (line, column, before, after).
+    fn differences(before: &str, after: &str) -> Vec<(usize, usize, char, char)> {
+        assert_eq!(
+            before.lines().count(),
+            after.lines().count(),
+            "two frames of one window:\n{before}\n{after}"
+        );
+        let mut out = Vec::new();
+        for (n, (a, b)) in before.lines().zip(after.lines()).enumerate() {
+            let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+            assert_eq!(a.len(), b.len(), "line {n} changed width");
+            for (column, (x, y)) in a.iter().zip(&b).enumerate() {
+                if x != y {
+                    out.push((n, column, *x, *y));
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether `after` differs from `before` in the pulse's cells and in
+    /// nothing else, and in at least one of them.
+    fn only_the_pulse_moved(before: &str, after: &str) -> bool {
+        let moved = differences(before, after);
+        !moved.is_empty()
+            && moved
+                .iter()
+                .all(|(_, _, x, y)| PULSE.contains(x) && PULSE.contains(y))
+    }
+
+    /// The identifier on the row the cursor is on: the first after a `> `
+    /// standing against a vertical border.
+    fn under_the_cursor(frame: &str) -> Option<String> {
+        frame.lines().find_map(|line| {
+            let at = line
+                .char_indices()
+                .find(|(_, c)| matches!(c, '\u{2502}' | '\u{2503}' | '|'))
+                .map(|(at, c)| at + c.len_utf8())?;
+            let rest = line[at..].strip_prefix('>')?;
+            rest.split_whitespace()
+                .find(|w| w.starts_with("TASK-"))
+                .map(str::to_string)
+        })
+    }
+
+    /// The cell of the task under way, on the row that carries it.
+    fn under_way_cell(frame: &str) -> char {
+        let short = crate::model::short_of(view::tests::UNDER_WAY);
+        let line = frame
+            .lines()
+            .find(|l| l.contains(&short))
+            .unwrap_or_else(|| panic!("the task under way is not on the frame:\n{frame}"));
+        line.chars()
+            .find(|c| PULSE[..3].contains(c))
+            .unwrap_or_else(|| panic!("no pulse on the row under way: {line}"))
+    }
+
+    /// **A tick moves the pulse and nothing else, and a key between two ticks
+    /// is answered when it arrives** (TASK-54bb5cddc671).
+    ///
+    /// Over an app that holds a graph and was never handed a corpus to read
+    /// it from, so the session draws what it was given and spawns nothing it
+    /// could wait on. The wakes are Tick, `j`, Tick, and the Painter received
+    /// the frame the session opened on and one frame per wake. Read as
+    /// TASK-54bb5cddc671's log records: each tick's frame differs from the
+    /// frame before it only in the pulse's cells, the pulse reading phase 1
+    /// and then phase 2 of `· • ● •`; the key's frame is the one the cursor
+    /// moved on, and the phase did not move with it.
+    #[test]
+    fn a_tick_moves_the_pulse_alone_and_a_key_between_two_is_answered_when_it_arrives() {
+        let mut app = view::tests::graphed();
+        let (mut paper, mut wakes, _size) = driven(
+            (view::DASHBOARD - 1, 40),
+            vec![
+                Wake::Tick,
+                key(ratatui::crossterm::event::KeyCode::Char('j')),
+                Wake::Tick,
+            ],
+        );
+        let code = drive(&mut app, &nowhere(), &mut wakes, &mut paper, None, None);
+        assert_eq!(code.expect("a session"), ExitCode::Ok);
+        let frames = &paper.frames;
+        assert_eq!(frames.len(), 4, "the opening frame and one per wake");
+        let (opening, ticked, keyed, again) = (&frames[0], &frames[1], &frames[2], &frames[3]);
+        assert_eq!(under_way_cell(opening), '\u{00B7}', "{opening}");
+        assert!(
+            only_the_pulse_moved(opening, ticked),
+            "the first tick changed something besides the pulse: {:?}",
+            differences(opening, ticked)
+        );
+        assert_eq!(under_way_cell(ticked), '\u{2022}', "phase 1:\n{ticked}");
+        assert_ne!(
+            under_the_cursor(ticked),
+            under_the_cursor(keyed),
+            "the key was not answered on its own frame:\n{ticked}\n{keyed}"
+        );
+        assert!(
+            under_the_cursor(keyed).is_some(),
+            "no cursor on the key's frame:\n{keyed}"
+        );
+        assert_eq!(
+            under_way_cell(keyed),
+            '\u{2022}',
+            "a key moved the pulse:\n{keyed}"
+        );
+        assert!(
+            only_the_pulse_moved(keyed, again),
+            "the second tick changed something besides the pulse: {:?}",
+            differences(keyed, again)
+        );
+        assert_eq!(under_way_cell(again), '\u{25CF}', "phase 2:\n{again}");
+    }
+
+    /// **Ticks over a screen with no task in progress on it draw no frame at
+    /// all** (TASK-54bb5cddc671): the graph held and the focus on the
+    /// entities, so the graph is not on the frame under the dashboard's
+    /// width; and a session over no corpus at all.
+    #[test]
+    fn ticks_over_a_screen_with_no_pulse_on_it_draw_no_frame() {
+        let mut app = view::tests::graphed();
+        app.press(
+            KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char('2'),
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+            &nowhere(),
+        );
+        assert_eq!(app.focus(), view::Focus::Entities);
+        let (mut paper, mut wakes, _size) = driven(
+            (view::DASHBOARD - 1, 40),
+            vec![Wake::Tick, Wake::Tick, Wake::Tick],
+        );
+        drive(&mut app, &nowhere(), &mut wakes, &mut paper, None, None).expect("a session");
+        assert_eq!(
+            paper.frames.len(),
+            1,
+            "a tick drew a frame with no pulse on the screen"
+        );
+
+        let (mut paper, mut wakes, _size) =
+            driven((100, 30), vec![Wake::Tick, Wake::Tick, Wake::Tick]);
+        session(&nowhere(), &mut wakes, &mut paper, None).expect("a session");
+        assert_eq!(
+            paper.frames.len(),
+            2,
+            "the opening's two frames, and none for the ticks"
+        );
+    }
+
+    /// **The counter is the only clock the frame reads** (TASK-54bb5cddc671).
+    ///
+    /// The session and the frame are this file and `view.rs`, and neither
+    /// names a way of reading the time or of waiting for it: the pulse
+    /// moves because a `Tick` arrived on the session's one channel, and what
+    /// a frame draws is [`view::App`]'s phase counter. A wall-clock read in
+    /// either would be a frame two runs cannot compare, and a sleep or a
+    /// timed receive in the loop would be a key queued behind it.
+    ///
+    /// The words are assembled rather than written, so that this test does
+    /// not find them in its own source.
+    #[test]
+    fn neither_the_session_nor_the_frame_reads_a_clock_or_waits_on_one() {
+        let forbidden = [
+            ["Inst", "ant"].concat(),
+            ["System", "Time"].concat(),
+            ["thread::", "sleep"].concat(),
+            ["recv_", "timeout"].concat(),
+        ];
+        for (file, source) in [
+            ("src/lib.rs", include_str!("lib.rs")),
+            ("src/view.rs", include_str!("view.rs")),
+        ] {
+            for word in &forbidden {
+                let lines: Vec<usize> = source
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, l)| l.contains(word.as_str()))
+                    .map(|(n, _)| n + 1)
+                    .collect();
+                assert!(
+                    lines.is_empty(),
+                    "{file} names {word} on line(s) {lines:?}: the pulse's counter \
+                     is the only clock the frame may read"
+                );
+            }
+        }
     }
 
     /// And a terminal that cannot be drawn to is the same fact from the other

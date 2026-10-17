@@ -91,10 +91,14 @@ fn a_corpus_that_refuses_every_read_is_not_drawn_as_an_empty_one() {
         seen.contains("2 ENTITIES (could not be read)"),
         "the listing's title does not say the read was refused:\n{frame}"
     );
+    // Three: the header, the listing, and the graph beside it, which stands
+    // on the right panel at rest (TASK-a9cd362ee5e2) and has no rows to lay
+    // out without a corpus, so says why in the listing's own words
+    // (TASK-643611645dea).
     assert_eq!(
         seen.matches("the corpus could not be read").count(),
-        2,
-        "the header and the listing both say it:\n{frame}"
+        3,
+        "the header, the listing and the graph all say it:\n{frame}"
     );
     for never in [
         "has not been read",

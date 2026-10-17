@@ -128,7 +128,7 @@ fn the_chrome_at_the_desk_is_a_header_and_a_row() {
     // turn, and a screen nobody went to is a screen nobody paid for
     // (TASK-fff0a98511b2). `tests/region.rs` is where each is reached by the
     // key it kept.
-    for elsewhere in ["CLAIMS", "QUEUE", "BODY"] {
+    for elsewhere in ["CLAIMS", "QUEUE", "GRAPH", "BODY"] {
         assert!(
             !frame.contains(elsewhere),
             "{elsewhere} is drawn beside the listing, so the budget above is \

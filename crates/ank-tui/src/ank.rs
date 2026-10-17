@@ -1,8 +1,8 @@
 //! The one road to the corpus: running `ank <verb> --json` (ADR-8bd76e8d7c4e).
 //!
-//! Twelve verbs are reached from here, in two lists that are policy made
-//! mechanical rather than policy stated in prose. [`READS`] is the five that
-//! only read -- `status`, `find`, `show`, `scope` and `review` -- and
+//! Thirteen verbs are reached from here, in two lists that are policy made
+//! mechanical rather than policy stated in prose. [`READS`] is the six that
+//! only read -- `status`, `find`, `show`, `scope`, `review` and `graph` -- and
 //! [`Ank::json`] refuses anything else before spawning. [`ACTS`] is what the
 //! person at the keyboard may ask for -- `claim`, `log`, `release`, `done`,
 //! `amend`, `accept`, `new`, `edit`, `close`, `attest`, `read` and `config` --
@@ -82,7 +82,7 @@ pub fn document(text: &str) -> Result<Value, String> {
 
 /// The verbs this reader may run on its own, and the whole of them.
 ///
-/// Every one of them only reads: `status`, `find`, `show`, `scope` and `review`
+/// Every one of them only reads: `status`, `find`, `show`, `scope`, `review` and `graph`
 /// write no file and no ref (§4). Repainting the screen therefore cannot write
 /// by accident, and the property is enforced one function below rather than
 /// asserted in a comment.
@@ -93,7 +93,7 @@ pub fn document(text: &str) -> Result<Value, String> {
 /// `renews: Never` and `coordinates: false`, so a screen that redraws the queue
 /// on a watcher's news renews no lease and takes no ref -- which is what lets
 /// the queue be repainted at all (ADR-0bb7ea8991bc).
-pub const READS: &[&str] = &["status", "find", "show", "scope", "review"];
+pub const READS: &[&str] = &["status", "find", "show", "scope", "review", "graph"];
 
 /// The one verb that is on both roads, and the whole of the exception
 /// (TASK-b08d090f699c).
@@ -706,6 +706,15 @@ mod tests {
             repo: None,
             worktree: None,
         })
+    }
+
+    #[test]
+    fn graph_is_a_read_and_the_reading_list_is_exactly_six() {
+        assert_eq!(
+            READS,
+            &["status", "find", "show", "scope", "review", "graph"]
+        );
+        assert!(!ACTS.contains(&"graph"));
     }
 
     #[test]

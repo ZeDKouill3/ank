@@ -124,8 +124,10 @@ fn open(live: &mut Live, id: &str) {
         t.contains("ENTITIES all 1")
     });
     live.send("\r");
+    // `BODY` naming the entity, with no digit in front: the document is
+    // reached by opening a row and carries none (TASK-a9cd362ee5e2).
     live.until("the document to open over the listing", |t| {
-        t.contains("3 BODY") && t.contains(&short)
+        t.contains(&terminal::body_naming(&short))
     });
 }
 
@@ -258,7 +260,7 @@ fn the_key_that_would_quit_declines_the_command_and_keeps_the_session() {
     // is on the screen and the reader is answering keys.
     let after = live.frame();
     assert!(
-        after.contains("BODY"),
+        after.contains(terminal::BODY),
         "the session ended, or left the document the command was composed on:\n{after}"
     );
     live.send("1");

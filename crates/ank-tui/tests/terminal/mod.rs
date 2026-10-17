@@ -278,9 +278,63 @@ fn in_this_runs_root(command: &mut Command) {
         .env("TEMP", root);
 }
 
+/// Waits until the wall clock has moved to a later second than the one it
+/// is in now, so that what is written next carries a `created` later than
+/// everything written before the call.
+fn next_second() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is past the epoch");
+    let into = Duration::from_nanos(u64::from(now.subsec_nanos()));
+    std::thread::sleep(Duration::from_secs(1) - into + Duration::from_millis(5));
+}
+
+/// The corpus [`Repo::graphed`] seeds, with every identifier it wrote
+/// (TASK-643611645dea).
+///
+/// The identifiers are kept rather than found again, because what the suite
+/// asserts is *which* row stands above which, and a test that looked the
+/// tasks up by title would be reading the frame to learn what the frame is
+/// supposed to show.
+pub struct Graphed {
+    pub repo: Repo,
+    /// Three tasks, each blocked by the one before it: the first is a root.
+    pub chain: [String; 3],
+    /// A top, a left and a right both blocked by the top, and a bottom
+    /// blocked by both.
+    pub diamond: [String; 4],
+    /// A task closed with a dependent still open.
+    pub closed: String,
+    /// The dependent.
+    pub dependent: String,
+    /// A task with no edge at all.
+    pub lone: String,
+    /// A task under way (TASK-9ea4dc65755b): claimed through the CLI, so
+    /// `graph --json` lists it as `in_progress`, and blocked by the first of
+    /// the chain, which gives that root two dependents.
+    pub under_way: String,
+}
+
+impl Graphed {
+    /// Every task the fixture wrote that is not finished, the one under way
+    /// among them: the rows the graph shows by default, less the closed
+    /// blocker it shows beside them.
+    pub fn open(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self.chain.iter().map(String::as_str).collect();
+        out.extend(self.diamond.iter().map(String::as_str));
+        out.push(&self.dependent);
+        out.push(&self.lone);
+        out.push(&self.under_way);
+        out
+    }
+}
+
 impl Repo {
-    pub fn seeded() -> Repo {
-        let root = scratch::dir("panels");
+    /// A repository with a corpus and nothing in it: what every fixture here
+    /// starts from.
+    fn bare(what: &str) -> Repo {
+        let root = scratch::dir(what);
         let repo = Repo(root);
         repo.git(&["init", "--initial-branch=main"]);
         repo.git(&["config", "user.email", "suite@example.invalid"]);
@@ -298,6 +352,86 @@ impl Repo {
         std::fs::create_dir_all(repo.0.join("src")).unwrap();
         std::fs::write(repo.0.join("src/lib.rs"), "// code\n").unwrap();
         repo.ank(&["init"]);
+        repo
+    }
+
+    /// One task written through the CLI, blocked by whatever `blocked_by`
+    /// names, and the identifier it was given.
+    pub fn new_task(&self, title: &str, blocked_by: &[&str]) -> String {
+        let mut args = vec![
+            "new",
+            "task",
+            "--title",
+            title,
+            "--scope",
+            "src/**",
+            "--criteria",
+            "The graph draws this row where its edges put it.",
+        ];
+        for id in blocked_by {
+            args.push("--blocked-by");
+            args.push(id);
+        }
+        args.push("--json");
+        let made = self.stdout(&args);
+        let ids = ids_of(&made);
+        assert_eq!(ids.len(), 1, "one task was written: {made}");
+        ids[0].clone()
+    }
+
+    /// The corpus the graph is measured on (TASK-643611645dea): a chain of
+    /// three, a diamond, one task closed with a dependent still open, and one
+    /// task with no edge, and (TASK-9ea4dc65755b) one under way, blocked by the
+    /// chain's first -- eleven tasks, nine of them open, one in progress and
+    /// one closed, every one of them written through the CLI.
+    ///
+    /// The closed task is closed after its dependent names it, so the edge
+    /// is one `new` accepted rather than one `amend` added, and the blocker
+    /// is finished the way a blocker is finished in a real corpus: later.
+    ///
+    /// The task under way is written on a later second than everything
+    /// before it (TASK-de02dbcf9965): the graph orders two blocks of one
+    /// size by the `created` of their newest task, and `created` is written
+    /// to the second, so ten tasks written inside one second would leave
+    /// the chain's block and the diamond's tied and the order the hash's.
+    pub fn graphed() -> Graphed {
+        let repo = Repo::bare("graphed");
+        let chain_1 = repo.new_task("The first of a chain", &[]);
+        let chain_2 = repo.new_task("The second of a chain", &[&chain_1]);
+        let chain_3 = repo.new_task("The third of a chain", &[&chain_2]);
+        let top = repo.new_task("The top of a diamond", &[]);
+        let left = repo.new_task("The left of a diamond", &[&top]);
+        let right = repo.new_task("The right of a diamond", &[&top]);
+        let bottom = repo.new_task("The bottom of a diamond", &[&left, &right]);
+        let closed = repo.new_task("A blocker that was closed", &[]);
+        let dependent = repo.new_task("A dependent of the closed one", &[&closed]);
+        let lone = repo.new_task("A task with no edge", &[]);
+        // Written with no blocker, claimed, and only then given its edge:
+        // `claim` refuses a task whose blocker is not finished (exit 7), and
+        // `amend` accepts an edge on a task already under way.
+        next_second();
+        let under_way = repo.new_task("A task under way", &[]);
+        repo.ank(&["claim", &under_way]);
+        repo.ank(&["amend", &under_way, "--blocked-by", &chain_1]);
+        repo.ank(&[
+            "close",
+            &closed,
+            "--reason",
+            "closed so that its dependent is drawn ready",
+        ]);
+        Graphed {
+            repo,
+            chain: [chain_1, chain_2, chain_3],
+            diamond: [top, left, right, bottom],
+            closed,
+            dependent,
+            lone,
+            under_way,
+        }
+    }
+
+    pub fn seeded() -> Repo {
+        let repo = Repo::bare("panels");
         repo.ank(&[
             "new",
             "adr",
@@ -585,6 +719,29 @@ pub fn ids_of(doc: &str) -> Vec<String> {
 pub fn short_of(id: &str) -> String {
     let (kind, rest) = id.split_once('-').expect("an identifier has a kind");
     format!("{kind}-{}", &rest[..4])
+}
+
+/// The title of the document open on one entity, as a frame carries it
+/// (TASK-a9cd362ee5e2): `BODY` with no digit in front, then the short
+/// identifier three spaces on.
+///
+/// Asked as one string rather than as `BODY` and the identifier apart: the
+/// identifier is on the listing too, so a frame still showing the listing
+/// would carry both halves and answer for a document that never opened.
+pub fn body_naming(short: &str) -> String {
+    format!("{BODY}{short}")
+}
+
+/// The document's title, up to where its identifier starts.
+///
+/// `BODY` alone is a word a document's own prose may carry; the three spaces
+/// after it are the title's.
+pub const BODY: &str = "BODY   ";
+
+/// A screen of the ring's title on a wide frame while that panel has the
+/// focus: the focus marker, then the digit and the name (ADR-ac6be1ebe9aa).
+pub fn focused(title: &str) -> String {
+    format!("{}{title}", ank_tui::view::BOXES.focus())
 }
 
 /// One pseudo-terminal open at a time, across every suite that takes it.
@@ -970,6 +1127,56 @@ fn utf8_width(first: u8) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// The pulse
+// ---------------------------------------------------------------------------
+
+/// Every character the pulse of a task in progress is drawn with, in both
+/// alphabets (TASK-54bb5cddc671): `· • ●` and `. o O`, read off the layout's
+/// own table.
+pub fn pulse_glyphs() -> Vec<char> {
+    use ank_tui::graph::{Alphabet, Glyph};
+    let phases = [
+        Glyph::InProgress0,
+        Glyph::InProgress1,
+        Glyph::InProgress2,
+        Glyph::InProgress3,
+    ];
+    let mut out: Vec<char> = Vec::new();
+    for alphabet in [Alphabet::Boxes, Alphabet::Ascii] {
+        for phase in phases {
+            let c = alphabet.glyph(phase);
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// Whether two samples of one screen differ in nothing but cells where both
+/// carry a glyph of the pulse (TASK-54bb5cddc671): the same lines, each the
+/// same width, and every character equal or both the pulse's.
+///
+/// **Masked where they differ and nowhere else**, so a screen whose only
+/// motion is a task in progress breathing counts as settled, and a screen
+/// where anything else moved does not. In the ASCII alphabet the pulse is
+/// `.`, `o` and `O`, which prose carries too; a frame whose only difference
+/// was one of those letters turning into another would be read as settled,
+/// and no screen this reader draws changes that way.
+pub fn same_but_the_pulse(a: &str, b: &str) -> bool {
+    let pulse = pulse_glyphs();
+    let (a, b): (Vec<&str>, Vec<&str>) = (a.lines().collect(), b.lines().collect());
+    a.len() == b.len()
+        && a.iter().zip(&b).all(|(x, y)| {
+            let (x, y): (Vec<char>, Vec<char>) = (x.chars().collect(), y.chars().collect());
+            x.len() == y.len()
+                && x.iter()
+                    .zip(&y)
+                    .all(|(p, q)| p == q || (pulse.contains(p) && pulse.contains(q)))
+        })
+}
+
+// ---------------------------------------------------------------------------
 // A driven session
 // ---------------------------------------------------------------------------
 
@@ -977,6 +1184,9 @@ fn utf8_width(first: u8) -> usize {
 pub struct Live {
     child: std::process::Child,
     writer: std::fs::File,
+    /// The slave side's device, kept so the window can be moved under a
+    /// running session ([`Live::resize`], TASK-643611645dea).
+    slave_path: PathBuf,
     screen: std::sync::Arc<std::sync::Mutex<Screen>>,
     /// Every distinct frame this session painted, in order.
     ///
@@ -1130,10 +1340,29 @@ impl Live {
         Live {
             child,
             writer: master,
+            slave_path,
             screen,
             seen,
             drain: Some(drain),
         }
+    }
+
+    /// The window, moved under the running session (TASK-643611645dea).
+    ///
+    /// **The terminal's size changes; whether the reader is told is the
+    /// terminal's business.** `TIOCSWINSZ` signals the terminal's foreground
+    /// process group, and a child this suite spawned has no controlling
+    /// terminal to be in the foreground of, so no `SIGWINCH` reaches it.
+    /// What the reader does instead is read the window off the terminal
+    /// before every frame it draws, so the next key it answers is answered
+    /// at the new size -- which is what a caller here sends after this, and
+    /// what it then waits for on the frame.
+    ///
+    /// The emulator's grid is not moved: it keeps the columns the session
+    /// opened with, so a frame drawn narrower leaves the old cells past its
+    /// right edge standing. A caller measures the new edge, not the old.
+    pub fn resize(&self, columns: u16, rows: u16) {
+        pty::resize(&self.slave_path, columns, rows);
     }
 
     /// **Returns the frame the predicate matched on**, which is the only frame
@@ -1218,12 +1447,20 @@ impl Live {
     /// for every suite at once: there are twenty `until("the session to open")`
     /// calls in this crate and one of them going unfixed is a flake nobody
     /// reproduces.
+    ///
+    /// **Settled modulo the pulse** (TASK-54bb5cddc671). A task in progress on
+    /// the graph changes its cell four times a second, so two samples two
+    /// hundred milliseconds apart of a screen that has otherwise stopped are
+    /// as often different as equal. They are compared with the pulse's cells
+    /// masked ([`same_but_the_pulse`]), and what comes back is the second
+    /// sample, at whichever phase it was taken: a caller comparing two
+    /// frames where a task pulses compares them the same way.
     pub fn frame(&self) -> String {
         let mut last = String::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
             let now = self.screen.lock().unwrap().text();
-            if !now.trim().is_empty() && now == last && !now.contains(UNREAD) {
+            if !now.trim().is_empty() && same_but_the_pulse(&now, &last) && !now.contains(UNREAD) {
                 return now;
             }
             last = now;
@@ -1265,6 +1502,13 @@ impl Live {
     pub fn tap(&mut self, column: u16, row: u16) {
         self.send(&format!("\x1b[<0;{};{}M", column + 1, row + 1));
         self.send(&format!("\x1b[<0;{};{}m", column + 1, row + 1));
+    }
+
+    /// Every distinct frame this session has painted so far, in order
+    /// (TASK-54bb5cddc671): what a suite counting the frames a clock drew
+    /// reads, before and after the interval it measures.
+    pub fn painted(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
     }
 
     /// The session, waited for until it ends by itself, and how it ended

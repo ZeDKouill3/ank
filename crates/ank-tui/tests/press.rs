@@ -142,7 +142,7 @@ fn opened(live: &Live) -> String {
 /// That no document was opened, read the way a person reads it: the listing is
 /// still the screen in the region.
 fn still_listing(frame: &str, what: &str) {
-    assert!(!frame.contains("3 BODY"), "{what}:\n{frame}");
+    assert!(!frame.contains(terminal::BODY), "{what}:\n{frame}");
     assert!(
         frame.contains("2 ENTITIES"),
         "the listing is not the screen in the region:\n{frame}"
@@ -236,7 +236,8 @@ fn two_presses_on_one_row_inside_the_interval_open_its_document() {
         live.tap(INSIDE, row);
         live.tap(INSIDE, row);
         live.until("the document the two presses opened", |t| {
-            t.contains("3 BODY") && t.contains(&id)
+            t.lines()
+                .any(|l| l.contains(terminal::BODY) && l.contains(&id))
         });
         let document = live.frame();
         assert!(
@@ -320,7 +321,8 @@ fn two_presses_on_different_rows_open_nothing() {
         live.tap(INSIDE, row);
         live.tap(INSIDE, row);
         live.until("the document the pair after it opened", |t| {
-            t.contains("3 BODY") && t.contains(&two)
+            t.lines()
+                .any(|l| l.contains(terminal::BODY) && l.contains(&two))
         });
         live.quit();
     }
@@ -375,7 +377,8 @@ fn a_press_past_the_interval_opens_nothing_and_is_counted_as_a_first() {
     // And it was a first: the press after it is a second, and opens.
     live.tap(INSIDE, at(&after, &id));
     live.until("the document the pair opened", |t| {
-        t.contains("3 BODY") && t.contains(&id)
+        t.lines()
+            .any(|l| l.contains(terminal::BODY) && l.contains(&id))
     });
     live.quit();
 }

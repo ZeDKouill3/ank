@@ -22,6 +22,7 @@ mod dashboard;
 mod dependencies;
 mod edit;
 mod entity;
+mod graph;
 mod keyline;
 mod kind;
 mod log;
