@@ -1835,6 +1835,28 @@ fn settled_on_graph(
     (live, frame)
 }
 
+/// The graph at rest, sampled only once it holds `rows` rows and is the same
+/// frame on two samples in a row (TASK-8be089554bb1).
+///
+/// **A frame the terminal has half handed over satisfies [`on_graph`].** The
+/// title, the count and the cursor are drawn by the first chunk of the
+/// repaint, and the rows under them may still be the listing the key
+/// replaced: on macos-latest the frame at rest came back with nine rows, the
+/// last two the ENTITIES listing's own. A torn frame lasts between two reads
+/// of the drain and never across two samples, so two equal ones -- the pulse
+/// masked -- are a frame the reader finished writing.
+#[cfg(unix)]
+fn at_rest(live: &Live, columns: u16, rows: usize) -> String {
+    let previous = std::cell::RefCell::new(String::new());
+    live.until(
+        &format!("the graph at rest to hold {rows} rows on two samples in a row"),
+        |t| {
+            let whole = crate::terminal::same_but_the_pulse(t, &previous.replace(t.to_string()));
+            whole && graph_rows(t, columns).len() == rows
+        },
+    )
+}
+
 /// **At rest the graph holds no row for a done task nothing open waits on;
 /// the key that cycles the kind elsewhere shows every task, one row each,
 /// with the title saying all and the header cell saying the fold; the key
@@ -1852,13 +1874,9 @@ fn the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing() {
     let every = every_task(&fixture, &history);
     for (columns, rows) in UNFOLDED_WINDOWS {
         let trace_path = fixture.repo.0.join(format!("fold-{columns}.trace"));
-        let (mut live, rest) = settled_on_graph(&fixture, columns, rows, &trace_path);
+        let (mut live, _) = settled_on_graph(&fixture, columns, rows, &trace_path);
+        let rest = at_rest(&live, columns, 11);
         let at_rest = shorts(&rest, columns);
-        assert_eq!(
-            at_rest.len(),
-            11,
-            "eleven rows at rest at {columns}x{rows}:\n{rest}"
-        );
         assert!(
             !at_rest.contains(&short_of(&history)),
             "the done task nothing waits on is a row at rest at {columns}x{rows}:\n{rest}"
