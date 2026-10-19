@@ -1761,13 +1761,28 @@ impl Live {
         );
     }
 
+    /// The screen once `done` holds on it, and once it is the same screen as
+    /// the sample before, the pulse masked (TASK-76e1fccf8b67).
+    ///
+    /// **A screen that satisfies a needle may be one the terminal has only
+    /// half handed over.** The title, the count and the cursor arrive in the
+    /// first chunk of a repaint, and the rows under them may still be the
+    /// frame the key replaced: `a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet`
+    /// read 8 rows of 11 that way, #646 read 9 on macOS, and TASK-aeea26cac0f9
+    /// a key line not yet rewritten. Measured before this, three runs of the
+    /// suite: of 759 waits each, 111, 103 and 106 returned a screen that had
+    /// changed on the very next sample. A torn frame lasts between two reads
+    /// of the drain and never across two samples, so two equal ones are a
+    /// frame the reader finished writing, at the cost of one more sample.
     pub fn until(&self, what: &str, done: impl Fn(&str) -> bool) -> String {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut previous = String::new();
         while std::time::Instant::now() < deadline {
             let seen = self.screen.lock().unwrap().text();
-            if done(&seen) {
+            if done(&seen) && same_but_the_pulse(&seen, &previous) {
                 return seen;
             }
+            previous = seen;
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         panic!(

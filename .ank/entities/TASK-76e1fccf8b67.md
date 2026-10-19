@@ -5,7 +5,7 @@ slug: live-until-hands-back-a-screen-only-once-its-pre
 title: Live::until hands back a screen only once its predicate holds on two equal samples in a row
 created: 2026-10-19T07:25:31Z
 author: claude-fixture@vmi
-status: open
+status: done
 scope:
   - crates/ank-tui/tests/terminal/mod.rs
 blocked_by: []
@@ -14,8 +14,57 @@ done_criteria: |
 criteria_by: creator
 verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
 method: diagnose
+proof:
+  - type: test
+    ref: local/e3b0c44298fc@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
+  - type: test
+    ref: local/5a7ac89bb42b@4404ecd
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-core@11c0192e3520
+    via: verifier
+    reused: local
+    by: claude-fixture@vmi
+  - type: test
+    ref: local/b43b639bdeca@4404ecd
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-contract@60b1ecdf7b92
+    via: verifier
+    reused: local
+    by: claude-fixture@vmi
+  - type: test
+    ref: local/b7ca26f375ca@4404ecd
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-daemon@c8f40b42bd7b
+    via: verifier
+    reused: local
+    by: claude-fixture@vmi
+  - type: test
+    ref: local/40230c040aec@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-mcp@23a803416bc4
+    via: verifier
+  - type: test
+    ref: local/baeed3c60bb2@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-tui@06060d7e7df5
+    via: verifier
+  - type: test
+    ref: local/917d073f91e3@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-cli@b817bb082d2d
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Measured on 2026-10-19 under `ank done`, which runs test-ank-tui beside test-ank-cli:
