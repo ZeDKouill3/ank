@@ -1,0 +1,87 @@
+---
+id: TASK-76e1fccf8b67
+type: task
+slug: live-until-hands-back-a-screen-only-once-its-pre
+title: Live::until hands back a screen only once its predicate holds on two equal samples in a row
+created: 2026-10-19T07:25:31Z
+author: claude-fixture@vmi
+status: done
+scope:
+  - crates/ank-tui/tests/terminal/mod.rs
+blocked_by: []
+done_criteria: |
+  In crates/ank-tui/tests/terminal/mod.rs, Live::until returns a screen only when its predicate holds on it and that screen equals the sample before it, the pulse masked (same_but_the_pulse), so no caller can assert on a frame the terminal had only half handed over. Before the change, the number of frames the old until returned that changed on the very next sample is counted over at least three runs of the ank-tui suite and logged on this task; after it, the ank-tui suite runs green at least five times in a row on Linux, the count logged, and one run of all three platforms is green.
+criteria_by: creator
+verify: [fmt-check, test-ank-core, test-ank-contract, test-ank-daemon, test-ank-mcp, test-ank-tui, test-ank-cli]
+method: diagnose
+proof:
+  - type: test
+    ref: local/e3b0c44298fc@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: fmt-check@695ca51e4ab9
+    via: verifier
+  - type: test
+    ref: local/5a7ac89bb42b@4404ecd
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-core@11c0192e3520
+    via: verifier
+    reused: local
+    by: claude-fixture@vmi
+  - type: test
+    ref: local/b43b639bdeca@4404ecd
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-contract@60b1ecdf7b92
+    via: verifier
+    reused: local
+    by: claude-fixture@vmi
+  - type: test
+    ref: local/b7ca26f375ca@4404ecd
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-daemon@c8f40b42bd7b
+    via: verifier
+    reused: local
+    by: claude-fixture@vmi
+  - type: test
+    ref: local/40230c040aec@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-mcp@23a803416bc4
+    via: verifier
+  - type: test
+    ref: local/baeed3c60bb2@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-tui@06060d7e7df5
+    via: verifier
+  - type: test
+    ref: local/917d073f91e3@66afcf8
+    tree: scope/10dafc2be2f5
+    criteria: c4dfdbf900f5
+    verifier: test-ank-cli@b817bb082d2d
+    via: verifier
+schema: 4
+version: 3
+---
+
+Measured on 2026-10-19 under `ank done`, which runs test-ank-tui beside test-ank-cli:
+`graph::a_dumb_terminal_draws_the_graph_in_the_layouts_ascii_alphabet` panicked at
+graph.rs:1105 with 8 rows against 11. Its `until` accepted the first frame where the
+title, the count and the cursor were drawn, before the rows under them had arrived.
+
+It is one shape seen three times. TASK-8be089554bb1 (#646) hit it on macos-latest in
+`the_cycle_key_unfolds_the_history_and_folds_it_again_reading_nothing` (nine rows, the last
+two the listing's own) and fixed that test alone with an `at_rest` helper. TASK-aeea26cac0f9
+names it in `on_the_graph_f_is_named_by_the_fold_it_walks` (the key line not rewritten yet).
+Fixing the tests one at a time leaves the other 240-odd `until` callers with the same flaw.
+
+A torn frame lasts between two reads of the drain and never across two samples (the argument
+of #646). So the fix goes in the one function every caller goes through: a frame satisfying
+the predicate is returned only once the next sample is the same frame. The cost is one 25ms
+sample per wait.
+
+This does not close TASK-aeea26cac0f9, whose criterion asks for its own reproduction and
+300 runs; it removes the mechanism that task names.
