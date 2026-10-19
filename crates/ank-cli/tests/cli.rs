@@ -4024,9 +4024,16 @@ fn readers_of_a_warm_corpus_take_no_write_lock() {
 /// For the fixture below, which needs a corpus of this repository's size and
 /// cannot use this repository's own: the defect being reproduced destroys the
 /// index it runs against, and the rest of this suite is reading that one.
+///
+/// Every `index.db*` is left behind: the fixture wants it cold, and the suite
+/// creates and deletes the live index's WAL siblings while this walk runs, so a
+/// file listed here can be gone before it is read (TASK-e4f578737ab6).
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap().flatten() {
+        if entry.file_name().to_string_lossy().starts_with("index.db") {
+            continue;
+        }
         let (src, dst) = (entry.path(), to.join(entry.file_name()));
         if src.is_dir() {
             copy_tree(&src, &dst);
@@ -4034,6 +4041,45 @@ fn copy_tree(from: &Path, to: &Path) {
             std::fs::copy(&src, &dst).unwrap();
         }
     }
+}
+
+/// **The fixture copies the corpus and never a file of the live index**
+/// (TASK-e4f578737ab6).
+///
+/// Measured on CI, runs 39076435984 and 39076662788, both `windows-latest`:
+/// the cold-readers test panicked at round 7 or 8 of 20, every earlier round
+/// clean, on the `copy` above with `NotFound`. It copied this repository's
+/// `.ank/` index included, while the rest of the suite was reading that index,
+/// and SQLite deletes `-wal` and `-shm` when its last connection closes:
+/// listed by `read_dir`, gone by the `copy`. The fixture deletes every
+/// `index.db*` the next line anyway, so it must not read one at all, and a
+/// source holding all three is what proves it never does.
+#[test]
+fn the_cold_fixture_copies_the_corpus_and_no_file_of_the_live_index() {
+    let r = Repo::new();
+    let (from, to) = (r.0.join("from"), r.0.join("to"));
+    std::fs::create_dir_all(from.join("entities")).unwrap();
+    std::fs::write(from.join("entities/TASK-000000000001.md"), "x").unwrap();
+    std::fs::write(from.join("config.yml"), "x").unwrap();
+    let index = index_file::name();
+    for live in [
+        index.clone(),
+        format!("{index}-wal"),
+        format!("{index}-shm"),
+    ] {
+        std::fs::write(from.join(live), "x").unwrap();
+    }
+
+    copy_tree(&from, &to);
+
+    let mut copied: Vec<_> = std::fs::read_dir(&to)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    copied.sort();
+    assert_eq!(copied, ["config.yml", "entities"]);
+    assert!(to.join("entities/TASK-000000000001.md").exists());
 }
 
 /// **A corpus the size of this repository's own, cold, read by eight at once**
