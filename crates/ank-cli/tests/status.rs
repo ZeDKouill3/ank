@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Barrier, OnceLock};
-use std::time::Instant;
 
 const ANK: &str = env!("CARGO_BIN_EXE_ank");
 
@@ -662,23 +661,6 @@ fn number(doc: &str, name: &str) -> u64 {
         .unwrap_or_else(|_| panic!("{name} carries a number: {doc}"))
 }
 
-/// The fastest of several runs, which is the only honest reading of a wall
-/// clock on a shared machine.
-///
-/// A test that reported the *median* would report the other tests cargo is
-/// running beside it; a test that reported one run would report whichever
-/// scheduler slice it landed in. The floor is the measurement — it is the run
-/// that was allowed to do its work — and it is the one a reader can reproduce.
-fn fastest(corpus: &Corpus, args: &[&str], runs: usize) -> u128 {
-    let mut best = u128::MAX;
-    for _ in 0..runs {
-        let at = Instant::now();
-        corpus.json(args);
-        best = best.min(at.elapsed().as_millis());
-    }
-    best
-}
-
 // ---------------------------------------------------------------------------
 // The cost
 // ---------------------------------------------------------------------------
@@ -693,27 +675,16 @@ fn status_over_a_thousand_entities_does_the_work_it_does_over_eight() {
     // and that cost belongs to whatever verb ran first.
     c.json(&["status", "--json"]);
 
-    let status = fastest(&c, &["status", "--json"], 9);
-
-    // **The ratio first, because it is the claim and it holds anywhere.**
-    // `check` is the verb whose answer *is* the read of the corpus, and
-    // ADR-f3d1dea65d84 says in as many words that it goes on costing what it
-    // costs. A `status` still doing the same reading could only be a hair away
-    // from it, whatever the machine — and a ratio, unlike a wall, cancels the
-    // machine out.
-    let check = fastest(&c, &["check", "--json"], 2);
-    assert!(
-        status * 2 < check,
-        "status took {status}ms and check {check}ms: status is still reading the corpus"
-    );
-
-    // **Then the work, counted, where a wall of 250ms used to stand**
-    // (TASK-134265bd5f90). The wall measured the runner: macos-15-intel took
-    // 361ms on the v0.9.2 release rehearsal, where this test shares one binary
-    // with some seven hundred others, while the ratio above held; Windows was
-    // already exempt for the same reason. What a warm status over a thousand
-    // entities must not do is hash a file, index one, or run the `inspect`
-    // pass its memoised verdict stands in for -- and each of those is a number.
+    // **The work, counted, where a wall used to stand, and then a ratio**
+    // (TASK-134265bd5f90, TASK-7bf31757694e). The 250ms wall measured the
+    // runner: macos-15-intel took 361ms on the v0.9.2 release rehearsal, where
+    // this test shares one binary with some seven hundred others. The
+    // status/check ratio that outlived it measured the scheduler twice instead
+    // of once, and went red on main at 207ms against 387ms (run 39220125690),
+    // while the count below already caught the very mutation it guarded
+    // against (LOG-f9ecbf9c2f69). What a warm status over a thousand entities
+    // must not do is hash a file, index one, or run the `inspect` pass its
+    // memoised verdict stands in for -- and each of those is a number.
     let refreshes = c.refreshes(&["status", "--json"]);
     let counted = |key: &str| -> Vec<u64> {
         refreshes
