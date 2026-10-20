@@ -2701,8 +2701,9 @@ fn a_document_ratified_through_the_reader_is_what_a_shell_accept_makes() {
 ///
 /// The entity as `show` prints it -- which carries `status`, the anchor under
 /// `ratified` and the reading recorded by the act -- and the message of the
-/// commit that made it binding. Two things are replaced and no more: the
-/// identifier, and every instant. Two documents are two documents and two acts
+/// tag at `refs/ank/ratify/<id>` that made it binding (ADR-5e47007a75be).
+/// Three things are replaced and no more: the identifier, every instant, and
+/// the tag object `anchor:` names, which is a hash over both. Two documents are two documents and two acts
 /// happen at two moments, so a comparison that kept either would be asserting
 /// something false. The creation record's identifier and produced hash are
 /// derived from those two, and [`masked_records`] says why they go with them.
@@ -2715,25 +2716,48 @@ fn a_document_ratified_through_the_reader_is_what_a_shell_accept_makes() {
 #[cfg(unix)]
 fn ratification(repo: &Repo, id: &str) -> String {
     let shown = repo.stdout(READER, &["show", id, "--json"]);
-    let message = String::from_utf8_lossy(
+    let tag = String::from_utf8_lossy(
         &repo
-            .git(&[
-                "log",
-                "-1",
-                "--format=%B",
-                "--grep",
-                &format!("ratify {id}"),
-            ])
+            .git(&["cat-file", "tag", &format!("refs/ank/ratify/{id}")])
             .stdout,
     )
     .to_string();
+    // The message alone: the headers carry the tagger's instant in seconds,
+    // which no mask reads, and the object, which differs as the file does.
+    let message = tag.split_once("\n\n").map(|(_, m)| m).unwrap_or_default();
     assert!(
-        message.contains("ratify"),
-        "no ratification commit for {id}:\n{message}"
+        message.starts_with(&format!("ratify {id}")),
+        "no ratification tag for {id}:\n{tag}"
     );
-    masked_records(&masked_instants(
+    masked_tags(&masked_records(&masked_instants(
         &format!("{shown}\n--\n{message}").replace(id, "<id>"),
-    ))
+    )))
+}
+
+/// The tag object `anchor:` names, masked: forty hex characters after the key.
+#[cfg(unix)]
+fn masked_tags(text: &str) -> String {
+    let mut masked = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("anchor: ") {
+        let after = &rest[at + "anchor: ".len()..];
+        let hex = after
+            .get(..40)
+            .filter(|h| h.chars().all(|c| c.is_ascii_hexdigit()));
+        masked.push_str(&rest[..at]);
+        match hex {
+            Some(_) => {
+                masked.push_str("anchor: <tag>");
+                rest = &after[40..];
+            }
+            None => {
+                masked.push_str("anchor: ");
+                rest = after;
+            }
+        }
+    }
+    masked.push_str(rest);
+    masked
 }
 
 /// The two values of a creation record that follow from the identifier, masked
@@ -2877,51 +2901,47 @@ fn with_the_word_withheld_nothing_in_the_queue_changes_state() {
     );
 }
 
-/// Off the default branch the CLI refuses, and the screen shows that refusal
-/// with the command that resolves it (§12).
-///
-/// The code is read out of the verb table rather than written here, on the rule
-/// `a_done_refused_for_a_missing_proof_leaves_the_task_untouched` already
-/// follows: "the code the table declares" is the criterion's phrase, and a
-/// number typed into this file would agree with a table that moved.
+/// Off the default branch the ratification lands, and nothing is committed
+/// (ADR-5e47007a75be): the ref is a fact about the repository and not about a
+/// branch. This test showed the CLI's branch refusal on the screen while that
+/// refusal existed; it asserts now that there is none to show.
 #[cfg(unix)]
 #[test]
-fn a_ratification_off_the_default_branch_shows_the_clis_refusal_and_the_way_out() {
+fn a_ratification_off_the_default_branch_lands_and_commits_nothing() {
     let repo = Repo::seeded("wrong-branch");
-    let waiting = proposal(&repo, "A decision on the wrong branch");
+    let waiting = proposal(&repo, "A decision on another branch");
     repo.git(&["switch", "-c", "wave7/not-the-default"]);
     repo.warm(READER);
-    let before = corpus_files(&repo);
+    let head = String::from_utf8_lossy(&repo.git(&["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
 
     let seen = drive(
         &repo,
         READER,
         &[&open(&waiting), &verb("accept"), &confirm(), "q"],
     );
-
-    let code = declared("accept", "not on the default branch");
-    assert_eq!(
-        code,
-        ank_contract::ExitCode::Prerequisite,
-        "the table moved"
-    );
     assert!(
-        seen.contains(&format!("error[{code}]:")),
-        "the code the table declares is on the screen:\n{seen}"
+        !seen.contains("error["),
+        "the ratification was refused off the default branch:\n{seen}"
     );
+    let found = repo.stdout(READER, &["find", "--type", "adr", "--json"]);
     assert!(
-        seen.contains("git switch main"),
-        "and the command the CLI named as the way out:\n{seen}"
-    );
-    assert!(
-        seen.contains("BODY") || seen.contains("ENTITIES"),
-        "and the session kept its shape:\n{seen}"
+        found.contains("\"status\":\"accepted\""),
+        "the document was not ratified:\n{found}"
     );
     assert_eq!(
-        before,
-        corpus_files(&repo),
-        "a refused ratification moved a file"
+        head,
+        String::from_utf8_lossy(&repo.git(&["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string(),
+        "a ratification commit was made"
     );
+    repo.git(&[
+        "rev-parse",
+        "--verify",
+        &format!("refs/ank/ratify/{waiting}"),
+    ]);
 }
 
 /// The letter is refused off the document, and on the document it carries the

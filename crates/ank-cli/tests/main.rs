@@ -8,9 +8,10 @@
 
 mod fixture;
 mod index_file;
+mod legacy_anchor;
 mod scratch;
 
-mod accept_pr;
+mod accept_tag;
 mod adopt;
 mod adr_amends;
 mod adr_enforced_by;

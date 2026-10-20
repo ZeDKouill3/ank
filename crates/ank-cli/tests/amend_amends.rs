@@ -77,13 +77,14 @@ impl Repo {
         r
     }
 
-    fn git(&self, args: &[&str]) {
+    fn git(&self, args: &[&str]) -> String {
         let out = spawn("git")
             .args(args)
             .current_dir(&self.0)
             .output()
             .unwrap();
         assert!(out.status.success(), "git {args:?}: {}", stderr(&out));
+        String::from_utf8_lossy(&out.stdout).to_string()
     }
 
     fn commit(&self, message: &str) {
@@ -133,11 +134,13 @@ impl Repo {
             .to_string()
     }
 
-    /// Committed, then ratified: `accept` works on the default branch and on
-    /// what is committed there.
+    /// Committed, then ratified, then the ratification committed as the
+    /// anchor the commit walk reads (`crate::legacy_anchor`): what this suite
+    /// asserts is that the anchor still holds, and `check` finds it there.
     fn accept(&self, id: &str) {
         self.commit(&format!("propose {id}"));
         self.ok(&["accept", id]);
+        crate::legacy_anchor::commit(&|a| self.git(a), id, false);
     }
 
     fn show(&self, id: &str) -> String {

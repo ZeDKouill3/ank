@@ -213,6 +213,22 @@ impl Repo {
         self.git(&["rev-parse", "HEAD"])
     }
 
+    /// `accept`, then the `ratify <id>` commit an `accept` made before
+    /// ADR-5e47007a75be (`crate::legacy_anchor`), signed where this fixture
+    /// signs: for the suites that test what `check` makes of a commit anchor
+    /// and its signature, which stays the fallback for every such anchor.
+    fn accept_as_commit(&self, agent: &str, id: &str) {
+        let out = self.ank(agent, &["accept", id]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let signs = git_command(&self.0)
+            .args(["config", "--get", "user.signingkey"])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        crate::legacy_anchor::commit(&|a| self.git(a), id, signs);
+    }
+
     /// Reads the ref with git and not through `claim::read`: what has to be
     /// true is the state of the repository, not the module's agreement with
     /// itself.
@@ -1316,8 +1332,7 @@ fn a_ratification_commit_stripped_of_its_signature_is_a_fault_through_the_binary
     r.git(&["add", "-A"]);
     r.git(&["commit", "-qm", "seed"]);
 
-    let out = r.ank("marie@laptop", &["accept", ADR]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    r.accept_as_commit("marie@laptop", ADR);
     let ratification = r.head();
 
     let out = r.ank("claude-code@ank", &["check"]);
@@ -2453,8 +2468,7 @@ fn a_signature_git_cannot_read_is_reported_rather_than_passed_over() {
     r.git(&["add", "-A"]);
     r.git(&["commit", "-qm", "seed"]);
 
-    let out = r.ank("marie@laptop", &["accept", ADR]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    r.accept_as_commit("marie@laptop", ADR);
 
     // Readable and trusted: the silence below has to be broken by the config
     // change and by nothing else.
@@ -12526,10 +12540,11 @@ fn a_spec_is_ratified_amended_and_checked_like_an_adr() {
         .trim()
         .to_string();
 
-    // The commit is the anchor that counts, and its key names what was hashed.
+    // The tag is the anchor that counts, and its key names what was hashed.
     // `constraint+scope` over a kind that declares no constraint would name a
     // field the file does not have.
-    let message = r.git(&["log", "-1", "--format=%B"]);
+    let tag = r.git(&["cat-file", "tag", &format!("refs/ank/ratify/{id}")]);
+    let message = tag.split_once("\n\n").expect(&tag).1;
     assert!(message.starts_with(&format!("ratify {id}")), "{message}");
     assert!(
         message.contains(&format!("body+scope: {anchor}")),
@@ -14014,9 +14029,10 @@ fn the_errors_that_named_the_file_now_name_the_command() {
         erred(&out)
     );
 
-    // The four sites that ask for a default branch. There is no
+    // The three sites that ask for a default branch. There is no
     // `default_branch` and no `refs/remotes/origin/HEAD` to fall back on, so
-    // each of them has to name the command that sets one.
+    // each of them has to name the command that sets one. `accept` was the
+    // fourth, and asks for none since ADR-5e47007a75be.
     let r = Repo::new();
     r.set_config("schema: 1\nclaim_ttl_max: 2h\n");
     std::fs::write(r.0.join("seed.txt"), "x").unwrap();
@@ -14024,12 +14040,7 @@ fn the_errors_that_named_the_file_now_name_the_command() {
     r.git(&["commit", "-qm", "seed"]);
 
     r.seed_adr("ADR-000000000c02", "A binding rule.", "src/**");
-    for args in [
-        &["status"][..],
-        &["check"][..],
-        &["context"][..],
-        &["accept", "ADR-000000000c02"][..],
-    ] {
+    for args in [&["status"][..], &["check"][..], &["context"][..]] {
         let out = r.ank("claude-code@ank", args);
         let text = format!("{}{}", said(&out), erred(&out));
         assert!(
@@ -22468,17 +22479,23 @@ fn corpus_under_the_rule() -> Repo {
     r
 }
 
-/// The ratification, at the instant the fixture chose.
+/// The ratification, at the instant the fixture chose, as the commit anchor
+/// the rule carries on ank's own corpus (`crate::legacy_anchor`): the instant
+/// it started binding is read from that commit.
 fn ratify_the_rule(r: &Repo) {
-    let out = r.ank_env(
-        "human:marie",
-        &["accept", BORN_ACCOUNTED],
-        &[
-            ("GIT_AUTHOR_DATE", Some(RULE_RATIFIED_AT)),
-            ("GIT_COMMITTER_DATE", Some(RULE_RATIFIED_AT)),
-        ],
-    );
+    let out = r.ank("human:marie", &["accept", BORN_ACCOUNTED]);
     assert_eq!(code(&out), 0, "{}", both_streams(&out));
+    let dated = |args: &[&str]| -> String {
+        let out = git_command(&r.0)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", RULE_RATIFIED_AT)
+            .env("GIT_COMMITTER_DATE", RULE_RATIFIED_AT)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", stderr(&out));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    crate::legacy_anchor::commit(&dated, BORN_ACCOUNTED, true);
 }
 
 /// The three kinds `new` creates each leave one entry, and it is machinery.
@@ -23672,7 +23689,12 @@ fn main() {{}}
         "the succession happened: {}",
         stdout(&out)
     );
-    assert_ne!(before, r.head(), "and the ratification commit exists");
+    assert_eq!(before, r.head(), "the ratification commits nothing");
+    assert!(
+        r.git(&["for-each-ref", &format!("refs/ank/ratify/{second}")])
+            .contains(" tag\t"),
+        "and the ratification tag exists"
+    );
     assert!(
         r.adr_text(&second).contains("status: accepted"),
         "{}",
