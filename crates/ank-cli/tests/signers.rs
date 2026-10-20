@@ -206,12 +206,15 @@ impl Corpus {
             .expect("the binary must have been built")
     }
 
-    /// `accept`, then the ratification re-signed under a committer date the
-    /// test chooses: the message and the tree are the ones `accept` wrote, so
-    /// the anchor still reads, and only the date and the signature move.
+    /// `accept`, then the ratification committed as the anchor the commit
+    /// walk reads (`crate::legacy_anchor`) and signed under a committer date
+    /// the test chooses: the message and the tree are the ones `accept`
+    /// wrote, so the anchor still reads, and only the date and the signature
+    /// move.
     fn ratify_at(&self, id: &str, committed: &str) {
         let out = self.ank(&["accept", id]);
         assert_eq!(out.status.code(), Some(0), "accept: {}", text(&out.stderr));
+        crate::legacy_anchor::commit(&|a| git(&self.repo, a), id, false);
         git_env(
             &self.repo,
             &["commit", "--amend", "--no-edit", "-q", "-S"],

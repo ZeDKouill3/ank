@@ -1510,7 +1510,7 @@ fn dispatch(
         "signers" => crate::config::run_signers(&inv, &s.repo, out),
         "archive" => crate::archive::run(&inv, &s.repo, &s.config, out),
         "review" => crate::human::review(&inv, &s.repo, &s.config, out),
-        "accept" => crate::human::accept(&inv, &s.repo, &s.config, &s.identity, out),
+        "accept" => crate::human::accept(&inv, &s.repo, &s.identity, out),
         "read" => crate::human::read(&inv, &s.repo, &s.identity, out),
         "close" => crate::human::close(&inv, &s.repo, &s.identity, out),
         "attest" => crate::human::attest(&inv, &s.repo, &s.identity, out),

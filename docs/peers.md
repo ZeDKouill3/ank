@@ -144,6 +144,7 @@ reads an identifier takes the same form:
     constraint: |
       Every call the web client makes to the API sends an X-Trace-Id header.
     ratified: 65824fc735cf
+    anchor: 5c88658e1f2b9d0a47c3e6f81b2d94a7c05e3f19
     verified:
       - by: human:marie
         at: 2026-10-02T16:35:33Z

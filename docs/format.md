@@ -710,7 +710,7 @@ them.
 
 **A worked vector, taken from a real `accept`.** An ADR whose `constraint` is
 `Never Y` and whose `scope` is the single glob `src/**`, ratified by the binary,
-produced the commit body
+produced the tag message
 
 <!-- replay vector part
 $ ank init && ank config default_branch main
@@ -719,7 +719,7 @@ $ mkdir src && echo y > src/y && git add -A && git commit -q -m y
 $ ank accept $(ls .ank/entities | grep '^ADR-' | cut -c1-8)
 $ printf 'Never Y\nsrc/**' | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12
 33045e58af8d
-$ git log -1 --format=%B
+$ git cat-file tag refs/ank/ratify/$(ls .ank/entities | grep '^ADR-' | cut -c1-16)
 -->
 
     constraint+scope: 33045e58af8d
@@ -731,11 +731,10 @@ implementation off by that one byte reports every ADR in the corpus as diverged.
 Several globs join the same way — `Rule two.` over `src/**` and `docs/**`
 recorded `16a85fda1d17`, which is `printf 'Rule two.\nsrc/**\ndocs/**'`.
 
-**The same anchor as a tag, built from the recipe.** That vector is the commit
-body the binary writes today. The tag `accept` writes under ADR-5e47007a75be
-carries the same line, and until the binary writes it the vector is the
-[recipe](#what-lives-outside-the-files) run by hand, with the identity and the
-instant fixed so that every object name below is reproducible. The file is the
+**The same anchor as a tag, built from the recipe.** That line is the one a
+ratification commit carried before ADR-5e47007a75be, unchanged. The tag below is
+the [recipe](#what-lives-outside-the-files) run by hand, with the identity and
+the instant fixed so that every object name below is reproducible. The file is the
 ADR above as `accept` writes it, before `anchor:`:
 
 <!-- replay tag GIT_COMMITTER_NAME=marie GIT_COMMITTER_EMAIL=marie@example.com GIT_COMMITTER_DATE=2026-10-17T15:00:00Z

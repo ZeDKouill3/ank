@@ -999,16 +999,20 @@ config_keys!(
 // Measured on ank 0.7.0 against a corpus whose origin is a path that does not
 // exist: `claim`, `log` and `done` warn and exit 0; `release` and `close` exit
 // 0 with the local write standing; `attest --detached` exits 9; `accept` writes
-// no ref under `refs/ank/` at all, and neither does `init`.
+// no ref under `refs/ank/` at all, and neither does `init`. `accept` has written
+// one since ADR-5e47007a75be, and it is on the failing side: the ref is the
+// ratification, and the file follows it only once the remote holds it.
 
 /// One ratification, as `accept` reports it: the whole document for one id,
-/// and a row of `accepted` for several or with `--pr`.
+/// and a row of `accepted` for several. `tag` is the tag object
+/// `refs/ank/ratify/<id>` holds, and `anchor` the hash its message carries
+/// (ADR-5e47007a75be).
 const ACCEPTED: &[Field] = &[
     f("id", Type::Str),
     f("kind", Type::Str),
     f("status", Type::Str),
     opt("superseded", Type::Str),
-    f("commit", Type::Str),
+    f("tag", Type::Str),
     f("anchor", Type::Str),
 ];
 
@@ -1427,50 +1431,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "accept",
         group: "shape the work",
         renews: Renews::Never,
-        writes: Writes::Files,
+        writes: Writes::Both,
         coordinates: true,
-        summary: "promotes proposed ADRs or specs to accepted, one signed ratification commit each; on the default branch only, and --pr carries them to a pull request",
+        summary: "promotes proposed ADRs or specs to accepted, one ratification tag at refs/ank/ratify/<id> each, signed where the repository signs; commits nothing, on any branch",
         subcommands: &[],
         kinds: &[],
-        // As many ids as the caller names, each its own commit: the subject
-        // `ratify <id>` is the anchor, so two ratifications never share one.
+        // As many ids as the caller names, each its own tag: the ref is
+        // `refs/ank/ratify/<id>`, so two ratifications never share one.
         max_positionals: usize::MAX,
         positional_help: "<id>...",
-        flags: &[switch("--pr")],
+        flags: &[],
         refuses: &[
             refuses(ExitCode::NotFound, "no such entity, or the prefix matches more than one"),
-            refuses(ExitCode::Prerequisite, "not on the default branch, and there is no way around it"),
-            // Beside the branch refusal, and it carries the same code for the
-            // same reason: both are conditions that must hold before the commit,
+            // The one refusal on the workspace, and it carries the code a
+            // missing prerequisite carries: it must hold before the tag,
             // because after it there is nothing to review and no gate left to
-            // fail (ADR-3b6ba766a42e). Declared here so `ank help accept` states
-            // it, and so no caller meets a 7 the page never promised.
+            // fail (ADR-3b6ba766a42e). Declared here so `ank help accept`
+            // states it, and so no caller meets a 7 the page never promised.
             refuses(
                 ExitCode::Prerequisite,
                 "a tracked file outside .ank/ still cites the document this supersession retires",
             ),
             refuses(
                 ExitCode::Environment,
-                "the default branch cannot be determined, from config.yml or from origin",
-            ),
-            // The --pr prerequisites, every one checked before the first commit:
-            // 9 where the environment needs repairing, 7 where the tree is not
-            // in the state the carry needs.
-            refuses(
-                ExitCode::Environment,
-                "--pr: the default branch has no upstream to reset to and push beside",
-            ),
-            refuses(
-                ExitCode::Environment,
-                "--pr: gh is not on PATH, or gh auth status says it is not authenticated",
-            ),
-            refuses(
-                ExitCode::Prerequisite,
-                "--pr: a tracked file outside .ank/ differs from HEAD, the default branch is not level with its upstream, or the ratify/ branch already exists",
-            ),
-            refuses(
-                ExitCode::Environment,
-                "--pr: the push or gh pr create failed after the commits, which stay on the ratify/ branch; the message names the command that finishes the job",
+                "the tag or the ref could not be written, or the push of refs/ank/ratify/<id> did not reach the remote; nothing is kept",
             ),
             UNPARSEABLE_CALL,
             ENTITY_MOVED,
@@ -1480,26 +1464,16 @@ pub const COMMANDS: &[CommandSpec] = &[
             ),
         ],
         notes: &[
-            "the one act ank commits for; it is a human act, signed",
+            "it is a human act, signed where the repository signs; it commits nothing, and the file lands with whoever's next change",
             "the citations of the retired document are re-pointed first: the refusal names every site with its line, is not suppressed by --quiet, and there is no flag around it",
-            "--pr creates ratify/<first id> at the last ratification, resets the default branch to its upstream, pushes the branch, opens a pull request with gh, prints gh pr merge ratify/<id> --merge, and never merges",
-            // Without --pr the ratification is a commit, and it reaches the
-            // default branch through a pull request rather than through this
-            // verb; with --pr the push is the point of the call, and a refused
-            // one is a failure the message names the way out of.
+            // The ref is the ratification, so a push that does not land is a
+            // failure and the file is not written (ADR-af533e7a3e03).
             PUSH_FAILS,
         ],
         refuses_globals: &[],
         output: &[
-            when("one id, without --pr", ACCEPTED),
-            when(
-                "several ids, or --pr",
-                &[
-                    f("accepted", Type::Array(ACCEPTED)),
-                    opt("branch", Type::Str),
-                    opt("merge", Type::Str),
-                ],
-            ),
+            when("one id", ACCEPTED),
+            when("several ids", &[f("accepted", Type::Array(ACCEPTED))]),
         ],
         owner_task: None,
     },

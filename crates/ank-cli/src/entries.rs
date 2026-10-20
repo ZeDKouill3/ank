@@ -375,8 +375,8 @@ pub fn replaced_hash(before: &Entity) -> String {
 /// (ADR-52bb0da2023a).
 ///
 /// **This is what makes the accounting survive a claim.** `status`, `proof`,
-/// `ratified` and `verified` are written by transitions and `version` by the
-/// store; everything else is content, and only the three verbs that leave a
+/// `ratified`, `anchor` and `verified` are written by transitions and `version`
+/// by the store; everything else is content, and only the three verbs that leave a
 /// machinery entry write it. So an entity claimed, released, claimed again and
 /// finished hashes the same throughout, and a value differing from the one the
 /// last entry recorded says that something other than those three verbs moved
@@ -399,12 +399,16 @@ pub fn content_hash(entity: &Entity) -> String {
         Entity::Adr(a) => {
             a.status = AdrStatus::Proposed;
             a.ratified = None;
+            // Written by `accept` beside `ratified` (ADR-5e47007a75be): the
+            // tag it names is the same act, and no content verb writes it.
+            a.anchor = None;
             a.verified.clear();
             a.version = 0;
         }
         Entity::Spec(s) => {
             s.status = SpecStatus::Proposed;
             s.ratified = None;
+            s.anchor = None;
             s.verified.clear();
             s.version = 0;
         }

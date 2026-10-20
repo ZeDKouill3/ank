@@ -93,19 +93,15 @@ is written through the CLI rather than by hand:
     default_branch (unset) -> main
 
 Without it, Ank looks for `refs/remotes/origin/HEAD`, and a repository with no
-remote has none. It refuses rather than guessing, and here is what the verb two
-sections down would have said (`06d2` is the ADR you write there):
+remote has none. It does not guess, and `check` says what it stopped judging
+rather than judging against a branch it made up:
 
 <!-- replay unset ANK_AGENT=human:marie
 $ ank init
-$ ank new adr --title "Opaque sessions rather than stateless JWT" --scope "src/auth/**" --constraint "Do not introduce self-contained JWTs for user auth. Every session goes through the Redis store."
-created ADR-06d29e727d24 Opaque sessions rather than stateless JWT
 -->
 
-    $ ank accept 06d2
-    error[9]: default branch indeterminable (default_branch absent from .ank/config.yml, refs/remotes/origin/HEAD absent)
-      -> git remote set-head origin -a
-      -> or ank config default_branch <name>
+    $ ank check | grep 'default branch'
+    signal: coordination: default branch indeterminable, completion refs neither pruned nor judged and log entries not compared against it (ank config default_branch <name>)
 
 A clone sets `refs/remotes/origin/HEAD` for you, so a repository with an
 `origin` resolves the branch without the key; setting it anyway costs one line
@@ -139,21 +135,22 @@ migration" is answered by `ank context src/auth/`. The full field list is in
     created ADR-06d29e727d24 Opaque sessions rather than stateless JWT
 
 It is created `proposed`, which means visible but not binding. Promotion goes
-through one command, and that command is the only one in the tool that makes a
-git commit:
+through one command, and it commits nothing: it writes the ratification as a tag
+object at `refs/ank/ratify/<id>`, signed where the repository signs, and then
+updates the file:
 
 <!-- replay walk -->
 
     $ git add -A && git commit -m "adr: opaque sessions"
     $ ank accept 06d2
-    accepted ADR-06d29e727d24 -> 9c45c50
+    accepted ADR-06d29e727d24 -> 3f0a6b2
 
 Short prefixes work everywhere an id is accepted; an ambiguous one is an error
-listing the candidates, never a guess. The commit it produced carries the hash
-of `constraint` and `scope` at acceptance:
+listing the candidates, never a guess. The message of the tag it wrote carries
+the hash of `constraint` and `scope` at acceptance:
 
 <!-- replay walk
-$ git log -1 --format=%B
+$ git cat-file tag refs/ank/ratify/ADR-06d29e727d24 | sed '1,/^$/d'
 -->
 
     ratify ADR-06d29e727d24
@@ -162,11 +159,10 @@ $ git log -1 --format=%B
     by: human:marie
 
 That hash is the anchor. Editing the constraint afterwards does not change it,
-which is how `ank check` notices. `accept` runs on the default branch only, and
-there is no flag around it: a constraint ratified on a feature branch would bind
-on that branch alone. How a ratification reaches a protected default branch is
-[Ratifying](ratifying.md), and how others can verify it is [Signing
-keys](signing.md).
+which is how `ank check` notices. `accept` runs on any branch: the ref is a fact
+about the repository and not about a branch, and the file it updates travels
+with your next commit like any other change. How others can verify it is
+[Signing keys](signing.md).
 
 ## Declare the verifiers, then the task
 
@@ -285,16 +281,15 @@ are [Proof and verifiers](proof.md#what-done-records).
 
 ## Commit, and read `check`
 
-**Ank never commits, except `accept`.** Everything else writes files and leaves
-them in your working tree, so the corpus travels through your normal review
-like any other change. Before you commit, `check` has something to say:
+**Ank never commits.** It writes files and leaves them in your working tree,
+so the corpus travels through your normal review like any other change. Before you commit, `check` has something to say:
 
 <!-- replay walk -->
 
     $ ank check
     signal: ADR-06d29e727d24: ratified by its own author (human:marie)
     signal: TASK-820d259af6a7: finished on another branch, main has not caught up
-    signal: corpus: 4 entity file(s) differ from main: this checkout does not carry the corpus the default branch does (git merge main)
+    signal: corpus: 5 entity file(s) differ from main: this checkout does not carry the corpus the default branch does (git merge main)
     signal: signers: no ratification key declared: permissions are advisory, not enforced (§8)
     check: ok — 1 tasks, 1 adr, 4 signal(s)
 
@@ -352,8 +347,8 @@ told.
     proposed; I ratify them myself.
 
 They land `proposed`, which binds nobody. `ank review` lists what is waiting, and
-`ank accept <id>` stays yours: a signed act, on the default branch, one at a
-time. An agent proposes and says it is waiting.
+`ank accept <id>` stays yours: a signed act, one at a time. An agent proposes
+and says it is waiting.
 
 **What it still owes.** Intentions scattered across TODOs, an issue tracker and a
 README are not work an agent can take. A scope and a criterion are, which is what

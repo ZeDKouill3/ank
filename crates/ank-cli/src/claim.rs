@@ -55,6 +55,10 @@ pub const CLAIMS_PREFIX: &str = "refs/ank/claims/";
 /// make one erase the other.
 pub const PROOF_PREFIX: &str = "refs/ank/proof/";
 
+/// Where a ratification lives: an annotated tag object on the blob of the
+/// entity file `accept` wrote (ADR-5e47007a75be).
+pub const RATIFY_PREFIX: &str = "refs/ank/ratify/";
+
 /// Default TTL (§3). Short on purpose: it is renewed implicitly by the holder's
 /// work, so working is enough to keep the lock.
 ///
@@ -76,6 +80,10 @@ pub fn claim_ref(id: &EntityId) -> String {
 
 pub fn proof_ref(id: &EntityId) -> String {
     format!("{PROOF_PREFIX}{id}")
+}
+
+pub fn ratify_ref(id: &EntityId) -> String {
+    format!("{RATIFY_PREFIX}{id}")
 }
 
 // ---------------------------------------------------------------------------
