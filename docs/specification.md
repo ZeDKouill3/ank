@@ -10,16 +10,16 @@ carries, so a rule that reads `(§7)` is resolved by the spec that claims §7. I
 checkout, `ank find --type spec` lists them and `ank show <id>` prints one whole.
 On the web, each link below opens the file as the default branch has it.
 
-- [SPEC-99e23aead815](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-99e23aead815.md) Intent, principles, and what v1 leaves out
-- [SPEC-ac4aad6d1edb](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-ac4aad6d1edb.md) The data model
+- [SPEC-3d417b8d8d91](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-3d417b8d8d91.md) Intent, principles, and what v1 leaves out
+- [SPEC-a459b70c97a7](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-a459b70c97a7.md) The data model
 - [SPEC-3252ad5a72e3](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-3252ad5a72e3.md) Storage and search
-- [SPEC-15a56aeedcfd](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-15a56aeedcfd.md) Synchronisation
-- [SPEC-ae044e8ac714](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-ae044e8ac714.md) Proof, anchoring and authority
-- [SPEC-fe809eb257c0](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-fe809eb257c0.md) The CLI surface
+- [SPEC-1a344e05197d](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-1a344e05197d.md) Synchronisation
+- [SPEC-9796c1a07c1b](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-9796c1a07c1b.md) Proof, anchoring and authority
+- [SPEC-a81795811fa5](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-a81795811fa5.md) The CLI surface
 - [SPEC-558c07ebae8e](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-558c07ebae8e.md) Presentation: structure for every reader, colour for a terminal, and an identifier by its kind
 - [SPEC-a1234da5449a](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-a1234da5449a.md) The attention budget and the constraint lifecycle
 - [SPEC-3bccb8aee5b7](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-3bccb8aee5b7.md) Bootstrapping, teaching and distribution
-- [SPEC-93531977642f](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-93531977642f.md) Implementation, and the decisions that bound it
+- [SPEC-e8518a6aab5c](https://github.com/haksolot/ank/blob/main/.ank/entities/SPEC-e8518a6aab5c.md) Implementation, and the decisions that bound it
 
 The list is every spec the corpus holds as accepted, and a test holds it to
 `ank find --type spec` on this repository: a spec accepted, superseded or
