@@ -35,7 +35,7 @@
 //! rather than left to whoever reads the two constants next.
 //!
 //! **An act runs with `--json` like a read does.** ADR-8bd76e8d7c4e and
-//! SPEC-93531977642f both say the reader reaches the corpus only by running the
+//! SPEC-e8518a6aab5c both say the reader reaches the corpus only by running the
 //! CLI with `--json`, and dropping the flag to get a human sentence back would
 //! be reading that as decoration. Nothing is lost by keeping it: the CLI renders
 //! `error[N]:` and the command that resolves it on stderr whatever `--json`
